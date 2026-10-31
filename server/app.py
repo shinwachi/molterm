@@ -1,6 +1,7 @@
 """Molterm TUI Renderer — TUI renderer for chemical structures using RDKit and advanced text graphics"""
 import os
 
+import rdkit
 from flask import Flask, jsonify, render_template
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +26,7 @@ def index():
 
 @app.route("/health")
 def health():
-    return jsonify(status="ok", **SERVICE)
+    return jsonify(status="ok", rdkit=rdkit.__version__, **SERVICE)
 
 
 @app.route("/api/v1/hello")

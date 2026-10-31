@@ -15,6 +15,18 @@ Created 2026-10-31 from a Flask project template.
 Each environment is its own compose project (`molterm-dev`, `molterm-prod`), so they can run side by side.
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
 
+## Status
+
+**Step 1 of 3 done: environment.** RDKit and Flask are installed in a virtual environment inside the image
+(`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
+
+Verified with `make dev` and `make test`: the container runs from the venv, RDKit parses SMILES, rejects bad input and
+draws a PNG with `MolDraw2DCairo`, and `/health` answers through Traefik.
+
+Next: the molecule parser, then the Braille/Unicode mapping.
+
+Open issues: the page at `/` is still the template's starter page; it gets replaced when there is something to render.
+
 ## Versioning
 
 `VERSION` holds the semantic version. `make release` (or `BUMP=minor` / `BUMP=major`) bumps it, commits
