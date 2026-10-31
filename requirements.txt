@@ -1,5 +1,8 @@
 flask>=3.0
-rdkit>=2025.3
+# pinned: Braille output depends on RDKit's exact layout and drawing
+rdkit==2026.9.1
+numpy
+pillow
 gunicorn>=22.0
 requests
 pytest

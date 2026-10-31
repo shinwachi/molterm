@@ -17,33 +17,47 @@ Add an environment by creating `env/<name>.env` (and optionally `docker-compose.
 
 ## Status
 
-**Step 2 of 3 done: molecule parser.** RDKit and Flask are installed in a virtual environment inside the image
-(`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
+**Steps 1 to 3 done: environment, molecule parser, Braille rendering.** RDKit and Flask are installed in a virtual
+environment inside the image (`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
 
-`server/molecule.py` turns SMILES or a molblock into a sanitized molecule with 2D coordinates. A molblock's own 2D layout
-is kept; 3D or all-zero coordinates are replaced by a computed layout. From an SDF, only the first record is read.
+Open http://molterm-dev.localhost to render a molecule, or use a terminal:
 
 ```sh
-curl -H 'Content-Type: application/json' -d '{"input": "c1ccccc1O phenol"}' http://molterm-dev.localhost/api/v1/parse
+curl -G --data-urlencode 'input=c1ccccc1O' --data-urlencode 'cols=60' --data-urlencode 'color=1' \
+    http://molterm-dev.localhost/api/v1/render.txt
 ```
 
-`format` is optional (`auto`, `smiles` or `molblock`). A success returns `format`, `coords`, `name`, `smiles`, `formula`,
-`atoms` and `bonds`. A failure returns HTTP 400 with `{"error": {"code", "message"}}`, where `code` is one of
-`bad_request`, `empty`, `format`, `syntax`, `chemistry` or `too_large`.
+| module | job |
+|---|---|
+| `server/molecule.py` | SMILES or molblock to a sanitized molecule with 2D coordinates. A molblock's own 2D layout is kept; 3D or all-zero coordinates are replaced. From an SDF, only the first record is read. |
+| `server/braille.py` | Boolean bitmap to Braille characters, 2 dots wide and 4 tall per character. |
+| `server/render.py` | RDKit draws the bonds at 4x, which are reduced to dots and mapped to Braille. Atom labels are real letters placed over them. |
 
-Limits: 500 atoms, 10,000 SMILES characters, 100,000 molblock characters. Layout time grows steeply with size, so the
-atom cap keeps requests well inside gunicorn's 30 s worker timeout.
+| endpoint | input | result |
+|---|---|---|
+| `POST /api/v1/parse` | JSON `input`, optional `format` (`auto`, `smiles`, `molblock`) | `format`, `coords`, `name`, `smiles`, `formula`, `atoms`, `bonds` |
+| `POST /api/v1/render` | as above, plus optional `cols`, `rows` | as above, plus `render` (`text`, `ansi`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
+| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `color=1` | plain text, with ANSI colours when asked |
 
-Verified with `make dev` and `make test`: the container runs from the venv, RDKit draws a PNG with `MolDraw2DCairo`, the
-parser's accepted and rejected inputs are covered by tests, and `/api/v1/parse` answers through Traefik. Hard inputs at
-the cap (fused rings, lattices, cages, long ring chains) parse in about 1 s or less.
+Failures return HTTP 400. The JSON endpoints give `{"error": {"code", "message"}}`, where `code` is one of `bad_request`,
+`empty`, `format`, `syntax`, `chemistry` or `too_large`.
 
-Next: the Braille/Unicode mapping.
+Limits: 500 atoms, 10,000 SMILES characters, 100,000 molblock characters, 10-240 columns, 5-120 rows. Layout time grows
+steeply with size, so the atom cap keeps requests well inside gunicorn's 30 s worker timeout.
 
-Open issues: the page at `/` is still the template's starter page; it gets replaced when there is something to render.
-`rdkit` has no upper version limit, so pin it before the renderer depends on its exact drawing output.
-gunicorn logs `Control server error: [Errno 13] Permission denied: '/.gunicorn'` at startup because the container user
-has no home directory; requests are still served. `make prod` itself has not been run yet.
+`rdkit` is pinned because the Braille output depends on its exact layout and drawing.
+
+Verified with `make dev` and `make test`, through Traefik with `curl`, and in Chrome: light and dark themes, error and
+warning states, and phone width. Hard inputs at the atom cap parse in about 1 s or less.
+
+Open issues:
+
+- gunicorn logs `Control server error: [Errno 13] Permission denied: '/.gunicorn'` at startup because the container user
+  has no home directory; requests are still served. `make prod` itself has not been run yet.
+- Below about 6 dots per bond, double bonds and zigzags stop being readable. The output is flagged `cramped` and the page
+  warns, but the drawing is still returned.
+- Atom labels are not protected from each other, so crowded molecules can overwrite a label.
+- The page keeps the last good drawing on screen beside an error message.
 
 ## Versioning
 

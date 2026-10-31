@@ -9,60 +9,123 @@
         // remembered theme override (auto = follow the OS)
         try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
     </script>
+    <style>
+        #input { display: block; width: 100%; margin-bottom: var(--sp-2); font-family: var(--font-mono); resize: vertical; }
+        input[type=number] { width: 72px; padding-right: var(--sp-1); }
+        label { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-2); font-size: var(--fs-sm); }
+        /* no wrapping and no gaps between rows, or the dots stop lining up; JS sizes rows from the measured glyph */
+        #out { display: inline-block; min-width: 100%; white-space: pre; min-height: var(--sp-6); }
+        /* .term is dark in both themes, so labels take the dark theme's accent ink rather than the page's */
+        #out b { display: inline-block; vertical-align: top; text-align: center; color: #86b6ef; font-weight: 600; }
+        #status { min-height: 18px; margin: var(--sp-2) 0; }
+        #facts { margin-top: var(--sp-3); }
+        #facts td:first-child { color: var(--text-2); font-size: var(--fs-sm); width: 96px; }
+        #facts .mono { overflow-wrap: anywhere; }
+    </style>
 </head>
 <body>
 <header class="topbar">
     <span class="brand">Molterm TUI Renderer</span>
     <span class="chip" id="env"><i></i>…</span>
     <span class="spacer"></span>
-    <input class="search" id="q" placeholder="Filter…" aria-label="Filter">
-    <a class="btn quiet" href="/api/v1/hello">API</a>
+    <a class="btn quiet" href="/health">Health</a>
     <button class="btn quiet" id="theme" title="Theme: auto, light or dark">auto</button>
 </header>
 <main>
-    <h1>Molterm TUI Renderer</h1>
-    <p class="muted">TUI renderer for chemical structures using RDKit and advanced text graphics</p>
-
-    <h2>Endpoints</h2>
-    <table class="list" id="list">
-        <thead><tr>
-            <th aria-sort="ascending"><button data-k="path">Path</button></th>
-            <th><button data-k="ok">Status</button></th>
-            <th class="num"><button data-k="ms">Time</button></th>
-        </tr></thead>
-        <tbody></tbody>
-    </table>
-    <p class="faint">Starter page from the Flask project template (2026-10-31). Styles: <code>/static/house.css</code>, rules: <code>docs/STYLE.md</code>.</p>
+    <textarea id="input" rows="3" spellcheck="false" aria-label="SMILES or molblock"
+              placeholder="SMILES or molblock">CC(=O)Oc1ccccc1C(=O)O aspirin</textarea>
+    <div class="toolbar">
+        <button class="btn primary" id="go" title="Ctrl+Enter">Render</button>
+        <label>Columns <input type="number" id="cols" value="{{ cols }}" min="{{ cols_range[0] }}" max="{{ cols_range[1] }}"></label>
+        <label>Rows <input type="number" id="rows" value="{{ rows }}" min="{{ rows_range[0] }}" max="{{ rows_range[1] }}"></label>
+        <button class="btn quiet" data-smiles="c1ccccc1O phenol">Phenol</button>
+        <button class="btn quiet" data-smiles="Cn1cnc2c1c(=O)n(C)c(=O)n2C caffeine">Caffeine</button>
+        <button class="btn quiet" data-smiles="C[C@H](N)C(=O)O L-alanine">Alanine</button>
+        <button class="btn quiet" data-smiles="[Na+].[Cl-] salt">Salt</button>
+    </div>
+    <p id="status" class="muted" role="status"></p>
+    <div class="term" id="term"><div id="out" class="mono"></div></div>
+    <table class="list compact" id="facts" hidden><tbody></tbody></table>
 </main>
 <script>
-const rows = ["/", "/health", "/api/v1/hello"].map(path => ({ path, ok: null, ms: 0 }));
-let sort = { k: "path", dir: 1 };
 const $ = s => document.querySelector(s);
+let latest = 0;
 
-function render() {
-    const q = $("#q").value.toLowerCase();
-    const list = rows.filter(r => r.path.toLowerCase().includes(q))
-        .sort((a, b) => (a[sort.k] > b[sort.k] ? 1 : a[sort.k] < b[sort.k] ? -1 : 0) * sort.dir);
-    $("#list tbody").innerHTML = list.map(r => `<tr>
-        <td class="mono"><a href="${r.path}">${r.path}</a></td>
-        <td><span class="dot ${r.ok === null ? "" : r.ok ? "ok" : "err"}"></span> ${r.ok === null ? "…" : r.ok ? "ok" : "error"}</td>
-        <td class="num">${r.ms ? r.ms + " ms" : ""}</td></tr>`).join("");
-    document.querySelectorAll("#list th").forEach(th => {
-        const k = th.querySelector("button").dataset.k;
-        if (k === sort.k) th.setAttribute("aria-sort", sort.dir > 0 ? "ascending" : "descending"); else th.removeAttribute("aria-sort");
+// Braille can come from a fallback font wider than the monospace letters, so every cell is sized from a measured glyph.
+function measureCell() {
+    const probe = document.createElement("span");
+    probe.textContent = "⣿".repeat(40);
+    probe.style.visibility = "hidden";
+    $("#out").append(probe);
+    const width = probe.getBoundingClientRect().width / 40;
+    probe.remove();
+    return width;
+}
+
+function draw(render) {
+    const out = $("#out");
+    out.replaceChildren();
+    const cell = measureCell();
+    out.style.lineHeight = cell * 2 + "px";   // dots are evenly spaced when a row is twice a cell's width
+    const lines = render.text.split("\n").map(line => Array.from(line));
+    render.labels.forEach(label => Array.from(label.text).forEach((_, i) => {
+        const b = document.createElement("b");
+        b.textContent = lines[label.row][label.col + i];
+        b.style.width = cell + "px";
+        b.style.height = cell * 2 + "px";
+        lines[label.row][label.col + i] = b;
+    }));
+    lines.forEach((line, r) => {
+        let run = "";
+        const flush = () => { if (run) out.append(run); run = ""; };
+        line.forEach(c => { if (typeof c === "string") run += c; else { flush(); out.append(c); } });
+        flush();
+        if (r < lines.length - 1) out.append("\n");
     });
 }
-document.querySelectorAll("#list th button").forEach(b => b.onclick = () => {
-    sort = { k: b.dataset.k, dir: sort.k === b.dataset.k ? -sort.dir : 1 };
-    render();
-});
-$("#q").oninput = render;
-rows.forEach(async r => {
-    const t = performance.now();
-    try { r.ok = (await fetch(r.path)).ok; } catch (e) { r.ok = false; }
-    r.ms = Math.round(performance.now() - t);
-    render();
-});
+
+function status(kind, message) {
+    const el = $("#status");
+    el.replaceChildren();
+    if (kind) { const d = document.createElement("span"); d.className = "dot " + kind; el.append(d, " "); }
+    el.append(message);
+}
+
+function facts(d) {
+    const rows = [["Name", d.name], ["Formula", d.formula], ["SMILES", d.smiles], ["Atoms", d.atoms.length], ["Bonds", d.bonds.length],
+                  ["Layout", d.coords === "input" ? "from the molblock" : "computed"], ["Size", d.render.cols + " × " + d.render.rows + " characters"]];
+    $("#facts tbody").replaceChildren(...rows.filter(r => r[1] !== "").map(([k, v]) => {
+        const tr = document.createElement("tr"), a = tr.insertCell(), b = tr.insertCell();
+        a.textContent = k; b.textContent = v;
+        if (k === "SMILES") b.className = "mono";
+        return tr;
+    }));
+    $("#facts").hidden = false;
+}
+
+async function go() {
+    const mine = ++latest;
+    let response, d;
+    try {
+        response = await fetch("/api/v1/render", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ input: $("#input").value, cols: $("#cols").value, rows: $("#rows").value }) });
+        d = await response.json();
+    } catch (e) {
+        if (mine === latest) status("err", "The server did not answer: " + e.message);
+        return;
+    }
+    if (mine !== latest) return;
+    if (!response.ok) { status("err", d.error.message); return; }   // the last good drawing stays up
+    draw(d.render);
+    facts(d);
+    status(d.render.cramped ? "warn" : "", d.render.cramped ? "Too small to read reliably: add columns or rows." : "");
+}
+
+$("#go").onclick = go;
+$("#input").onkeydown = e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); go(); } };
+$("#cols").onchange = $("#rows").onchange = go;
+document.querySelectorAll("[data-smiles]").forEach(b => b.onclick = () => { $("#input").value = b.dataset.smiles; go(); });
+
 fetch("/health").then(r => r.ok ? r.json() : Promise.reject())
     .then(d => $("#env").innerHTML = "<i></i>" + (d.env || 'prod') + ' · v' + d.version)
     .catch(() => $("#env").innerHTML = "<i></i>dev");
@@ -75,7 +138,7 @@ btn.onclick = () => {
     if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
     try { next === "auto" ? localStorage.removeItem("theme") : localStorage.setItem("theme", next); } catch (e) {}
 };
-render();
+go();
 </script>
 </body>
 </html>
