@@ -2,7 +2,9 @@
 import os
 
 import rdkit
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
+
+import molecule
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
@@ -32,6 +34,18 @@ def health():
 @app.route("/api/v1/hello")
 def hello():
     return jsonify(message="hello from molterm")
+
+
+@app.route("/api/v1/parse", methods=["POST"])
+def parse():
+    """JSON body {"input": "<SMILES or molblock>", "format": "auto|smiles|molblock"}; `format` is optional."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error={"code": "bad_request", "message": "Send a JSON object with an \"input\" field."}), 400
+    try:
+        return jsonify(molecule.parse(body.get("input"), body.get("format", "auto")).to_dict())
+    except molecule.ParseError as e:
+        return jsonify(error={"code": e.code, "message": e.message}), 400
 
 
 if __name__ == "__main__":

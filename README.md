@@ -17,15 +17,33 @@ Add an environment by creating `env/<name>.env` (and optionally `docker-compose.
 
 ## Status
 
-**Step 1 of 3 done: environment.** RDKit and Flask are installed in a virtual environment inside the image
+**Step 2 of 3 done: molecule parser.** RDKit and Flask are installed in a virtual environment inside the image
 (`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
 
-Verified with `make dev` and `make test`: the container runs from the venv, RDKit parses SMILES, rejects bad input and
-draws a PNG with `MolDraw2DCairo`, and `/health` answers through Traefik.
+`server/molecule.py` turns SMILES or a molblock into a sanitized molecule with 2D coordinates. A molblock's own 2D layout
+is kept; 3D or all-zero coordinates are replaced by a computed layout. From an SDF, only the first record is read.
 
-Next: the molecule parser, then the Braille/Unicode mapping.
+```sh
+curl -H 'Content-Type: application/json' -d '{"input": "c1ccccc1O phenol"}' http://molterm-dev.localhost/api/v1/parse
+```
+
+`format` is optional (`auto`, `smiles` or `molblock`). A success returns `format`, `coords`, `name`, `smiles`, `formula`,
+`atoms` and `bonds`. A failure returns HTTP 400 with `{"error": {"code", "message"}}`, where `code` is one of
+`bad_request`, `empty`, `format`, `syntax`, `chemistry` or `too_large`.
+
+Limits: 500 atoms, 10,000 SMILES characters, 100,000 molblock characters. Layout time grows steeply with size, so the
+atom cap keeps requests well inside gunicorn's 30 s worker timeout.
+
+Verified with `make dev` and `make test`: the container runs from the venv, RDKit draws a PNG with `MolDraw2DCairo`, the
+parser's accepted and rejected inputs are covered by tests, and `/api/v1/parse` answers through Traefik. Hard inputs at
+the cap (fused rings, lattices, cages, long ring chains) parse in about 1 s or less.
+
+Next: the Braille/Unicode mapping.
 
 Open issues: the page at `/` is still the template's starter page; it gets replaced when there is something to render.
+`rdkit` has no upper version limit, so pin it before the renderer depends on its exact drawing output.
+gunicorn logs `Control server error: [Errno 13] Permission denied: '/.gunicorn'` at startup because the container user
+has no home directory; requests are still served. `make prod` itself has not been run yet.
 
 ## Versioning
 
