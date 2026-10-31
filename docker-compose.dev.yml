@@ -1,0 +1,8 @@
+# Layered on docker-compose.yml for ENV=dev: source bind-mounted, Flask debug server with reload.
+services:
+    molterm:
+        restart: "no"
+        volumes:
+            - ./server:/app/server
+            - ./tests:/app/tests
+        command: ["flask", "--app", "server/app.py", "run", "--debug", "--host", "0.0.0.0", "--port", "8910"]

@@ -1,0 +1,96 @@
+/* house.css: the house style. Tokens first; components use only tokens.
+   Light by default, dark follows the OS; force one with <html data-theme="light|dark">. See docs/STYLE.md. */
+:root {
+    --font-sans: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Consolas, "Fira Code", monospace;
+    --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 15px; --fs-lg: 18px; --fs-xl: 22px; --lh: 1.45;
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 48px;
+    --radius-sm: 3px; --radius: 4px; --radius-lg: 8px; --radius-pill: 999px;
+    --control-h: 28px; --row-h: 32px;
+    /* light */
+    --bg: #f6f5f1; --surface: #ffffff; --surface-2: #eeede8; --border: #dcdad3;
+    --text: #1d1d1b; --text-2: #5c5b55; --text-3: #8a8980;
+    --accent: #2a78d6; --accent-ink: #1c5cab; --accent-tint: #eef2fa;
+    --ok: #2d7a5e; --warn: #b45309; --err: #c62828;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 2px 8px rgba(0, 0, 0, .06);
+    color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {    --bg: #161615; --surface: #1f1f1e; --surface-2: #2a2a28; --border: #3a3a37;
+    --text: #f0efec; --text-2: #c3c2b7; --text-3: #8f8e86;
+    --accent: #3987e5; --accent-ink: #86b6ef; --accent-tint: #1c2a3d;
+    --ok: #3fae84; --warn: #f0a500; --err: #ef5350;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    color-scheme: dark;
+} }
+:root[data-theme="dark"] {    --bg: #161615; --surface: #1f1f1e; --surface-2: #2a2a28; --border: #3a3a37;
+    --text: #f0efec; --text-2: #c3c2b7; --text-3: #8f8e86;
+    --accent: #3987e5; --accent-ink: #86b6ef; --accent-tint: #1c2a3d;
+    --ok: #3fae84; --warn: #f0a500; --err: #ef5350;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+    color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: var(--fs-base)/var(--lh) var(--font-sans); }
+a { color: var(--accent-ink); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, kbd, .mono { font-family: var(--font-mono); font-size: .95em; }
+h1 { font-size: var(--fs-xl); font-weight: 600; margin: 0 0 var(--sp-2); }
+h2 { font-size: var(--fs-lg); font-weight: 600; margin: var(--sp-5) 0 var(--sp-2); }
+h3 { font-size: var(--fs-md); font-weight: 600; margin: var(--sp-4) 0 var(--sp-2); }
+.muted { color: var(--text-2); }
+.faint { color: var(--text-3); }
+
+/* sticky top bar: brand left, search + nav right */
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: var(--sp-3);
+          height: 44px; padding: 0 var(--sp-4); background: var(--surface); border-bottom: 1px solid var(--border); }
+.topbar .brand { font-weight: 600; font-size: var(--fs-md); color: var(--text); }
+.topbar .spacer { flex: 1; }
+main { max-width: 1400px; margin: 0 auto; padding: var(--sp-4); }
+
+/* controls: everything in a row shares one height */
+.btn, input, select, textarea { font: inherit; color: var(--text); }
+.btn, input:not([type=checkbox]):not([type=radio]), select {
+    height: var(--control-h); padding: 0 var(--sp-3); border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--surface); }
+textarea { padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); }
+.btn { display: inline-flex; align-items: center; gap: var(--sp-1); cursor: pointer; }
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.quiet { border-color: transparent; background: transparent; color: var(--accent-ink); }
+.btn.quiet:hover { background: var(--accent-tint); }
+input.search { border-radius: var(--radius-pill); min-width: 16rem; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+
+/* lists and tables: whitespace, not boxes; hover is a faint tint */
+table.list { width: 100%; border-collapse: collapse; }
+table.list th { position: sticky; top: 44px; background: var(--bg); text-align: left; font-weight: 500;
+                font-size: var(--fs-sm); color: var(--text-2); padding: var(--sp-2) var(--sp-3); white-space: nowrap; }
+table.list th button { all: unset; cursor: pointer; }
+table.list th[aria-sort] { color: var(--text); }
+table.list th[aria-sort="ascending"] button::after { content: " ▲"; font-size: 9px; }
+table.list th[aria-sort="descending"] button::after { content: " ▼"; font-size: 9px; }
+table.list td { padding: var(--sp-2) var(--sp-3); height: var(--row-h); vertical-align: middle; }
+table.list tbody tr:hover { background: var(--accent-tint); }
+table.list.compact td { padding: 2px var(--sp-3); height: 24px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* chips: a small swatch + text, no outline */
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 1px var(--sp-2); border-radius: var(--radius-sm);
+        background: var(--surface-2); color: var(--text-2); font-size: var(--fs-sm); }
+.chip i { width: 9px; height: 9px; border-radius: 2px; background: var(--accent); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
+
+/* panels: only where grouping really helps */
+.panel { background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: var(--sp-4); }
+.term { background: #111113; color: #e9e8e4; font: var(--fs-sm)/1.4 var(--font-mono); border-radius: var(--radius-lg);
+        padding: var(--sp-3); white-space: pre-wrap; overflow: auto; }
+
+@media (max-width: 640px) {
+    main { padding: var(--sp-3); }
+    input.search { min-width: 0; flex: 1; }
+}

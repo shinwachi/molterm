@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Molterm TUI Renderer</title>
+    <link rel="stylesheet" href="/static/house.css">
+    <script>
+        // remembered theme override (auto = follow the OS)
+        try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    </script>
+</head>
+<body>
+<header class="topbar">
+    <span class="brand">Molterm TUI Renderer</span>
+    <span class="chip" id="env"><i></i>…</span>
+    <span class="spacer"></span>
+    <input class="search" id="q" placeholder="Filter…" aria-label="Filter">
+    <a class="btn quiet" href="/api/v1/hello">API</a>
+    <button class="btn quiet" id="theme" title="Theme: auto, light or dark">auto</button>
+</header>
+<main>
+    <h1>Molterm TUI Renderer</h1>
+    <p class="muted">TUI renderer for chemical structures using RDKit and advanced text graphics</p>
+
+    <h2>Endpoints</h2>
+    <table class="list" id="list">
+        <thead><tr>
+            <th aria-sort="ascending"><button data-k="path">Path</button></th>
+            <th><button data-k="ok">Status</button></th>
+            <th class="num"><button data-k="ms">Time</button></th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+    <p class="faint">Starter page from the Flask project template (2026-10-31). Styles: <code>/static/house.css</code>, rules: <code>docs/STYLE.md</code>.</p>
+</main>
+<script>
+const rows = ["/", "/health", "/api/v1/hello"].map(path => ({ path, ok: null, ms: 0 }));
+let sort = { k: "path", dir: 1 };
+const $ = s => document.querySelector(s);
+
+function render() {
+    const q = $("#q").value.toLowerCase();
+    const list = rows.filter(r => r.path.toLowerCase().includes(q))
+        .sort((a, b) => (a[sort.k] > b[sort.k] ? 1 : a[sort.k] < b[sort.k] ? -1 : 0) * sort.dir);
+    $("#list tbody").innerHTML = list.map(r => `<tr>
+        <td class="mono"><a href="${r.path}">${r.path}</a></td>
+        <td><span class="dot ${r.ok === null ? "" : r.ok ? "ok" : "err"}"></span> ${r.ok === null ? "…" : r.ok ? "ok" : "error"}</td>
+        <td class="num">${r.ms ? r.ms + " ms" : ""}</td></tr>`).join("");
+    document.querySelectorAll("#list th").forEach(th => {
+        const k = th.querySelector("button").dataset.k;
+        if (k === sort.k) th.setAttribute("aria-sort", sort.dir > 0 ? "ascending" : "descending"); else th.removeAttribute("aria-sort");
+    });
+}
+document.querySelectorAll("#list th button").forEach(b => b.onclick = () => {
+    sort = { k: b.dataset.k, dir: sort.k === b.dataset.k ? -sort.dir : 1 };
+    render();
+});
+$("#q").oninput = render;
+rows.forEach(async r => {
+    const t = performance.now();
+    try { r.ok = (await fetch(r.path)).ok; } catch (e) { r.ok = false; }
+    r.ms = Math.round(performance.now() - t);
+    render();
+});
+fetch("/health").then(r => r.ok ? r.json() : Promise.reject())
+    .then(d => $("#env").innerHTML = "<i></i>" + (d.env || 'prod') + ' · v' + d.version)
+    .catch(() => $("#env").innerHTML = "<i></i>dev");
+const modes = ["auto", "light", "dark"];
+const btn = $("#theme");
+btn.textContent = document.documentElement.dataset.theme || "auto";
+btn.onclick = () => {
+    const next = modes[(modes.indexOf(btn.textContent) + 1) % 3];
+    btn.textContent = next;
+    if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
+    try { next === "auto" ? localStorage.removeItem("theme") : localStorage.setItem("theme", next); } catch (e) {}
+};
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# Production shape. Environment-specific values come from env/<env>.env (see Makefile);
+# the defaults below make a plain `docker compose up` behave like prod.
+networks:
+    traefik:
+        external: true
+
+services:
+    molterm:
+        image: molterm:${APP_TAG:-latest}
+        build:
+            context: .
+        restart: unless-stopped
+        # host user, so files written to bind mounts (data/, dev source) stay yours
+        user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+        environment:
+            - SERVICENAME=molterm
+            - APP_ENV=${APP_ENV:-prod}
+        env_file:
+            - credentials_norepo.env
+        volumes:
+            - ./data:/app/data
+        labels:
+            - traefik.enable=true
+            - traefik.docker.network=traefik
+            - traefik.http.routers.${ROUTER:-molterm}.rule=Host(`${APP_HOST:-molterm.localhost}`)
+            - traefik.http.routers.${ROUTER:-molterm}.service=${ROUTER:-molterm}
+            - traefik.http.routers.${ROUTER:-molterm}.entrypoints=web
+            - traefik.http.services.${ROUTER:-molterm}.loadbalancer.server.port=8910
+        # on the traefik network even without a router, to reach other stacks by name
+        networks:
+            - traefik
