@@ -83,6 +83,18 @@ def _cell_colors(pixels, ink):
     return [[_INK_CODES[i] for i in row] for row in counts.argmax(axis=0).tolist()]
 
 
+def mean_bond_length(mol):
+    """Return the mean bond length in coordinate units, for RDKit's fixedBondLength.
+
+    Despite that option's name, RDKit reads it as pixels per coordinate unit, and molblocks differ in their units.
+    """
+    conformer = mol.GetConformer()
+    return sum(
+        (conformer.GetAtomPosition(b.GetBeginAtomIdx()) - conformer.GetAtomPosition(b.GetEndAtomIdx())).Length()
+        for b in mol.GetBonds()
+    ) / mol.GetNumBonds()
+
+
 def _rasterize(mol, cols, rows):
     """Draw the bonds without labels; return the dot bitmap, cell colours and each atom's (col, row) in cells."""
     dot_w, dot_h = braille.CELL_WIDTH * SUPERSAMPLE, braille.CELL_HEIGHT * SUPERSAMPLE
@@ -92,12 +104,7 @@ def _rasterize(mol, cols, rows):
     options.setAtomPalette(_PALETTE)
     options.scaleBondWidth = False
     options.bondLineWidth = SUPERSAMPLE
-    # despite the name, RDKit reads this as pixels per coordinate unit, and molblocks differ in their units
-    conformer = mol.GetConformer()
-    mean_bond = sum(
-        (conformer.GetAtomPosition(b.GetBeginAtomIdx()) - conformer.GetAtomPosition(b.GetEndAtomIdx())).Length()
-        for b in mol.GetBonds()
-    ) / mol.GetNumBonds()
+    mean_bond = mean_bond_length(mol)
     if mean_bond > 0:
         options.fixedBondLength = MAX_BOND_DOTS * SUPERSAMPLE / mean_bond
     options.padding = 0.08

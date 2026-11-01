@@ -17,8 +17,8 @@ Add an environment by creating `env/<name>.env` (and optionally `docker-compose.
 
 ## Status
 
-**Steps 1 to 3 done: environment, molecule parser, Braille rendering.** RDKit and Flask are installed in a virtual
-environment inside the image (`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
+**Done: environment, molecule parser, and rendering as Braille, octants and Kitty graphics.** RDKit and Flask are installed
+in a virtual environment inside the image (`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
 
 Open http://molterm-dev.localhost to render a molecule, or use a terminal:
 
@@ -34,18 +34,31 @@ only offers Braille, since browsers usually have no octant font.
 Colour shows elements on bonds as well as labels: O red, N blue, S yellow, P magenta, halogens green. It uses the terminal's
 16 colours, so it follows a light or dark theme.
 
+`mode=kitty` sends an image instead of text, for terminals with the Kitty graphics protocol, such as Kitty and Ghostty:
+
+```sh
+curl -G --data-urlencode 'input=C[C@H](N)C(=O)O' --data-urlencode 'mode=kitty' \
+    http://molterm-dev.localhost/api/v1/render.txt
+```
+
+It takes about the same space as the text modes, and double bonds and stereo wedges show properly. The image has a
+transparent background and the server cannot detect the terminal's, so add `theme=light` on a light terminal; the default
+is `dark`. Molecules without bonds, such as `[Na+].[Cl-]`, stay as text. The output is not text, so it cannot be copied,
+and `color` does not apply.
+
 | module | job |
 |---|---|
 | `server/molecule.py` | SMILES or molblock to a sanitized molecule with 2D coordinates. A molblock's own 2D layout is kept; 3D or all-zero coordinates are replaced. From an SDF, only the first record is read. |
 | `server/braille.py` | Boolean bitmap to Braille characters, 2 dots wide and 4 tall per character. |
 | `server/octant.py` | The same bitmap to Unicode octants. The table was checked entry by entry against the Unicode 16 names. |
 | `server/render.py` | RDKit draws the bonds at 4x, which are reduced to dots and mapped to characters. Each cell takes the colour of the element covering most of it. Atom labels are real letters placed over them. |
+| `server/kitty.py` | RDKit draws the whole molecule, labels included, as a transparent PNG cropped to whole columns. It is sent in Kitty escape sequences that give only the width, so the terminal keeps its shape with any cell size. |
 
 | endpoint | input | result |
 |---|---|---|
 | `POST /api/v1/parse` | JSON `input`, optional `format` (`auto`, `smiles`, `molblock`) | `format`, `coords`, `name`, `smiles`, `formula`, `atoms`, `bonds` |
 | `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`) | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
-| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode`, `color=1` | plain text, with ANSI colours when asked |
+| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (also `kitty`), `color=1`, `theme` (`dark`, `light`; `kitty` only) | plain text, with ANSI colours when asked, or Kitty escape sequences |
 
 Failures return HTTP 400. The JSON endpoints give `{"error": {"code", "message"}}`, where `code` is one of `bad_request`,
 `empty`, `format`, `syntax`, `chemistry` or `too_large`.
@@ -56,11 +69,13 @@ steeply with size, so the atom cap keeps requests well inside gunicorn's 30 s wo
 `rdkit` is pinned because the output depends on its exact layout and drawing.
 
 Drawings use the smallest readable size, 6 dots per bond (phenol is 11 x 4 characters), and `cols` and `rows` only
-set a maximum. A larger canvas does not enlarge them. Stereo wedges are not drawn at this size, so stereochemistry shows
-only in the SMILES.
+set a maximum. A larger canvas does not enlarge them. In the text modes, stereo wedges are not drawn at this size, so
+stereochemistry shows only in the SMILES.
 
 Verified with `make dev` and `make test`, through Traefik with `curl`, and in Chrome: light and dark themes, error and
-warning states, and phone width. Hard inputs at the atom cap parse in about 1 s or less.
+warning states, and phone width. Hard inputs at the atom cap parse in about 1 s or less. The Kitty escape sequences were
+checked against the protocol's spec and Ghostty's source, and decoded back to the PNG, which was checked by eye. A 480-atom
+molecule on the largest canvas takes about 2 s and 390 KB on the dev server.
 
 Open issues:
 
@@ -71,6 +86,10 @@ Open issues:
 - Atom labels are not protected from each other, so crowded molecules can overwrite a label.
 - The page keeps the last good drawing on screen beside an error message.
 - Octant output has not been confirmed by eye in Ghostty beyond a single test of the characters.
+- Kitty output has not been seen in a real terminal yet.
+- Kitty output does not pass through tmux, which needs its own wrapping and `allow-passthrough`. Terminals without the
+  protocol may show nothing or stray characters.
+- With only the width set, a tall drawing can use a few more rows than `rows` when a terminal's cell is taller than 1:2.
 
 ## Versioning
 

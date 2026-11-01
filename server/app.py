@@ -4,6 +4,7 @@ import os
 import rdkit
 from flask import Flask, jsonify, render_template, request
 
+import kitty
 import molecule
 import render as renderer
 
@@ -50,11 +51,11 @@ def parse():
         return jsonify(error={"code": e.code, "message": e.message}), 400
 
 
-def render_options(values):
+def render_options(values, modes=renderer.MODES):
     """Read cols, rows and mode from a mapping of request values, or raise ParseError."""
     mode = values.get("mode", renderer.DEFAULT_MODE)
-    if mode not in renderer.MODES:
-        raise molecule.ParseError("bad_request", f"mode must be one of {', '.join(renderer.MODES)}.")
+    if mode not in modes:
+        raise molecule.ParseError("bad_request", f"mode must be one of {', '.join(modes)}.")
     sizes = []
     for name, default, (low, high) in (("cols", renderer.DEFAULT_COLS, renderer.COLS_RANGE),
                                        ("rows", renderer.DEFAULT_ROWS, renderer.ROWS_RANGE)):
@@ -87,13 +88,18 @@ def render_json():
 
 @app.route("/api/v1/render.txt")
 def render_text():
-    """Plain text for terminals: ?input=<SMILES or molblock>[&format=][&cols=][&rows=][&mode=octant][&color=1]."""
+    """For terminals: ?input=<SMILES or molblock>[&format=][&cols=][&rows=][&mode=octant|kitty][&color=1][&theme=light]."""
     plain = {"Content-Type": "text/plain; charset=utf-8"}
+    theme = request.args.get("theme", kitty.DEFAULT_THEME)
     try:
-        cols, rows, mode = render_options(request.args)
+        cols, rows, mode = render_options(request.args, (*renderer.MODES, kitty.MODE))
+        if theme not in kitty.THEMES:
+            raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(kitty.THEMES)}.")
         parsed = molecule.parse(request.args.get("input"), request.args.get("format", "auto"))
     except molecule.ParseError as e:
         return e.message + "\n", 400, plain
+    if mode == kitty.MODE:
+        return kitty.render(parsed.mol, cols, rows, theme), 200, plain
     result = renderer.render(parsed.mol, cols, rows, mode)
     return (result.ansi if request.args.get("color") == "1" else result.text) + "\n", 200, plain
 
