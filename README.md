@@ -28,6 +28,12 @@ in a web terminal. Choose **Play demo** to watch it, **Walk me through it** to r
 explore. Results are computed live with RDKit from structure alone, so there is no assay data and nothing about potency.
 The terminal is simulated: it only runs the commands in `help`, and never a shell.
 
+http://molterm-dev.localhost/compare shows both displays side by side, with its own play and walkthrough modes. Each
+command goes to two real terminal emulators, [xterm.js](https://xtermjs.org) in the page: one gets Braille, the other RDKit's
+image as the same iTerm2 or Sixel sequences a real terminal receives. xterm.js has no Kitty support, so that protocol isn't
+offered there. Tables and plots are text in both. The library is fetched and checksummed when the image is built, and
+served from `/vendor`, so changing it needs `make dev`, not only a reload.
+
 Or use a real terminal:
 
 ```sh
@@ -42,17 +48,33 @@ only offers Braille, since browsers usually have no octant font.
 Colour shows elements on bonds as well as labels: O red, N blue, S yellow, P magenta, halogens green. It uses the terminal's
 16 colours, so it follows a light or dark theme.
 
-`mode=kitty` sends an image instead of text, for terminals with the Kitty graphics protocol, such as Kitty and Ghostty:
+### Images in the terminal
+
+Terminals with a graphics protocol can show RDKit's real drawing, so double bonds and stereo wedges appear properly, at about
+the size of the text modes. The server cannot ask a terminal what it supports, so a small client does:
 
 ```sh
-curl -G --data-urlencode 'input=C[C@H](N)C(=O)O' --data-urlencode 'mode=kitty' \
-    http://molterm-dev.localhost/api/v1/render.txt
+curl -s http://molterm-dev.localhost/molterm | sh -s -- 'C[C@H](N)C(=O)O'
+
+# or keep it, with options: -m mode, -t theme, -c cols, -r rows, -v to say which mode it chose
+curl -so molterm http://molterm-dev.localhost/molterm && chmod +x molterm
+./molterm -v 'C[C@H](N)C(=O)O'
 ```
 
-It takes about the same space as the text modes, and double bonds and stereo wedges show properly. The image has a
-transparent background and the server cannot detect the terminal's, so add `theme=light` on a light terminal; the default
-is `dark`. Molecules without bonds, such as `[Na+].[Cl-]`, stay as text. The output is not text, so it cannot be copied,
-and `color` does not apply.
+It chooses the first of these that the terminal supports. `-m` or `$MOLTERM_MODE` overrides the choice.
+
+| mode | terminals | how it's chosen |
+|---|---|---|
+| `kitty` | Kitty, Ghostty | answers a Kitty graphics query, or `$TERM_PROGRAM`/`$TERM` names it |
+| `iterm` | iTerm2, WezTerm, mintty | reports that name to an XTVERSION query, or `$TERM_PROGRAM` names it |
+| `sixel` | xterm `-ti vt340`, others | device attributes include 4; inside tmux, `#{client_termfeatures}` includes `sixel` |
+| `braille` | everything else | the fallback, and always used when output is piped |
+
+The client also reads the terminal's background, to pick `theme` and blend Sixel's edges, and its cell size, because Sixel's
+pixels are the screen's and can't be scaled. It needs only `sh`, `curl`, `stty` and `dd`.
+
+The same modes work on `render.txt` directly, with `theme=light` on a light terminal, since `curl` alone can't ask. Molecules
+without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as text, and `color` does not apply to them.
 
 | module | job |
 |---|---|
@@ -63,14 +85,16 @@ and `color` does not apply.
 | `server/samples.py` | The demo page's samples. Each one's formula, legibility and PubChem identity by InChIKey were checked. |
 | `server/medchem.py` | The web terminal's commands and its 15 compounds, each matched to its name on PubChem by InChIKey. |
 | `server/story.py` | The guided session. Each finding it states is checked against the real output by `tests/test_medchem.py`. |
-| `server/kitty.py` | RDKit draws the whole molecule, labels included, as a transparent PNG cropped to whole columns. It is sent in Kitty escape sequences that give only the width, so the terminal keeps its shape with any cell size. |
+| `server/graphics.py` | RDKit draws the whole molecule, labels included, as a transparent image cropped to whole columns. Kitty and iTerm2 get a PNG with only its width given, so the terminal keeps its shape with any cell size. Sixel is encoded here, at the terminal's real cell size. |
+| `server/client/molterm.sh` | The terminal client, served at `/molterm`: asks the terminal what it supports and chooses a mode. |
 
 | endpoint | input | result |
 |---|---|---|
 | `POST /api/v1/parse` | JSON `input`, optional `format` (`auto`, `smiles`, `molblock`) | `format`, `coords`, `name`, `smiles`, `formula`, `atoms`, `bonds` |
 | `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`) | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
-| `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols` | `output` (text with ANSI colours), `selection`, `clear` |
-| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (also `kitty`), `color=1`, `theme` (`dark`, `light`; `kitty` only) | plain text, with ANSI colours when asked, or Kitty escape sequences |
+| `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
+| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (`dark`, `light`); for Sixel `cell_width` (pixels, 4-40), `background` (`RRGGBB`) | plain text, with ANSI colours when asked, or image escape sequences |
+| `GET /molterm` | | the terminal client, set to call back to this server |
 
 Failures return HTTP 400. The JSON endpoints give `{"error": {"code", "message"}}`, where `code` is one of `bad_request`,
 `empty`, `format`, `syntax`, `chemistry` or `too_large`.
@@ -85,9 +109,11 @@ set a maximum. A larger canvas does not enlarge them. In the text modes, stereo 
 stereochemistry shows only in the SMILES.
 
 Verified with `make dev` and `make test`, through Traefik with `curl`, and in Chrome: light and dark themes, error and
-warning states, and phone width. Hard inputs at the atom cap parse in about 1 s or less. The Kitty escape sequences were
-checked against the protocol's spec and Ghostty's source, and decoded back to the PNG, which was checked by eye. A 480-atom
-molecule on the largest canvas takes about 2 s and 390 KB on the dev server.
+warning states, and phone width. Hard inputs at the atom cap parse in about 1 s or less.
+
+The client and image modes were run in real terminals under a virtual display, and the screenshots checked by eye: Kitty,
+xterm with Sixel on dark and light backgrounds, xterm without Sixel (Braille), tmux in xterm (Sixel) and tmux in Kitty (Braille).
+`tests/test_client.py` runs the client under a fake terminal for the rest.
 
 Open issues:
 
@@ -98,10 +124,14 @@ Open issues:
 - Atom labels are not protected from each other, so crowded molecules can overwrite a label.
 - The renderer page keeps the last good drawing on screen beside an error message. The demo page clears it.
 - Octant output has not been confirmed by eye in Ghostty beyond a single test of the characters.
-- Kitty output has not been seen in a real terminal yet.
-- The web terminal draws in Braille only, since browsers usually have no octant font. On a phone, wide tables scroll sideways.
-- Kitty output does not pass through tmux, which needs its own wrapping and `allow-passthrough`. Terminals without the
-  protocol may show nothing or stray characters.
+- Image output has not been seen in Ghostty, iTerm2, WezTerm or mintty. Kitty's protocol was seen in Kitty itself. iTerm2's was
+  only checked against its documentation.
+- xterm does not report its cell size by default, so Sixel assumes 10 px wide cells there, and the drawing may take more columns.
+- Over a very slow connection, a terminal's replies can arrive after the client stops waiting (0.5 s). It then uses Braille,
+  and the late replies can appear at the shell prompt. `-m` skips the questions.
+- Text modes need a UTF-8 terminal: in another locale, Braille comes out garbled.
+- `/terminal` draws in Braille only, since browsers usually have no octant font. On a phone, wide tables scroll sideways.
+- In `/compare`, a page of images takes about 2 s to draw as iTerm2 (0.6 s as Sixel), and the text pane answers first.
 - With only the width set, a tall drawing can use a few more rows than `rows` when a terminal's cell is taller than 1:2.
 
 ## Versioning

@@ -14,6 +14,7 @@ from rdkit.Chem import Crippen, Descriptors, FilterCatalog, Lipinski, QED, rdFin
 from rdkit.Chem.rdRGroupDecomposition import RGroupDecompose
 
 import braille
+import graphics
 import molecule
 import render as renderer
 
@@ -22,6 +23,11 @@ COLS_RANGE = (40, 240)
 DEFAULT_COLS = 100
 
 RED, GREEN, YELLOW, CYAN, BOLD, DIM = 31, 32, 33, renderer.ANSI_HIGHLIGHT, 1, 90
+
+TEXT = "text"
+DISPLAYS = (TEXT, graphics.ITERM, graphics.SIXEL)
+IMAGE_BACKGROUND = (0x11, 0x11, 0x13)  # what Sixel's edges blend into: the .term background
+_IMAGE_INK = {BOLD: "#eeeeee", CYAN: graphics.HIGHLIGHT}
 
 # name: (SMILES, what it is known for). Each structure's InChIKey was matched to this name on PubChem.
 COMPOUNDS = {
@@ -178,10 +184,27 @@ def _caption(block, caption, code=DIM):
 
 
 class Session:
-    def __init__(self, names, cols):
+    def __init__(self, names, cols, display=TEXT, cell_pixels=None):
         self.names = names
         self.cols = cols
+        self.display = display
+        self.cell_pixels = cell_pixels
         self.clear = False
+
+    def gallery(self, entries):
+        """Show compounds side by side. An entry is (name, atoms to mark, code for the name, lines of alert names)."""
+        if self.display == TEXT:
+            return tiles([_labelled(name, atoms, code) + [text(line, CYAN) for line in extra]
+                          for name, atoms, code, extra in entries], self.cols)
+        return self.picture([(mol(name), atoms, [(name, _IMAGE_INK[code])] + [(line, graphics.HIGHLIGHT) for line in extra])
+                             for name, atoms, code, extra in entries])
+
+    def picture(self, items):
+        """One image, as a single row holding its whole escape sequence, which prints like any other text."""
+        # PNGs are scaled by the terminal, so they can carry more pixels than the screen for sharpness. Sixel can't.
+        cell = graphics.CELL_PIXELS if self.display != graphics.SIXEL else self.cell_pixels or graphics.SIXEL_CELL_PIXELS
+        sheet, cols = graphics.gallery(items, self.cols, cell)
+        return [[(graphics.sequence(sheet, cols, self.display, IMAGE_BACKGROUND), None)]]
 
     def require_names(self, words, least=1, most=None):
         if len(words) < least or (most is not None and len(words) > most):
@@ -216,7 +239,7 @@ def cmd_grid(session, words):
     names = [resolve(word) for word in words] or session.names
     if not names:
         raise Problem("The working set is empty. Start again with: reset")
-    return tiles([_labelled(name) for name in names], session.cols)
+    return session.gallery([(name, frozenset(), BOLD, []) for name in names])
 
 
 def cmd_show(session, words):
@@ -229,6 +252,8 @@ def cmd_show(session, words):
         side = lines(text(name, BOLD), text(COMPOUNDS[name][1], DIM), text(COMPOUNDS[name][0], DIM)) + [[]] + rows
         if flagged:
             side += [[]] + [text(f"{c}: {a[0]}", YELLOW) for c, a in flagged]
+        if session.display != TEXT:
+            return session.picture([(mol(name), frozenset(), [])]) + side
         return tiles([drawing(name), side], session.cols, gap=4)
     try:
         parsed = molecule.parse(words[0], "smiles")
@@ -236,6 +261,8 @@ def cmd_show(session, words):
         raise Problem(f"{words[0]} is not a compound here or a valid SMILES. {error.message}") from error
     info = parsed.to_dict()
     side = lines(text(info["formula"], BOLD), text(info["smiles"], DIM))
+    if session.display != TEXT and parsed.mol.GetNumBonds():  # atoms without bonds have nothing to draw, so stay as text
+        return session.picture([(parsed.mol, frozenset(), [])]) + side
     return tiles([_drawing(words[0], frozenset()), side], session.cols, gap=4)
 
 
@@ -269,13 +296,12 @@ def cmd_alerts(session, words):
     flagged = [n for n in session.names if alerts(n, catalog)]
     if not flagged:
         return lines(text(f"Nothing in the working set trips {catalog.upper()}.", GREEN))
-    blocks = []
+    entries = []
     for name in flagged:
         found = alerts(name, catalog)
-        atoms = frozenset(a for _, group in found for a in group)
-        blocks.append(_labelled(name, atoms) + [text(description, CYAN) for description, _ in found])
+        entries.append((name, frozenset(a for _, group in found for a in group), BOLD, [d for d, _ in found]))
     clean = len(session.names) - len(flagged)
-    return tiles(blocks, session.cols) + [[]] + lines(text(f"{len(flagged)} flagged, {clean} clear of {catalog.upper()}.", DIM))
+    return session.gallery(entries) + [[]] + lines(text(f"{len(flagged)} flagged, {clean} clear of {catalog.upper()}.", DIM))
 
 
 def cmd_filter(session, words):
@@ -400,16 +426,16 @@ def cmd_match(session, words):
     query = Chem.MolFromSmarts(words[0])
     if query is None:
         raise Problem(f"{words[0]} is not valid SMARTS.")
-    blocks, misses = [], []
+    entries, misses = [], []
     for name in session.names:
         found = mol(name).GetSubstructMatches(query)
         if found:
-            blocks.append(_labelled(name, frozenset(a for match in found for a in match)))
+            entries.append((name, frozenset(a for match in found for a in match), BOLD, []))
         else:
             misses.append(name)
-    if not blocks:
+    if not entries:
         return lines(text("No compound in the working set matches.", YELLOW))
-    rows = tiles(blocks, session.cols) + [[]] + lines(text(f"{len(blocks)} of {len(session.names)} match.", BOLD))
+    rows = session.gallery(entries) + [[]] + lines(text(f"{len(entries)} of {len(session.names)} match.", BOLD))
     wrapped = textwrap.wrap("No match: " + ", ".join(misses), session.cols) if misses else []
     return rows + [text(row, DIM) for row in wrapped]
 
@@ -424,8 +450,8 @@ def cmd_sim(session, words):
         bar = "⣿" * round(score * 30)
         body.append([other, f"{score:.2f}", (bar, CYAN)])
     closest = [other for _, other in scores[:3]]
-    return table([f"like {name}", "Tanimoto", ""], body, right=(1,)) + [[]] + tiles(
-        [_labelled(name, code=CYAN)] + [_labelled(other) for other in closest], session.cols) + [[]] + lines(
+    return table([f"like {name}", "Tanimoto", ""], body, right=(1,)) + [[]] + session.gallery(
+        [(name, frozenset(), CYAN, [])] + [(other, frozenset(), BOLD, []) for other in closest]) + [[]] + lines(
         text("Morgan fingerprints, radius 2. Structure only: similar does not mean equally potent.", DIM))
 
 
@@ -437,7 +463,7 @@ def cmd_compare(session, words):
     def differs(name):
         return frozenset(range(mol(name).GetNumAtoms())) - frozenset(mol(name).GetSubstructMatch(query))
 
-    drawings = tiles([_labelled(first, differs(first)), _labelled(second, differs(second))], session.cols, gap=4)
+    drawings = session.gallery([(first, differs(first), BOLD, []), (second, differs(second), BOLD, [])])
     body = []
     for key in PROPERTY_NAMES:
         a, b = properties(first)[key], properties(second)[key]
@@ -495,10 +521,13 @@ USAGE = [
 ]
 
 
-def run(line, selection=None, cols=DEFAULT_COLS):
-    """Run one line; return {"output": text with ANSI colours, "selection": names, "clear": bool}."""
+def run(line, selection=None, cols=DEFAULT_COLS, display=TEXT, cell_pixels=None):
+    """Run one line; return {"output": text with ANSI colours, "selection": names, "clear": bool}.
+
+    With a `display` other than text, drawings arrive as that graphics protocol's escape sequences instead of Braille.
+    """
     names = [n for n in ALL_NAMES if n in set(selection)] if selection is not None else list(ALL_NAMES)
-    session = Session(names, min(max(cols, COLS_RANGE[0]), COLS_RANGE[1]))
+    session = Session(names, min(max(cols, COLS_RANGE[0]), COLS_RANGE[1]), display, cell_pixels)
     try:
         rows = _dispatch(line, session)
     except Problem as problem:

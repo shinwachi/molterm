@@ -31,8 +31,8 @@
             <div class="term" id="term"><div id="out" class="drawing mono"></div></div>
             <table class="list compact" id="facts" hidden><tbody></tbody></table>
             <div id="command-box" hidden>
-                <p class="muted">The same drawing in a terminal. Add <code>--data-urlencode 'mode=octant'</code> or
-                    <code>'mode=kitty'</code> for a sharper one, if your terminal supports them.</p>
+                <p class="muted">In a terminal: the first command draws RDKit's image if your terminal can show one (Kitty,
+                    Ghostty, iTerm2, WezTerm or Sixel), and Braille if not. The second is always text.</p>
                 <div class="term" id="command"></div>
             </div>
         </section>
@@ -60,7 +60,8 @@ const quoted = text => "'" + text.replaceAll("'", "'\\''") + "'";
 
 const go = renderer(() => ({ input: input.value }), {
     onDrawn: () => {
-        $("#command").textContent = `curl -G --data-urlencode ${quoted("input=" + input.value.trim())} ` +
+        $("#command").textContent = `curl -s ${location.origin}/molterm | sh -s -- ${quoted(input.value.trim())}\n` +
+            `curl -G --data-urlencode ${quoted("input=" + input.value.trim())} ` +
             `--data-urlencode 'color=1' ${location.origin}/api/v1/render.txt`;
         $("#command-box").hidden = false;
     },

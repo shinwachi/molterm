@@ -1,10 +1,11 @@
 """Molterm TUI Renderer — TUI renderer for chemical structures using RDKit and advanced text graphics"""
 import os
+import re
 
 import rdkit
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
-import kitty
+import graphics
 import medchem
 import molecule
 import render as renderer
@@ -44,9 +45,22 @@ def terminal():
     return render_template("terminal.html", page="terminal", steps=story.STEPS, completions=completions, **SERVICE)
 
 
+@app.route("/compare")
+def compare():
+    completions = sorted({*medchem.COMMANDS, *medchem.ALL_NAMES, *medchem.PROPERTY_NAMES})
+    return render_template("compare.html", page="compare", steps=story.COMPARE_STEPS, completions=completions, **SERVICE)
+
+
+@app.route("/vendor/<path:name>")
+def vendor(name):
+    """Front-end libraries, fetched and checked when the image is built."""
+    return send_from_directory(os.path.join(HERE, "..", "vendor"), name)
+
+
 @app.route("/api/v1/term", methods=["POST"])
 def term():
-    """JSON body {"line": "<command>", "selection": [names] or null, "cols": width}; returns output, selection and clear."""
+    """JSON body {"line": "<command>", "selection": [names] or null, "cols": width, "display": "text|iterm|sixel",
+    "cell_width": pixels}; only `line` is required. Returns output, selection and clear."""
     body = request.get_json(silent=True)
     line = body.get("line") if isinstance(body, dict) else None
     if not isinstance(line, str):
@@ -56,7 +70,13 @@ def term():
         return jsonify(error={"code": "bad_request", "message": "selection must be a list of names."}), 400
     if isinstance(cols, bool) or not isinstance(cols, int):
         return jsonify(error={"code": "bad_request", "message": "cols must be a whole number."}), 400
-    return jsonify(medchem.run(line, selection, cols))
+    display, cell_pixels = body.get("display", medchem.TEXT), body.get("cell_width")
+    if display not in medchem.DISPLAYS:
+        return jsonify(error={"code": "bad_request", "message": f"display must be one of {', '.join(medchem.DISPLAYS)}."}), 400
+    low, high = graphics.CELL_PIXELS_RANGE
+    if cell_pixels is not None and (isinstance(cell_pixels, bool) or not isinstance(cell_pixels, int) or not low <= cell_pixels <= high):
+        return jsonify(error={"code": "bad_request", "message": f"cell_width must be a whole number from {low} to {high}."}), 400
+    return jsonify(medchem.run(line, selection, cols, display, cell_pixels))
 
 
 @app.route("/health")
@@ -102,6 +122,29 @@ def render_options(values, modes=renderer.MODES):
     return sizes[0], sizes[1], mode
 
 
+def sixel_options(values):
+    """Read the optional cell_width and background, or raise ParseError."""
+    cell_pixels, background = values.get("cell_width"), values.get("background")
+    if cell_pixels is not None:
+        low, high = graphics.CELL_PIXELS_RANGE
+        if not cell_pixels.isascii() or not cell_pixels.isdigit() or not low <= int(cell_pixels) <= high:
+            raise molecule.ParseError("bad_request", f"cell_width must be a whole number from {low} to {high}.")
+        cell_pixels = int(cell_pixels)
+    if background is not None:
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", background):
+            raise molecule.ParseError("bad_request", "background must be a colour as RRGGBB.")
+        background = tuple(int(background[i:i + 2], 16) for i in (0, 2, 4))
+    return cell_pixels, background
+
+
+@app.route("/molterm")
+def client_script():
+    """The terminal client, set to call back to this server."""
+    with open(os.path.join(HERE, "client", "molterm.sh")) as f:
+        script = f.read().replace("@@URL@@", request.host_url.rstrip("/"))
+    return script, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
 @app.route("/api/v1/render", methods=["POST"])
 def render_json():
     """Like /api/v1/parse, with optional `cols`, `rows` and `mode`; the result adds `render` (text, ansi, labels, ...)."""
@@ -118,18 +161,20 @@ def render_json():
 
 @app.route("/api/v1/render.txt")
 def render_text():
-    """For terminals: ?input=<SMILES or molblock>[&format=][&cols=][&rows=][&mode=octant|kitty][&color=1][&theme=light]."""
+    """For terminals: ?input=<SMILES or molblock>[&format=][&cols=][&rows=][&mode=][&color=1][&theme=light], and for Sixel
+    [&cell_width=<the cell's pixels>][&background=<RRGGBB>]."""
     plain = {"Content-Type": "text/plain; charset=utf-8"}
-    theme = request.args.get("theme", kitty.DEFAULT_THEME)
+    theme = request.args.get("theme", graphics.DEFAULT_THEME)
     try:
-        cols, rows, mode = render_options(request.args, (*renderer.MODES, kitty.MODE))
-        if theme not in kitty.THEMES:
-            raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(kitty.THEMES)}.")
+        cols, rows, mode = render_options(request.args, (*renderer.MODES, *graphics.MODES))
+        if theme not in graphics.THEMES:
+            raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
+        cell_pixels, background = sixel_options(request.args)
         parsed = molecule.parse(request.args.get("input"), request.args.get("format", "auto"))
     except molecule.ParseError as e:
         return e.message + "\n", 400, plain
-    if mode == kitty.MODE:
-        return kitty.render(parsed.mol, cols, rows, theme), 200, plain
+    if mode in graphics.MODES:
+        return graphics.render(parsed.mol, mode, cols, rows, theme, cell_pixels, background), 200, plain
     result = renderer.render(parsed.mol, cols, rows, mode)
     return (result.ansi if request.args.get("color") == "1" else result.text) + "\n", 200, plain
 

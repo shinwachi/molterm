@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Text and images · Molterm TUI Renderer{% endblock %}
+{% block head %}
+    <link rel="stylesheet" href="/vendor/xterm.css">
+    <style>
+        #guide { min-height: 104px; }
+        #guide h2 { margin: var(--sp-1) 0 var(--sp-1); font-size: var(--fs-md); }
+        #guide p { margin: 0 0 var(--sp-1); max-width: 90ch; }
+        #guide .intro { color: var(--text-2); }
+        #guide .toolbar { margin: var(--sp-2) 0; }
+        .panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }
+        .pane h3 { margin: 0 0 var(--sp-1); font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+        .pane .term { padding: var(--sp-2); white-space: normal; height: calc(100vh - 300px); min-height: 320px; overflow: hidden; }
+        .pane .term > div { height: 100%; }
+        .pane .term { color-scheme: dark; }  /* .term is dark in both themes, so its scrollbar should be too */
+        .pane .xterm-viewport { scrollbar-color: #3a3a37 #111113; }
+        #form { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); }
+        #command { flex: 1; min-width: 0; font-family: var(--font-mono); }
+        @media (max-width: 800px) {
+            .panes { grid-template-columns: minmax(0, 1fr); }
+            .pane .term { height: 50vh; }
+        }
+    </style>
+{% endblock %}
+{% block main %}
+    <section id="guide" aria-live="polite">
+        <p class="faint" id="progress"></p>
+        <h2 id="title"></h2>
+        <p class="intro" id="before"></p>
+        <p class="takeaway" id="after"></p>
+        <div class="toolbar" id="controls"></div>
+    </section>
+    <div class="panes">
+        <section class="pane">
+            <h3>Any terminal: Braille text</h3>
+            <div class="term"><div id="pane-text"></div></div>
+        </section>
+        <section class="pane">
+            <h3 id="image-heading"></h3>
+            <div class="term"><div id="pane-image"></div></div>
+        </section>
+    </div>
+    <form id="form">
+        <input id="command" aria-label="Command, sent to both terminals" placeholder="Type a command for both terminals, such as help"
+               spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off">
+        <button class="btn primary" type="submit">Run</button>
+        <label>Image format
+            <select id="format">
+                <option value="iterm">iTerm2</option>
+                <option value="sixel">Sixel</option>
+            </select>
+        </label>
+    </form>
+{% endblock %}
+{% block script %}
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/vendor/addon-image.js"></script>
+<script>
+const STORY = {{ steps | tojson }};
+const COMPLETIONS = {{ completions | tojson }};
+const INTRO = { title: "Text and images, side by side", before: "Each command goes to two real terminal emulators, xterm.js running in " +
+    "this page. The left gets Braille text. The right gets RDKit's image, as the same escape sequences a real terminal " +
+    "receives. The commands run on 15 known compounds, live with RDKit, and only the commands listed in help can run." };
+</script>
+<script src="/static/guide.js"></script>
+<script src="/static/compare.js"></script>
+{% endblock %}

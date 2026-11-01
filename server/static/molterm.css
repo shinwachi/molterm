@@ -7,7 +7,13 @@ label { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(
 @media (max-width: 640px) {   /* the links matter more than the version and the health check on a phone */
     .topbar { gap: var(--sp-1); padding: 0 var(--sp-3); }
     .topbar .chip, .topbar nav a[href="/health"] { display: none; }
-    .topbar .btn { padding: 0 var(--sp-2); }
+    .topbar .btn { padding: 0 var(--sp-2); flex: none; }
+    .topbar nav { min-width: 0; overflow-x: auto; scrollbar-width: none; }  /* links stay reachable when they can't all fit */
+    .topbar .spacer { display: none; }
+    .topbar #theme { margin-left: auto; }
+}
+@media (max-width: 400px) {
+    .topbar .brand { display: none; }
 }
 
 /* no wrapping and no gaps between rows, or the dots stop lining up; JS sizes rows from the measured glyph */

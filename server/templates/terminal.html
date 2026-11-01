@@ -52,6 +52,10 @@
 <script>
 const STORY = {{ steps | tojson }};
 const COMPLETIONS = {{ completions | tojson }};
+const INTRO = { title: "A medicinal chemistry session", before: "See how Molterm's text drawings work in real analysis, on 15 known " +
+    "compounds. Watch the demo, walk through it at your own pace, or type help and explore. Every result is computed live " +
+    "with RDKit. The terminal is simulated and only runs the commands listed in help." };
 </script>
+<script src="/static/guide.js"></script>
 <script src="/static/terminal.js"></script>
 {% endblock %}
