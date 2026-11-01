@@ -50,7 +50,7 @@ def _rgb(color):
     return tuple(int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
 
 
-def _palette(theme):
+def palette(theme):
     palette = {-1: _rgb(_INK[theme])}
     for symbol, code in renderer.ANSI_COLORS.items():
         palette[GetPeriodicTable().GetAtomicNumber(symbol)] = _rgb(_ELEMENTS[theme][code])
@@ -66,7 +66,7 @@ def draw_image(mol: Mol, cols, rows, theme=DEFAULT_THEME, cell_pixels=CELL_PIXEL
     options = drawer.drawOptions()
     options.clearBackground = False
     options.setBackgroundColour((0, 0, 0, 0))
-    options.setAtomPalette(_palette(theme))
+    options.setAtomPalette(palette(theme))
     mean_bond = renderer.mean_bond_length(mol)
     if mean_bond > 0:
         options.fixedBondLength = BOND_CELLS * cell_pixels / mean_bond
@@ -101,14 +101,20 @@ def _png(image):
     return buffer.getvalue()
 
 
-def kitty_sequence(png, cols):
-    """Wrap a PNG in Kitty escape sequences that place it at the cursor, then move the cursor to the next line."""
+def kitty_sequence(png, cols, rows=None, image_id=None, move_cursor=True):
+    """Wrap a PNG in Kitty escape sequences that place it at the cursor, then move the cursor to the next line.
+
+    The editor gives `rows` as well, to fill an exact area, an `image_id` so it can replace the image, and keeps the cursor still.
+    """
     payload = base64.b64encode(png).decode("ascii")
     chunks = [payload[i:i + CHUNK_SIZE] for i in range(0, len(payload), CHUNK_SIZE)]
     sequences = []
     for index, chunk in enumerate(chunks):
         # q=2 stops the terminal typing its replies into the shell, since curl will not read them
-        keys = f"a=T,f=100,c={cols},q=2," if index == 0 else "q=2,"
+        keys = "q=2,"
+        if index == 0:
+            extra = (f"r={rows}," if rows else "") + (f"i={image_id}," if image_id else "") + ("" if move_cursor else "C=1,")
+            keys = f"a=T,f=100,c={cols},{extra}q=2,"
         more = int(index < len(chunks) - 1)
         sequences.append(f"\x1b_G{keys}m={more};{chunk}\x1b\\")
     return "".join(sequences) + "\n"

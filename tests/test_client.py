@@ -342,6 +342,158 @@ def test_the_session_needs_a_terminal(stub, word):
     assert result.returncode == 1 and b"needs a terminal" in result.stderr
 
 
+# the editor
+
+
+def editor_stub(stub, states=("0 STATE1", "0 STATE2", "1 "), output="FRAME"):
+    """A curl for the editor: logs its arguments, and gives each answer in turn. The last answer's output is the SMILES."""
+    log = stub / "curl.log"
+    count = stub / "count"
+    count.write_text("0")
+    answers = "\n".join(f'{i}) printf "{state}\\n{"CCO" if state.startswith("1") else output}\\n200" ;;' for i, state in enumerate(states))
+    (stub / "curl").write_text(f"""#!/bin/sh
+for a in "$@"; do printf "%s\\n" "$a" >>"{log}"; done
+n=$(cat "{count}")
+echo $((n + 1)) >"{count}"
+case $n in
+{answers}
+*) printf "1 \\nCCO\\n200" ;;
+esac
+""")
+    return stub
+
+
+def run_editor(stub, keys, args=("edit",), reply=KITTY_OK + DARK + CELL + b"\x1b[?1016;2$y" + DA1_PLAIN, **extra):
+    """Run the editor in a pty; type each of `keys` after each frame. Return (bytes seen, exit code, settings restored, stdout)."""
+    import fcntl
+    import struct
+    import termios
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 90, 0, 0))
+    out = stub / "stdout"
+    with open(out, "wb") as stdout:
+        process = subprocess.Popen(["sh", SCRIPT, *args], stdin=slave, stdout=stdout, stderr=subprocess.PIPE, start_new_session=True,
+                                   env=environment(stub, **extra), preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
+    before = termios.tcgetattr(slave)
+    seen, answered, started = b"", False, time.monotonic()
+    pending = list(keys)
+    sent_after = 0
+    while process.poll() is None:
+        if select.select([master], [], [], 0.05)[0]:
+            seen += os.read(master, 65536)
+        if not answered and QUESTION_END in seen:
+            os.write(master, reply)
+            answered = True
+        frames = seen.count(b"FRAME")
+        if pending and frames > sent_after:
+            sent_after = frames
+            os.write(master, pending.pop(0))
+        if time.monotonic() - started > 10:
+            process.kill()
+            pytest.fail(f"the editor did not finish: {seen!r}")
+    if select.select([master], [], [], 0.05)[0]:
+        seen += os.read(master, 65536)
+    stderr = process.stderr.read()
+    process.stderr.close()
+    process.wait()
+    restored = before == termios.tcgetattr(slave)
+    os.close(master)
+    os.close(slave)
+    return seen, process.returncode, restored, out.read_bytes(), stderr
+
+
+def values(stub, name):
+    return [a[len(name) + 1:] for a in sent(stub) if a.startswith(name + "=")]
+
+
+def test_editor_passes_on_input_and_carries_the_state(stub):
+    editor_stub(stub)
+    _, code, restored, stdout, _ = run_editor(stub, [b"a", b"\x1b[<0;5;6M"])
+    assert code == 0 and restored and stdout == b"CCO\n"
+    assert values(stub, "events") == ["", "61", "1b5b3c303b353b364d"]
+    assert values(stub, "state") == ["STATE1", "STATE2"]
+
+
+def test_editor_reports_the_terminal_to_the_server(stub):
+    editor_stub(stub)
+    run_editor(stub, [b"a", b"b"])
+    for name, value in (("cols", "90"), ("rows", "30"), ("cell_width", "9"), ("cell_height", "20"), ("pixels", "1"), ("theme", "dark")):
+        assert value in values(stub, name)
+
+
+def test_editor_starts_from_a_smiles(stub):
+    editor_stub(stub)
+    run_editor(stub, [b"a", b"b"], args=("edit", "c1ccccc1"))
+    assert values(stub, "smiles") == ["c1ccccc1"]
+
+
+def test_editor_turns_the_mouse_on_and_everything_off_again(stub):
+    editor_stub(stub)
+    seen, _, restored, _, _ = run_editor(stub, [b"a", b"b"])
+    for on in (b"\x1b[?1049h", b"\x1b[?1003h", b"\x1b[?1006h", b"\x1b[?1016h", b"\x1b[?25l"):
+        assert on in seen
+    for off in (b"\x1b[?1049l", b"\x1b[?1003l", b"\x1b[?1006l", b"\x1b[?1016l", b"\x1b[?25h"):
+        assert off in seen
+    assert restored and seen.index(b"\x1b[?1049h") < seen.index(b"\x1b[?1049l")
+
+
+def test_editor_uses_cells_when_the_terminal_has_no_pixel_mouse(stub):
+    editor_stub(stub)
+    seen, _, _, _, _ = run_editor(stub, [b"a", b"b"], reply=KITTY_OK + DARK + CELL + DA1_PLAIN)
+    assert b"\x1b[?1016h" not in seen and not values(stub, "pixels")
+
+
+def test_editor_refuses_a_terminal_without_kitty_graphics(stub):
+    editor_stub(stub)
+    _, code, restored, stdout, stderr = run_editor(stub, [], reply=DA1_SIXEL)
+    assert code == 1 and restored and stdout == b"" and b"needs Kitty graphics" in stderr
+    assert not (stub / "curl.log").exists()
+
+
+def test_editor_cleans_up_when_the_server_goes_away(stub):
+    editor_stub(stub)
+    (stub / "curl").write_text('#!/bin/sh\necho "curl: (7) refused" >&2\nexit 7\n')
+    seen, code, restored, _, stderr = run_editor(stub, [])
+    assert code == 1 and restored and b"\x1b[?1049l" in seen and b"did not answer" in stderr
+
+
+def test_editor_cleans_up_on_a_refused_request(stub):
+    (stub / "curl").write_text('#!/bin/sh\nprintf "That is not a drawing.\\n\\n400"\n')
+    seen, code, restored, _, stderr = run_editor(stub, [])
+    assert code == 1 and restored and b"\x1b[?1049l" in seen and b"not a drawing" in stderr
+
+
+def test_editor_reports_a_failure_from_the_server(stub):
+    (stub / "curl").write_text('#!/bin/sh\nprintf "2 \\nNot valid SMILES.\\n200"\n')
+    seen, code, restored, stdout, stderr = run_editor(stub, [], args=("edit", "C("))
+    assert code == 1 and restored and stdout == b"" and b"Not valid SMILES." in stderr
+
+
+def test_editor_redraws_when_the_window_changes_size(stub):
+    import fcntl
+    import struct
+    import termios
+    editor_stub(stub, states=("0 S1", "0 S2", "0 S3", "1 "))
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 90, 0, 0))
+    process = subprocess.Popen(["sh", SCRIPT, "-m", "kitty", "edit"], stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                               env=environment(stub), preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
+    seen, resized, started = b"", False, time.monotonic()
+    while process.poll() is None and time.monotonic() - started < 10:
+        if select.select([master], [], [], 0.05)[0]:
+            seen += os.read(master, 65536)
+        if not resized and b"FRAME" in seen:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 100, 0, 0))
+            resized = True
+        if resized and "100" in values(stub, "cols"):
+            os.write(master, b"q")
+    process.kill()
+    process.wait()
+    os.close(master)
+    os.close(slave)
+    assert "90" in values(stub, "cols") and "100" in values(stub, "cols")
+
+
 def test_script_is_served_pointing_at_this_server():
     response = app.test_client().get("/molterm", base_url="http://example.test")
     text = response.get_data(as_text=True)

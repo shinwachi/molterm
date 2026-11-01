@@ -84,8 +84,29 @@ It chooses the first of these that the terminal supports. `-m` or `$MOLTERM_MODE
 | `sixel` | xterm `-ti vt340`, others | device attributes include 4; inside tmux, `#{client_termfeatures}` includes `sixel` |
 | `braille` | everything else | the fallback, and always used when output is piped |
 
+### Drawing a molecule
+
+`molterm edit` is a molecular editor inside the terminal, for Kitty and Ghostty, with the mouse and the keyboard. Press `?` in it for
+every control.
+
+```sh
+./molterm edit                                 # start empty
+./molterm edit 'CC(=O)Oc1ccccc1C(=O)O'         # start from a SMILES
+smiles=$(./molterm edit)                       # q prints the SMILES on stdout, so it can be captured
+```
+
+- **Mouse:** click the toolbar to choose an element, bond, ring or tool. Click to place atoms, grow bonds and fuse rings. Drag from an
+  atom to draw a bond, at 30 degree steps or onto another atom. Right-click deletes, and the wheel zooms.
+- **Keyboard:** arrows and Tab choose an atom or bond. Enter grows a bond. Letters set elements, `- = # w d` set bonds, digits and `a`
+  add rings, `u` and `r` undo and redo, `t` tidies the layout, `/` reads a SMILES, and `q` quits.
+- The SMILES, formula, MW and cLogP update below the drawing as you go. Atoms RDKit can't accept, such as an oxygen with three bonds,
+  are marked in red, so a drawing can be invalid on its way to being finished. Quitting then prints the problem and exits with 1.
+
+The client only passes raw input to the server, and the server keeps no sessions: the drawing travels with each request and is checked
+when it comes back. So every action needs a round trip and a new image. It needs the same tools as the rest of the client, plus `od`.
+
 The client also reads the terminal's background, to pick `theme` and blend Sixel's edges, and its cell size, because Sixel's
-pixels are the screen's and can't be scaled. It needs only `sh`, `curl`, `stty` and `dd`.
+pixels are the screen's and can't be scaled. It needs only `sh`, `curl`, `stty` and `dd` (the editor also `od`).
 
 The same modes work on `render.txt` directly, with `theme=light` on a light terminal, since `curl` alone can't ask. Molecules
 without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as text, and `color` does not apply to them.
@@ -101,6 +122,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/story.py` | The guided session. Each finding it states is checked against the real output by `tests/test_medchem.py`. |
 | `server/graphics.py` | RDKit draws the whole molecule, labels included, as a transparent image cropped to whole columns. Kitty and iTerm2 get a PNG with only its width given, so the terminal keeps its shape with any cell size. Sixel is encoded here, at the terminal's real cell size. |
 | `server/client/molterm.sh` | The terminal client, served at `/molterm`: asks the terminal what it supports and chooses a mode, then draws one molecule or runs the guided session. |
+| `server/editor.py` | The molecular editor: all of its input handling, geometry and drawing. The drawing is kept as plain atoms and bonds, since it often isn't valid chemistry while it's being made, and RDKit reads it as a molblock for each frame. |
 | `server/static/kitty.js` | The `/kitty` page: a line editor and the guided session, written for restty. It uses the same commands and story as the client, but not its code. |
 
 | endpoint | input | result |
@@ -111,6 +133,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, and for Sixel `cell_width`, `background` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |
 | `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (`dark`, `light`); for Sixel `cell_width` (pixels, 4-40), `background` (`RRGGBB`) | plain text, with ANSI colours when asked, or image escape sequences |
+| `POST /api/v1/edit` | form fields `cols`, `rows`, `events` (raw input, as hex), `state` (from the last answer) or `smiles` to begin, optional `cell_width`, `cell_height`, `pixels=1`, `theme` | a first line of `<0 to go on, 1 finished, 2 failed> <state>`, then what to print |
 | `GET /molterm` | | the terminal client, set to call back to this server |
 
 Failures return HTTP 400. The JSON endpoints give `{"error": {"code", "message"}}`, where `code` is one of `bad_request`,
@@ -134,6 +157,10 @@ xterm with Sixel on dark and light backgrounds, xterm without Sixel (Braille), t
 
 `molterm demo` was run the same way, against the dev server: in Kitty through `curl | sh`, with Enter, typed commands, `clear` and
 `q`; in xterm with Sixel; and in xterm without it, where it fell back to Braille. `molterm play` has only run under the fake terminal.
+`molterm edit` was run in real Kitty with a real pointer: clicks, a drag with its preview, toolbar buttons, a fused ring, right-click,
+the wheel, keys, help, a typed SMILES, tidy and quitting with stdout redirected. It has not been run in Ghostty.
+`tests/test_editor.py` drives it with raw input, including random input, tampered states, and checks that atoms are drawn where clicks find them.
+
 `/kitty` was checked in Chrome: a full automated run at normal speed, typing with Backspace, Tab, Up and a mistake, the scrollback,
 no console errors, and no page overflow at 320, 375 and 640 px.
 
@@ -151,6 +178,11 @@ Open issues:
 - restty (0.3.0, which calls itself early-release) keeps about 10 MB of decoded images. A larger image never shows, so `/kitty`
   draws at 10 pixels per column instead of 20, and each new image pushes out the oldest: in a long session, drawings far back in
   the scrollback become blank. A real terminal has much more room.
+- `molterm edit` hasn't been seen in Ghostty, so its image replacement and pixel mouse reports there are unconfirmed.
+- Each action in `molterm edit` is a request to the server, so a slow connection makes it lag. Inside tmux it stops with a message,
+  since tmux doesn't pass Kitty graphics on. With the mouse in use, selecting text needs the terminal's own override, usually Shift.
+- `molterm edit` keeps elements, charges, Kekulé bonds, wedges and 2D positions. A loaded SMILES with isotopes or unusual bonds loses
+  them, and says so. Dashed and wavy bonds and R groups aren't available, and it holds at most 200 atoms and 30 undo steps.
 - xterm cuts a Sixel image off at 1000 x 1000 pixels by default, so `grid` is clipped in `molterm demo` there.
 - Below 40 columns, as on a small phone, the commands still draw for 40, so a wide drawing can run past the edge of `/kitty`.
   Typing on a phone's on-screen keyboard has not been tried on a real device.

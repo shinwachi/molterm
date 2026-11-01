@@ -5,6 +5,7 @@
 #   molterm -m braille -t light 'CCO'
 #   molterm demo     a guided medicinal chemistry session, one step at a time, then your own commands
 #   molterm play     the same session, playing by itself
+#   molterm edit     draw a molecule with the mouse and keyboard, in a terminal with Kitty graphics; prints its SMILES on quitting
 #
 # Asks the terminal what it can do, then uses Kitty graphics, iTerm2 images or Sixel, and falls back to Braille text.
 # Needs only sh, curl, stty and dd. The molecule goes to the server named below, or in $MOLTERM_URL.
@@ -17,6 +18,7 @@ usage() {
     cat <<USAGE
 usage: molterm [-m mode] [-t theme] [-c cols] [-r rows] [-v] <SMILES>
        molterm [-m mode] [-t theme] [-c cols] [-v] demo|play
+       molterm [-t theme] [-v] edit [SMILES]
   -m  auto, kitty, iterm, sixel, octant or braille (default auto, or \$MOLTERM_MODE)
   -t  dark or light, to suit the background (default: ask the terminal)
   -c  most columns to use   -r  most rows to use
@@ -36,6 +38,11 @@ while getopts m:t:c:r:vh option; do
     esac
 done
 shift $((OPTIND - 1))
+start=""
+if [ $# -eq 2 ] && [ "$1" = edit ]; then
+    start=$2
+    set -- edit
+fi
 if [ $# -ne 1 ]; then usage >&2; exit 2; fi
 smiles=$1
 
@@ -54,7 +61,8 @@ in_multiplexer() {
 # Ask the terminal four things, ending with the one every terminal answers, so that we know when to stop reading:
 # a Kitty graphics query, its name and version, its background colour and cell size, and its device attributes.
 ask_terminal() {
-    [ -t 1 ] || return 0
+    # the editor draws on the terminal itself, so its output can go elsewhere: s=$(molterm edit)
+    [ -t 1 ] || [ "$smiles" = edit ] || return 0
     case ${TERM:-dumb} in dumb|unknown) return 0 ;; esac
     { : </dev/tty; } 2>/dev/null || return 0
     saved=$(stty -g </dev/tty 2>/dev/null) || { saved=""; return 0; }
@@ -63,7 +71,7 @@ ask_terminal() {
     stty -echo -icanon min 0 time 5 </dev/tty 2>/dev/null || { saved=""; return 0; }
     # tmux would take the Kitty query for a window title
     in_multiplexer || printf '\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\033\\' >/dev/tty
-    printf '\033[>q\033]11;?\033\\\033[16t\033[c' >/dev/tty
+    printf '\033[>q\033]11;?\033\\\033[16t\033[?1016$p\033[c' >/dev/tty
     tries=0
     while [ $tries -lt 20 ]; do
         tries=$((tries + 1))
@@ -111,9 +119,10 @@ read_background() {
     fi
 }
 
-cell_width=""
+cell_width=""; cell_height=""
 read_cell_size() {
     cell_width=$(printf '%s' "$reply" | sed -n 's/.*\[6;[0-9]*;\([0-9]*\)t.*/\1/p')
+    cell_height=$(printf '%s' "$reply" | sed -n 's/.*\[6;\([0-9]*\);[0-9]*t.*/\1/p')
 }
 
 case $mode in
@@ -217,6 +226,95 @@ $steps
 STEPS
     [ "$1" = play ] || { echo; free_prompt; }
 }
+
+# The editor. All of it runs on the server: this only passes on raw input, as hex, and prints what comes back.
+editing=0
+leave_editor() {
+    [ $editing = 1 ] || return 0
+    editing=0
+    printf '\033_Ga=d,q=2\033\\\033[?1016l\033[?1006l\033[?1003l\033[?25h\033[?1049l' >/dev/tty
+    restore
+}
+
+edit_request() {
+    set -- -sS --data-urlencode "events=$1" --data-urlencode "cols=${2#* }" --data-urlencode "rows=${2%% *}"
+    if [ -n "$state" ]; then
+        set -- "$@" --data-urlencode "state=$state"
+    elif [ -n "$start" ]; then
+        set -- "$@" --data-urlencode "smiles=$start"
+    fi
+    [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
+    if [ -n "$cell_width" ] && [ -n "$cell_height" ]; then
+        set -- "$@" --data-urlencode "cell_width=$cell_width" --data-urlencode "cell_height=$cell_height"
+        [ "$pixels" = 1 ] && set -- "$@" --data-urlencode "pixels=1"
+    fi
+    answer=$(curl "$@" -w '\n%{http_code}' "$url/api/v1/edit" 2>&1) || { failure="the server did not answer: $answer"; return 1; }
+    status=${answer##*
+}
+    answer=${answer%
+*}
+    if [ "$status" != 200 ]; then
+        failure=$answer
+        return 1
+    fi
+    first=${answer%%
+*}
+    output=${answer#"$first"}
+    output=${output#
+}
+    outcome=${first%% *}
+    state=${first#* }
+}
+
+edit_session() {
+    if ! { : </dev/tty; } 2>/dev/null; then
+        echo "molterm: the editor needs a terminal" >&2
+        exit 1
+    fi
+    if [ "$mode" != kitty ]; then
+        echo "molterm: the editor needs Kitty graphics, as in Kitty or Ghostty, and this terminal seems to offer $mode. -m kitty overrides this." >&2
+        exit 1
+    fi
+    pixels=0
+    case $reply in *'[?1016;1$y'*|*'[?1016;2$y'*) [ -n "$cell_height" ] && pixels=1 ;; esac
+    state=""; failure=""; outcome=0; drawn=""
+    saved=$(stty -g </dev/tty 2>/dev/null)
+    editing=1
+    trap 'leave_editor; exit 130' INT TERM HUP
+    trap leave_editor EXIT
+    # raw, so that every key and Ctrl-C arrive here; a read gives up after a second, to notice a change of window size
+    stty raw -echo min 0 time 10 </dev/tty 2>/dev/null
+    printf '\033[?1049h\033[?25l\033[?1003h\033[?1006h' >/dev/tty
+    [ $pixels = 1 ] && printf '\033[?1016h' >/dev/tty
+    events=""
+    while :; do
+        size=$(stty size </dev/tty 2>/dev/null)
+        [ -n "$size" ] || size="24 80"
+        if [ -n "$events" ] || [ "$size" != "$drawn" ]; then
+            edit_request "$events" "$size" || break
+            drawn=$size
+            [ "$outcome" = 0 ] || break
+            [ -z "$output" ] || printf '%s' "$output" >/dev/tty
+        fi
+        events=$(dd bs=4096 count=1 </dev/tty 2>/dev/null | od -An -v -tx1 | tr -d ' \n')
+    done
+    leave_editor
+    trap - INT TERM HUP EXIT
+    if [ -n "$failure" ]; then
+        printf 'molterm: %s\n' "$failure" >&2
+        exit 1
+    fi
+    if [ "$outcome" = 2 ]; then
+        printf 'molterm: %s\n' "$output" >&2
+        exit 1
+    fi
+    [ -z "$output" ] || printf '%s\n' "$output"
+    exit 0
+}
+
+if [ "$smiles" = edit ]; then
+    edit_session
+fi
 
 if [ "$smiles" = demo ] || [ "$smiles" = play ]; then
     if ! [ -t 1 ] || ! { : </dev/tty; } 2>/dev/null; then

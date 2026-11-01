@@ -23,6 +23,8 @@
     <section id="client">
         <p>The same session in your own terminal, using Kitty, iTerm2, Sixel or Braille, whichever it supports:</p>
         <code class="mono">curl -so molterm {{ host }}/molterm &amp;&amp; chmod +x molterm &amp;&amp; ./molterm demo</code>
+        <p>Or draw your own molecule with the mouse and keyboard, in a terminal with Kitty graphics. It prints the SMILES when you quit:</p>
+        <code class="mono">./molterm edit</code>
     </section>
 {% endblock %}
 {% block script %}

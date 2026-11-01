@@ -5,6 +5,7 @@ import re
 import rdkit
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
+import editor
 import graphics
 import medchem
 import molecule
@@ -182,6 +183,41 @@ def story_text():
     """The guided session for the client: one step per line, as title, command, before and after, separated by tabs."""
     rows = ["\t".join((step["title"], step["command"], step["before"], step["after"])) for step in story.STEPS]
     return "\n".join(rows) + "\n", 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/api/v1/edit", methods=["POST"])
+def edit():
+    """One step of the molecular editor, for the client. Form fields: `cols` and `rows`, `events` (raw input, as hex), `state` (from
+    the last answer) or `smiles` to begin, and optional `cell_width`, `cell_height`, `pixels=1` (mouse reports are in pixels), `theme`.
+
+    The first line of the answer is "<0 to go on, 1 finished, 2 failed> <state>". After it comes what to print: on finishing, the SMILES.
+    """
+    plain = {"Content-Type": "text/plain; charset=utf-8"}
+    form = request.form
+
+    def whole(name, limits, required=True):
+        value = form.get(name)
+        if value is None and not required:
+            return None
+        if value is None or not value.isascii() or not value.isdigit() or not limits[0] <= int(value) <= limits[1]:
+            raise molecule.ParseError("bad_request", f"{name} must be a whole number from {limits[0]} to {limits[1]}.")
+        return int(value)
+
+    try:
+        cols, rows = whole("cols", editor.COLS_RANGE), whole("rows", editor.ROWS_RANGE)
+        cell_width = whole("cell_width", editor.CELL_WIDTH_RANGE, required=False)
+        cell_height = whole("cell_height", editor.CELL_HEIGHT_RANGE, required=False)
+        theme = form.get("theme", graphics.DEFAULT_THEME)
+        if theme not in graphics.THEMES:
+            raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
+        events = form.get("events", "")
+        if len(events) > editor.MAX_EVENTS * 2 or not re.fullmatch(r"(?:[0-9a-fA-F]{2})*", events):
+            raise molecule.ParseError("bad_request", "events must be hexadecimal bytes, and not too many.")
+        status, state, output = editor.step(form.get("state", ""), form.get("smiles", ""), bytes.fromhex(events).decode("latin-1"),
+                                            cols, rows, cell_width, cell_height, form.get("pixels") == "1", theme)
+    except (molecule.ParseError, editor.StateError) as e:
+        return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
+    return f"{status} {state}\n{output}", 200, plain
 
 
 @app.route("/api/v1/render", methods=["POST"])
