@@ -25,9 +25,9 @@ DEFAULT_COLS = 100
 RED, GREEN, YELLOW, CYAN, BOLD, DIM = 31, 32, 33, renderer.ANSI_HIGHLIGHT, 1, 90
 
 TEXT = "text"
-DISPLAYS = (TEXT, graphics.ITERM, graphics.SIXEL)
-IMAGE_BACKGROUND = (0x11, 0x11, 0x13)  # what Sixel's edges blend into: the .term background
-_IMAGE_INK = {BOLD: "#eeeeee", CYAN: graphics.HIGHLIGHT}
+DISPLAYS = (TEXT, graphics.KITTY, graphics.ITERM, graphics.SIXEL)
+IMAGE_BACKGROUND = (0x11, 0x11, 0x13)  # what Sixel's edges blend into: the .term background, unless the client reports its own
+_IMAGE_INK = {"dark": {BOLD: "#eeeeee", CYAN: graphics.HIGHLIGHT}, "light": {BOLD: "#1a1a1a", CYAN: "#00737a"}}
 
 # name: (SMILES, what it is known for). Each structure's InChIKey was matched to this name on PubChem.
 COMPOUNDS = {
@@ -184,11 +184,14 @@ def _caption(block, caption, code=DIM):
 
 
 class Session:
-    def __init__(self, names, cols, display=TEXT, cell_pixels=None):
+    def __init__(self, names, cols, display=TEXT, cell_pixels=None, theme=graphics.DEFAULT_THEME, background=None, line_editing=True):
         self.names = names
         self.cols = cols
         self.display = display
         self.cell_pixels = cell_pixels
+        self.theme = theme
+        self.background = background or IMAGE_BACKGROUND
+        self.line_editing = line_editing
         self.clear = False
 
     def gallery(self, entries):
@@ -196,15 +199,18 @@ class Session:
         if self.display == TEXT:
             return tiles([_labelled(name, atoms, code) + [text(line, CYAN) for line in extra]
                           for name, atoms, code, extra in entries], self.cols)
-        return self.picture([(mol(name), atoms, [(name, _IMAGE_INK[code])] + [(line, graphics.HIGHLIGHT) for line in extra])
+        ink = _IMAGE_INK[self.theme]
+        return self.picture([(mol(name), atoms, [(name, ink[code])] + [(line, ink[CYAN]) for line in extra])
                              for name, atoms, code, extra in entries])
 
     def picture(self, items):
         """One image, as a single row holding its whole escape sequence, which prints like any other text."""
         # PNGs are scaled by the terminal, so they can carry more pixels than the screen for sharpness. Sixel can't.
-        cell = graphics.CELL_PIXELS if self.display != graphics.SIXEL else self.cell_pixels or graphics.SIXEL_CELL_PIXELS
-        sheet, cols = graphics.gallery(items, self.cols, cell)
-        return [[(graphics.sequence(sheet, cols, self.display, IMAGE_BACKGROUND), None)]]
+        # A web terminal can ask for fewer, since restty only keeps about 10 MB of decoded images.
+        default = graphics.SIXEL_CELL_PIXELS if self.display == graphics.SIXEL else graphics.CELL_PIXELS
+        cell = default if self.display == graphics.ITERM else self.cell_pixels or default
+        sheet, cols = graphics.gallery(items, self.cols, cell, self.theme)
+        return [[(graphics.sequence(sheet, cols, self.display, self.background, self.theme), None)]]
 
     def require_names(self, words, least=1, most=None):
         if len(words) < least or (most is not None and len(words) > most):
@@ -221,8 +227,8 @@ def resolve(word):
 
 def cmd_help(session, words):
     body = [(usage, summary) for usage, summary in USAGE]
-    return table(["command", "what it does"], body) + [[]] + lines(
-        text("Names complete with Tab. Up and down recall commands.", DIM),
+    editing = [text("Names complete with Tab. Up and down recall commands.", DIM)] if session.line_editing else []
+    return table(["command", "what it does"], body) + [[]] + editing + lines(
         text("MW, cLogP, TPSA, QED and alerts are computed from structure. There is no assay data here.", DIM))
 
 
@@ -521,13 +527,15 @@ USAGE = [
 ]
 
 
-def run(line, selection=None, cols=DEFAULT_COLS, display=TEXT, cell_pixels=None):
+def run(line, selection=None, cols=DEFAULT_COLS, display=TEXT, cell_pixels=None, theme=graphics.DEFAULT_THEME, background=None,
+        line_editing=True):
     """Run one line; return {"output": text with ANSI colours, "selection": names, "clear": bool}.
 
     With a `display` other than text, drawings arrive as that graphics protocol's escape sequences instead of Braille.
+    `theme` suits them to the terminal's background, and `line_editing` says whether its prompt has Tab and history.
     """
     names = [n for n in ALL_NAMES if n in set(selection)] if selection is not None else list(ALL_NAMES)
-    session = Session(names, min(max(cols, COLS_RANGE[0]), COLS_RANGE[1]), display, cell_pixels)
+    session = Session(names, min(max(cols, COLS_RANGE[0]), COLS_RANGE[1]), display, cell_pixels, theme, background, line_editing)
     try:
         rows = _dispatch(line, session)
     except Problem as problem:

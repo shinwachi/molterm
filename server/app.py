@@ -51,6 +51,13 @@ def compare():
     return render_template("compare.html", page="compare", steps=story.COMPARE_STEPS, completions=completions, **SERVICE)
 
 
+@app.route("/kitty")
+def kitty():
+    completions = sorted({*medchem.COMMANDS, *medchem.ALL_NAMES, *medchem.PROPERTY_NAMES})
+    return render_template("kitty.html", page="kitty", steps=story.STEPS, completions=completions, host=request.host_url.rstrip("/"),
+                           **SERVICE)
+
+
 @app.route("/vendor/<path:name>")
 def vendor(name):
     """Front-end libraries, fetched and checked when the image is built."""
@@ -59,7 +66,7 @@ def vendor(name):
 
 @app.route("/api/v1/term", methods=["POST"])
 def term():
-    """JSON body {"line": "<command>", "selection": [names] or null, "cols": width, "display": "text|iterm|sixel",
+    """JSON body {"line": "<command>", "selection": [names] or null, "cols": width, "display": "text|kitty|iterm|sixel",
     "cell_width": pixels}; only `line` is required. Returns output, selection and clear."""
     body = request.get_json(silent=True)
     line = body.get("line") if isinstance(body, dict) else None
@@ -143,6 +150,38 @@ def client_script():
     with open(os.path.join(HERE, "client", "molterm.sh")) as f:
         script = f.read().replace("@@URL@@", request.host_url.rstrip("/"))
     return script, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/api/v1/term.txt")
+def term_text():
+    """The same commands for the client, which can't read JSON: ?line=<command>[&selection=a,b][&cols=][&display=][&theme=], and
+    for Sixel [&cell_width=][&background=]. The first line is "<1 to clear the screen, or 0> <selection>", then the output."""
+    plain = {"Content-Type": "text/plain; charset=utf-8"}
+    line, display, theme = request.args.get("line"), request.args.get("display", medchem.TEXT), request.args.get("theme", graphics.DEFAULT_THEME)
+    selection = request.args.get("selection")
+    try:
+        if line is None:
+            raise molecule.ParseError("bad_request", "Give a command as line.")
+        if display not in medchem.DISPLAYS:
+            raise molecule.ParseError("bad_request", f"display must be one of {', '.join(medchem.DISPLAYS)}.")
+        if theme not in graphics.THEMES:
+            raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
+        cols = request.args.get("cols", str(medchem.DEFAULT_COLS))
+        if not cols.isascii() or not cols.isdigit() or len(cols) > 6:
+            raise molecule.ParseError("bad_request", "cols must be a whole number.")
+        cell_pixels, background = sixel_options(request.args)
+    except molecule.ParseError as e:
+        return e.message + "\n", 400, plain
+    names = None if selection is None else [name for name in selection.split(",") if name]
+    result = medchem.run(line, names, int(cols), display, cell_pixels, theme, background, line_editing=False)
+    return f"{int(result['clear'])} {','.join(result['selection'])}\n{result['output']}", 200, plain
+
+
+@app.route("/api/v1/story.txt")
+def story_text():
+    """The guided session for the client: one step per line, as title, command, before and after, separated by tabs."""
+    rows = ["\t".join((step["title"], step["command"], step["before"], step["after"])) for step in story.STEPS]
+    return "\n".join(rows) + "\n", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/api/v1/render", methods=["POST"])

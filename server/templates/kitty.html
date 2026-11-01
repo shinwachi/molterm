@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Kitty graphics · Molterm TUI Renderer{% endblock %}
+{% block head %}
+    <style>
+        #intro { margin: 0 0 var(--sp-2); max-width: 90ch; color: var(--text-2); }
+        #controls { margin-bottom: var(--sp-2); }
+        #screen { padding: var(--sp-2); white-space: normal; height: calc(100vh - 290px); min-height: 360px; overflow: hidden; }
+        #terminal { height: 100%; position: relative; }
+        #client { margin-top: var(--sp-3); }
+        #client p { margin: 0 0 var(--sp-1); color: var(--text-2); font-size: var(--fs-sm); }
+        #client code { display: block; overflow-x: auto; white-space: pre; }
+    </style>
+{% endblock %}
+{% block main %}
+    <p id="intro">The medicinal chemistry session in <a href="https://github.com/wiedymi/restty">restty</a>, a web terminal built on
+        Ghostty's parser. Drawings arrive as Kitty graphics, the protocol Ghostty and Kitty use. Click the terminal and type.
+        It runs only the commands listed in help, never a shell.</p>
+    <div class="toolbar" id="controls">
+        <button class="btn primary" id="play" type="button">Play demo</button>
+        <button class="btn" id="restart" type="button">Start again</button>
+    </div>
+    <div class="term" id="screen"><div id="terminal"></div></div>
+    <section id="client">
+        <p>The same session in your own terminal, using Kitty, iTerm2, Sixel or Braille, whichever it supports:</p>
+        <code class="mono">curl -so molterm {{ host }}/molterm &amp;&amp; chmod +x molterm &amp;&amp; ./molterm demo</code>
+    </section>
+{% endblock %}
+{% block script %}
+<script>
+const STORY = {{ steps | tojson }};
+const COMPLETIONS = {{ completions | tojson }};
+</script>
+<script type="module" src="/static/kitty.js"></script>
+{% endblock %}

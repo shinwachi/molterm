@@ -1,4 +1,4 @@
-"""The guided medicinal chemistry session, used by both the automated demo and the walkthrough.
+"""The guided medicinal chemistry session, used by the automated demo and the walkthrough, on the page and in the client.
 
 Every finding stated in `after` is checked against the real output by tests/test_medchem.py.
 """
@@ -62,7 +62,7 @@ STEPS = [
         "command": "grid",
         "before": "You have inherited a list of 15 known compounds, mostly kinase inhibitors. "
                   "Before any numbers, look at the chemistry.",
-        "after": "All 15 structures in the terminal, as plain text. There is no image viewer or file to open, so this "
+        "after": "All 15 structures, right in the terminal. There is no image viewer or file to open, so this "
                  "works just as well over ssh.",
     },
     {
@@ -88,7 +88,7 @@ STEPS = [
     {
         "title": "Plot size against lipophilicity",
         "command": "plot mw logp",
-        "before": "Where does the set sit in property space? The plot is drawn in the same Braille dots as the molecules.",
+        "before": "Where does the set sit in property space? The plot is drawn in Braille dots, which any terminal can show.",
         "after": "Four compounds are past a limit line: lapatinib, neratinib, dacomitinib and vandetanib. "
                  "Kinase inhibitors often run large and greasy.",
     },

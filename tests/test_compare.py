@@ -178,7 +178,7 @@ def test_endpoint_returns_images(client):
     assert "\x1bP" in body["output"]
 
 
-@pytest.mark.parametrize("payload", [{"display": "kitty"}, {"display": "braille"}, {"display": 3}, {"cell_width": "9"}, {"cell_width": 3},
+@pytest.mark.parametrize("payload", [{"display": "braille"}, {"display": 3}, {"cell_width": "9"}, {"cell_width": 3},
                                      {"cell_width": 41}, {"cell_width": True}])
 def test_endpoint_rejects_bad_options(client, payload):
     response = client.post("/api/v1/term", json={"line": "ls", **payload})
@@ -203,5 +203,5 @@ def test_vendor_route_stays_inside_its_folder(client):
 
 
 def test_every_page_links_here(client):
-    for path in ("/", "/demo", "/terminal", "/compare"):
+    for path in ("/", "/demo", "/terminal", "/compare", "/kitty"):
         assert 'href="/compare"' in client.get(path).get_data(as_text=True)

@@ -211,6 +211,137 @@ def test_missing_molecule_shows_usage(stub):
     assert result.returncode == 2 and b"usage" in result.stderr
 
 
+# the guided session
+
+STORY = "First step\tgrid\tBefore one.\tAfter one.\nSecond step\tfilter pains=0\tBefore two.\tAfter two.\n"
+
+
+def session_stub(stub, first_line="0 a,b"):
+    """A curl that answers like the server, and logs each command with the working set it was sent."""
+    (stub / "story.txt").write_text(STORY)
+    log = stub / "curl.log"
+    (stub / "curl").write_text(f"""#!/bin/sh
+for a in "$@"; do
+    printf "%s\\n" "$a" >>"{log}"
+    case $a in *story.txt) cat "{stub}/story.txt"; exit 0 ;; esac
+done
+printf "{first_line}\\nOUTPUT\\n\\n200"
+""")
+    (stub / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    (stub / "sleep").chmod(0o755)
+    return stub
+
+
+def interact(stub, args, keys, reply=KITTY_OK + DARK + DA1_PLAIN, **extra):
+    """Run the client in a pty, typing each of `keys` when a new prompt appears. Return (output, exit code, settings restored)."""
+    import fcntl
+    import termios
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, __import__("struct").pack("HHHH", 30, 90, 0, 0))
+    process = subprocess.Popen(["sh", SCRIPT, *args], stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                               env=environment(stub, **extra), preexec_fn=lambda: fcntl.ioctl(0, termios.TIOCSCTTY, 0))
+    before = termios.tcgetattr(slave)
+    seen, answered, typed, started = b"", False, 0, time.monotonic()
+    pending = list(keys)
+    while process.poll() is None or select.select([master], [], [], 0.05)[0]:
+        if select.select([master], [], [], 0.05)[0]:
+            try:
+                seen += os.read(master, 65536)
+            except OSError:
+                break
+        if not answered and QUESTION_END in seen:
+            os.write(master, reply)
+            answered = True
+        if pending and seen.count(b"medchem$\x1b[0m ") - seen.count(b"medchem$\x1b[0m grid") > typed:
+            os.write(master, pending.pop(0))
+            typed += 1
+        if time.monotonic() - started > 10:
+            process.kill()
+            pytest.fail(f"the client did not finish: {seen!r}")
+    process.wait()
+    restored = before == termios.tcgetattr(slave)
+    os.close(master)
+    os.close(slave)
+    return seen, process.returncode, restored
+
+
+def lines_sent(stub):
+    return [a[5:] for a in sent(stub) if a.startswith("line=")]
+
+
+def test_demo_runs_each_step_on_enter_then_takes_commands(stub):
+    session_stub(stub)
+    output, code, restored = interact(stub, ["demo"], [b"\n", b"\n", b"ls\n", b"q\n"])
+    assert code == 0 and restored
+    assert lines_sent(stub) == ["grid", "filter pains=0", "ls"]
+    for expected in (b"Step 1 of 2: First step", b"Before one.", b"After one.", b"Step 2 of 2", b"After two.", b"Your turn", b"OUTPUT"):
+        assert expected in output
+    assert b"medchem$\x1b[0m grid" in output
+
+
+def test_demo_uses_the_mode_it_detected_and_the_real_width(stub):
+    session_stub(stub)
+    interact(stub, ["demo"], [b"q\n", b"\n"])
+    session_stub(stub)
+    interact(stub, ["demo"], [b"\n", b"q\n"])
+    assert "display=kitty" in sent(stub) and "cols=90" in sent(stub) and "theme=dark" in sent(stub)
+
+
+def test_demo_lets_you_try_something_else_without_losing_the_step(stub):
+    session_stub(stub)
+    output, _, _ = interact(stub, ["demo"], [b"ls\n", b"\n", b"q\n"])
+    assert lines_sent(stub) == ["ls", "grid"] and b"After one." in output
+
+
+def test_demo_carries_the_working_set(stub):
+    session_stub(stub)
+    interact(stub, ["demo"], [b"\n", b"\n", b"q\n"])
+    log = sent(stub)
+    assert "selection=a,b" in log[log.index("line=filter pains=0"):]
+    assert not [a for a in log[:log.index("line=grid") + 6] if a.startswith("selection=")]
+
+
+def test_demo_quits_cleanly_at_the_first_prompt_and_at_end_of_input(stub):
+    session_stub(stub)
+    assert interact(stub, ["demo"], [b"q\n"])[1:] == (0, True)
+    session_stub(stub)
+    assert interact(stub, ["demo"], [b"\x04"])[1:] == (0, True)
+
+
+def test_demo_text_mode_for_braille(stub):
+    session_stub(stub)
+    interact(stub, ["-m", "braille", "demo"], [b"\n", b"q\n"])
+    assert "display=text" in sent(stub)
+
+
+def test_clear_clears_the_screen_and_kitty_images(stub):
+    session_stub(stub, "1 a,b")
+    output, _, _ = interact(stub, ["demo"], [b"clear\n", b"q\n"])
+    assert b"\x1b[2J" in output and b"\x1b_Ga=d" in output
+
+
+def test_a_typed_line_never_reaches_a_shell(stub, tmp_path):
+    session_stub(stub)
+    marker = tmp_path / "touched"
+    interact(stub, ["demo"], [f"$(touch {marker}); touch {marker}\n".encode(), b"q\n"])
+    assert not marker.exists()
+    assert lines_sent(stub) == [f"$(touch {marker}); touch {marker}"]
+
+
+def test_play_runs_every_step_without_input(stub):
+    session_stub(stub)
+    output, code, restored = interact(stub, ["play"], [])
+    assert code == 0 and restored and lines_sent(stub) == ["grid", "filter pains=0"]
+    assert b"After two." in output and b"Your turn" not in output
+
+
+@pytest.mark.parametrize("word", ["demo", "play"])
+def test_the_session_needs_a_terminal(stub, word):
+    session_stub(stub)
+    result = subprocess.run(["sh", SCRIPT, word], env=environment(stub), capture_output=True, stdin=subprocess.DEVNULL)
+    assert result.returncode == 1 and b"needs a terminal" in result.stderr
+
+
 def test_script_is_served_pointing_at_this_server():
     response = app.test_client().get("/molterm", base_url="http://example.test")
     text = response.get_data(as_text=True)

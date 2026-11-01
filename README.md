@@ -17,7 +17,7 @@ Add an environment by creating `env/<name>.env` (and optionally `docker-compose.
 
 ## Status
 
-**Done: environment, molecule parser, and rendering as Braille, octants and Kitty graphics.** RDKit and Flask are installed
+**Done: environment, molecule parser, rendering as Braille, octants and terminal graphics, and the guided session in web and real terminals.** RDKit and Flask are installed
 in a virtual environment inside the image (`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
 
 Open http://molterm-dev.localhost/demo to type a SMILES or pick one of 23 samples and see it drawn in text, with the
@@ -33,6 +33,12 @@ command goes to two real terminal emulators, [xterm.js](https://xtermjs.org) in 
 image as the same iTerm2 or Sixel sequences a real terminal receives. xterm.js has no Kitty support, so that protocol isn't
 offered there. Tables and plots are text in both. The library is fetched and checksummed when the image is built, and
 served from `/vendor`, so changing it needs `make dev`, not only a reload.
+
+http://molterm-dev.localhost/kitty runs the same session as `/terminal` in [restty](https://github.com/wiedymi/restty), a web
+terminal built on Ghostty's parser, with drawings sent as real Kitty graphics. You type in the terminal itself, or choose
+**Play demo**. [ghostty-web](https://github.com/coder/ghostty-web) was the first choice, but version 0.4.0 parses text only and
+has no image drawing. restty and a font are fetched and checksummed when the image is built, because restty's default fonts come
+from a CDN. Its page downloads 4.2 MB of script.
 
 Or use a real terminal:
 
@@ -59,7 +65,15 @@ curl -s http://molterm-dev.localhost/molterm | sh -s -- 'C[C@H](N)C(=O)O'
 # or keep it, with options: -m mode, -t theme, -c cols, -r rows, -v to say which mode it chose
 curl -so molterm http://molterm-dev.localhost/molterm && chmod +x molterm
 ./molterm -v 'C[C@H](N)C(=O)O'
+
+# the guided session: Enter runs each step, or type another command, and q quits. Afterwards the prompt is yours.
+./molterm demo
+# the same session, playing by itself
+./molterm play
 ```
+
+Either session draws with the best mode the terminal supports. What you type is sent to the server, which runs only the commands
+in `help`; the client never runs it. The prompt has the terminal's plain line editing, so no Tab completion or history.
 
 It chooses the first of these that the terminal supports. `-m` or `$MOLTERM_MODE` overrides the choice.
 
@@ -86,13 +100,16 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/medchem.py` | The web terminal's commands and its 15 compounds, each matched to its name on PubChem by InChIKey. |
 | `server/story.py` | The guided session. Each finding it states is checked against the real output by `tests/test_medchem.py`. |
 | `server/graphics.py` | RDKit draws the whole molecule, labels included, as a transparent image cropped to whole columns. Kitty and iTerm2 get a PNG with only its width given, so the terminal keeps its shape with any cell size. Sixel is encoded here, at the terminal's real cell size. |
-| `server/client/molterm.sh` | The terminal client, served at `/molterm`: asks the terminal what it supports and chooses a mode. |
+| `server/client/molterm.sh` | The terminal client, served at `/molterm`: asks the terminal what it supports and chooses a mode, then draws one molecule or runs the guided session. |
+| `server/static/kitty.js` | The `/kitty` page: a line editor and the guided session, written for restty. It uses the same commands and story as the client, but not its code. |
 
 | endpoint | input | result |
 |---|---|---|
 | `POST /api/v1/parse` | JSON `input`, optional `format` (`auto`, `smiles`, `molblock`) | `format`, `coords`, `name`, `smiles`, `formula`, `atoms`, `bonds` |
 | `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`) | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
-| `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
+| `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `kitty`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
+| `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, and for Sixel `cell_width`, `background` | a first line of `<1 to clear, or 0> <selection>`, then the output |
+| `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |
 | `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (`dark`, `light`); for Sixel `cell_width` (pixels, 4-40), `background` (`RRGGBB`) | plain text, with ANSI colours when asked, or image escape sequences |
 | `GET /molterm` | | the terminal client, set to call back to this server |
 
@@ -115,6 +132,11 @@ The client and image modes were run in real terminals under a virtual display, a
 xterm with Sixel on dark and light backgrounds, xterm without Sixel (Braille), tmux in xterm (Sixel) and tmux in Kitty (Braille).
 `tests/test_client.py` runs the client under a fake terminal for the rest.
 
+`molterm demo` was run the same way, against the dev server: in Kitty through `curl | sh`, with Enter, typed commands, `clear` and
+`q`; in xterm with Sixel; and in xterm without it, where it fell back to Braille. `molterm play` has only run under the fake terminal.
+`/kitty` was checked in Chrome: a full automated run at normal speed, typing with Backspace, Tab, Up and a mistake, the scrollback,
+no console errors, and no page overflow at 320, 375 and 640 px.
+
 Open issues:
 
 - gunicorn logs `Control server error: [Errno 13] Permission denied: '/.gunicorn'` at startup because the container user
@@ -124,8 +146,14 @@ Open issues:
 - Atom labels are not protected from each other, so crowded molecules can overwrite a label.
 - The renderer page keeps the last good drawing on screen beside an error message. The demo page clears it.
 - Octant output has not been confirmed by eye in Ghostty beyond a single test of the characters.
-- Image output has not been seen in Ghostty, iTerm2, WezTerm or mintty. Kitty's protocol was seen in Kitty itself. iTerm2's was
-  only checked against its documentation.
+- Image output has not been seen in Ghostty, iTerm2, WezTerm or mintty by the checks above. Kitty's protocol was seen in Kitty
+  itself and in restty. iTerm2's was seen in xterm.js and checked against its documentation.
+- restty (0.3.0, which calls itself early-release) keeps about 10 MB of decoded images. A larger image never shows, so `/kitty`
+  draws at 10 pixels per column instead of 20, and each new image pushes out the oldest: in a long session, drawings far back in
+  the scrollback become blank. A real terminal has much more room.
+- xterm cuts a Sixel image off at 1000 x 1000 pixels by default, so `grid` is clipped in `molterm demo` there.
+- Below 40 columns, as on a small phone, the commands still draw for 40, so a wide drawing can run past the edge of `/kitty`.
+  Typing on a phone's on-screen keyboard has not been tried on a real device.
 - xterm does not report its cell size by default, so Sixel assumes 10 px wide cells there, and the drawing may take more columns.
 - Over a very slow connection, a terminal's replies can arrive after the client stops waiting (0.5 s). It then uses Braille,
   and the late replies can appear at the shell prompt. `-m` skips the questions.

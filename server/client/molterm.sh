@@ -3,6 +3,8 @@
 #
 #   molterm 'CC(=O)Oc1ccccc1C(=O)O'
 #   molterm -m braille -t light 'CCO'
+#   molterm demo     a guided medicinal chemistry session, one step at a time, then your own commands
+#   molterm play     the same session, playing by itself
 #
 # Asks the terminal what it can do, then uses Kitty graphics, iTerm2 images or Sixel, and falls back to Braille text.
 # Needs only sh, curl, stty and dd. The molecule goes to the server named below, or in $MOLTERM_URL.
@@ -14,6 +16,7 @@ theme=""; cols=""; rows=""; verbose=0
 usage() {
     cat <<USAGE
 usage: molterm [-m mode] [-t theme] [-c cols] [-r rows] [-v] <SMILES>
+       molterm [-m mode] [-t theme] [-c cols] [-v] demo|play
   -m  auto, kitty, iterm, sixel, octant or braille (default auto, or \$MOLTERM_MODE)
   -t  dark or light, to suit the background (default: ask the terminal)
   -c  most columns to use   -r  most rows to use
@@ -120,6 +123,109 @@ esac
 read_background
 read_cell_size
 [ $verbose = 1 ] && echo "molterm: using $mode" >&2
+
+# The guided session. The server runs each command, and only the commands it lists; nothing typed here reaches a shell.
+TAB=$(printf '\t')
+selection=""; have_selection=0
+
+columns() {
+    if [ -n "$cols" ]; then echo "$cols"; return; fi
+    size=$(stty size </dev/tty 2>/dev/null)
+    width=${size#* }
+    case $width in ''|*[!0-9]*|0) echo 100 ;; *) echo "$width" ;; esac
+}
+
+say() { printf '%s\n' "$1" | fold -s -w "$(($(columns) - 1))"; }
+
+run_line() {
+    case $mode in braille|octant) display=text ;; *) display=$mode ;; esac
+    set -- -sS -G --data-urlencode "line=$1" --data-urlencode "display=$display" --data-urlencode "cols=$(columns)"
+    [ $have_selection = 1 ] && set -- "$@" --data-urlencode "selection=$selection"
+    [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
+    if [ "$mode" = sixel ]; then
+        [ -n "$background" ] && set -- "$@" --data-urlencode "background=$background"
+        [ -n "$cell_width" ] && set -- "$@" --data-urlencode "cell_width=$cell_width"
+    fi
+    answer=$(curl "$@" -w '\n%{http_code}' "$url/api/v1/term.txt") || return 1
+    status=${answer##*
+}
+    answer=${answer%
+*}
+    if [ "$status" != 200 ]; then
+        printf 'molterm: %s\n' "$answer" >&2
+        return 1
+    fi
+    first=${answer%%
+*}
+    output=${answer#"$first"}
+    output=${output#
+}
+    selection=${first#* }
+    have_selection=1
+    if [ "${first%% *}" = 1 ]; then
+        [ "$mode" = kitty ] && printf '\033_Ga=d,q=2\033\\'
+        printf '\033[2J\033[H'
+    fi
+    [ -z "$output" ] || printf '%s\n' "$output"
+}
+
+prompt() { printf '\033[32mmedchem$\033[0m %s' "$1"; }
+
+# Read a line from the terminal itself, since curl | sh leaves the script on stdin. Returns false at the end of input or on q.
+ask() {
+    prompt ""
+    IFS= read -r line </dev/tty || { echo; return 1; }
+    case $line in q|quit|exit) return 1 ;; esac
+    return 0
+}
+
+free_prompt() {
+    say "Your turn: help lists the commands, and q quits."
+    while ask; do
+        [ -z "$line" ] || { run_line "$line"; echo; }
+    done
+}
+
+heading() { printf '\n\033[1mStep %s of %s: %s\033[0m\n' "$1" "$2" "$3"; say "$4"; echo; }
+
+session() {
+    steps=$(curl -sS "$url/api/v1/story.txt") || exit 1
+    total=$(printf '%s\n' "$steps" | wc -l | tr -d ' ')
+    index=0
+    while IFS=$TAB read -r title command before after <&3; do
+        index=$((index + 1))
+        heading "$index" "$total" "$title" "$before"
+        if [ "$1" = play ]; then
+            prompt "$command"; echo
+            sleep 1
+        else
+            while :; do
+                printf '\033[90mPress Enter to run: %s (or type another command, q quits)\033[0m\n' "$command"
+                ask || return 0
+                case $line in
+                    '') prompt "$command"; echo; break ;;  # so that the transcript shows what ran
+                    "$command") break ;;
+                esac
+                run_line "$line"; echo
+            done
+        fi
+        run_line "$command"
+        echo; say "$after"
+        [ "$1" = play ] && sleep 4
+    done 3<<STEPS
+$steps
+STEPS
+    [ "$1" = play ] || { echo; free_prompt; }
+}
+
+if [ "$smiles" = demo ] || [ "$smiles" = play ]; then
+    if ! [ -t 1 ] || ! { : </dev/tty; } 2>/dev/null; then
+        echo "molterm: the $smiles needs a terminal" >&2
+        exit 1
+    fi
+    session "$smiles"
+    exit 0
+fi
 
 set -- -sS -G --data-urlencode "input=$smiles" --data-urlencode "mode=$mode"
 [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
