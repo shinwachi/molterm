@@ -32,11 +32,27 @@ SUBSCRIPTS = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
 # Terminal colours rather than fixed RGB, so they follow the terminal's theme, light or dark.
 ANSI_COLORS = {"O": 31, "N": 34, "S": 33, "P": 35, "F": 32, "Cl": 32, "Br": 32, "I": 32}
 ANSI_DEFAULT = 1  # bold
+ANSI_HIGHLIGHT = 36  # cyan, which no element uses
 # RDKit draws each element in a pure colour, which identifies the element again in the pixels. Black is plain carbon.
 _DRAW_COLORS = {31: (1, 0, 0), 32: (0, 1, 0), 33: (1, 1, 0), 34: (0, 0, 1), 35: (1, 0, 1)}
 _INK_CODES = [None, *_DRAW_COLORS]
 _INK_RGB = np.array([(0, 0, 0), *_DRAW_COLORS.values()], dtype=float) * 255
 _PALETTE = {-1: (0, 0, 0), **{GetPeriodicTable().GetAtomicNumber(s): _DRAW_COLORS[c] for s, c in ANSI_COLORS.items()}}
+
+
+def ansi_text(grid, colors):
+    """Join rows of characters and their ANSI codes into text with escape sequences."""
+    lines = []
+    for chars, codes in zip(grid, colors):
+        line, current = "", None
+        for char, code in zip(chars, codes):
+            if code != current:
+                line += "\x1b[0m" if current is not None else ""
+                line += f"\x1b[{code}m" if code is not None else ""
+                current = code
+            line += char
+        lines.append(line + ("\x1b[0m" if current is not None else ""))
+    return "\n".join(lines)
 
 
 @dataclass
@@ -54,17 +70,7 @@ class Rendering:
     @property
     def ansi(self):
         """The text with colours, for a real terminal."""
-        lines = []
-        for chars, codes in zip(self.grid, self.colors):
-            line, current = "", None
-            for char, code in zip(chars, codes):
-                if code != current:
-                    line += "\x1b[0m" if current is not None else ""
-                    line += f"\x1b[{code}m" if code is not None else ""
-                    current = code
-                line += char
-            lines.append(line + ("\x1b[0m" if current is not None else ""))
-        return "\n".join(lines)
+        return ansi_text(self.grid, self.colors)
 
     def to_dict(self):
         return {"mode": self.mode, "text": self.text, "ansi": self.ansi, "colors": self.colors, "labels": self.labels,
@@ -152,7 +158,7 @@ def _label_color(symbol):
     return ANSI_COLORS.get(symbol, ANSI_DEFAULT)
 
 
-def _place_labels(grid, colors, mol, positions):
+def _place_labels(grid, colors, mol, positions, highlight=frozenset()):
     labels = []
     rows, cols = len(grid), len(grid[0])
     for atom, (x, y) in zip(mol.GetAtoms(), positions):
@@ -163,10 +169,31 @@ def _place_labels(grid, colors, mol, positions):
         col = min(max(int(x) - anchor, 0), max(cols - len(text), 0))
         row = min(max(int(y), 0), rows - 1)
         text = text[:cols - col]
+        color = ANSI_HIGHLIGHT if atom.GetIdx() in highlight else _label_color(atom.GetSymbol())
         grid[row][col:col + len(text)] = list(text)
-        colors[row][col:col + len(text)] = [_label_color(atom.GetSymbol())] * len(text)
+        colors[row][col:col + len(text)] = [color] * len(text)
         labels.append({"row": row, "col": col, "text": text, "symbol": atom.GetSymbol()})
     return labels
+
+
+def _highlight_bonds(grid, colors, mol, positions, highlight, blank):
+    """Colour the drawn cells along each bond whose two atoms are both highlighted, and a lone highlighted atom's cell."""
+    rows, cols = len(grid), len(grid[0])
+
+    def mark(x, y):
+        row, col = int(y), int(x)
+        if 0 <= row < rows and 0 <= col < cols and grid[row][col] != blank:
+            colors[row][col] = ANSI_HIGHLIGHT
+
+    for index in highlight:
+        mark(*positions[index])
+    for bond in mol.GetBonds():
+        a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        if a in highlight and b in highlight:
+            (x1, y1), (x2, y2) = positions[a], positions[b]
+            steps = max(int(max(abs(x2 - x1), abs(y2 - y1)) * 4), 1)
+            for step in range(steps + 1):
+                mark(x1 + (x2 - x1) * step / steps, y1 + (y2 - y1) * step / steps)
 
 
 def _crop(grid, colors, labels, blank):
@@ -211,13 +238,14 @@ def _render_unbonded(mol, cols, rows, mode):
                      [(tint + [None] * width)[:width] for tint in tints], labels, mode)
 
 
-def render(mol: Mol, cols=DEFAULT_COLS, rows=DEFAULT_ROWS, mode=DEFAULT_MODE):
-    """Render a molecule with a 2D conformer into at most cols x rows characters."""
+def render(mol: Mol, cols=DEFAULT_COLS, rows=DEFAULT_ROWS, mode=DEFAULT_MODE, highlight=frozenset()):
+    """Render a molecule with a 2D conformer into at most cols x rows characters; `highlight` holds atom indices to mark."""
     if not mol.GetNumBonds():
         return _render_unbonded(mol, cols, rows, mode)
     glyphs = _GLYPHS[mode]
     bitmap, colors, positions = _rasterize(mol, cols, rows)
     grid = glyphs.bitmap_to_grid(bitmap)
     colors = [[code if char != glyphs.BLANK_CHAR else None for char, code in zip(g, c)] for g, c in zip(grid, colors)]
-    labels = _place_labels(grid, colors, mol, positions)
+    _highlight_bonds(grid, colors, mol, positions, highlight, glyphs.BLANK_CHAR)
+    labels = _place_labels(grid, colors, mol, positions, highlight)
     return Rendering(*_crop(grid, colors, labels, glyphs.BLANK_CHAR), mode, _mean_bond_dots(mol, positions))

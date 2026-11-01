@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Terminal · Molterm TUI Renderer{% endblock %}
+{% block head %}
+    <style>
+        .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-4); align-items: start; }
+        #screen { position: relative; height: calc(100vh - 44px - 2 * var(--sp-4)); min-height: 420px; white-space: normal;
+                  font-size: 13px; overflow: auto; cursor: text; }
+        #screen .line, #entry { white-space: pre; }
+        /* no gaps between rows, or the dots stop lining up; JS sets these from the measured glyphs */
+        #screen { line-height: var(--row); }
+        #screen .line { min-height: var(--row); }
+        #screen .ascii { letter-spacing: var(--gap-ascii); }
+        #screen .dots { letter-spacing: var(--gap-dots); }
+        #screen .wide { display: inline-block; width: var(--cell); text-align: center; }
+        /* ANSI colours, as the commands send them; these are data, and .term is dark in both themes */
+        #screen .c1 { font-weight: 600; } #screen .c90 { color: #9a9990; } #screen .c31 { color: #ff8a80; }
+        #screen .c32 { color: #7ddc7d; } #screen .c33 { color: #f0d060; } #screen .c34 { color: #86b6ef; }
+        #screen .c35 { color: #e0a0f0; } #screen .c36 { color: #5fe3e3; font-weight: 600; }
+        #screen .prompt { color: #7ddc7d; }
+        #entry { display: flex; }
+        #command { flex: 1; min-width: 0; height: var(--row); padding: 0; border: 0; border-radius: 0; background: transparent;
+                   color: inherit; font: inherit; letter-spacing: var(--gap-ascii); outline: none; }
+        #guide h2 { margin: var(--sp-1) 0 var(--sp-2); font-size: var(--fs-md); }
+        #guide p { margin: 0 0 var(--sp-2); }
+        #guide .takeaway { color: var(--text); }
+        #guide .intro { color: var(--text-2); }
+        #guide .toolbar { margin-top: var(--sp-3); }
+        @media (max-width: 800px) {
+            .workspace { grid-template-columns: minmax(0, 1fr); }
+            #guide { order: -1; }
+            #screen { height: 70vh; }
+        }
+    </style>
+{% endblock %}
+{% block main %}
+    <div class="workspace">
+        <div class="term" id="screen" role="log" aria-label="Terminal">
+            <div id="history"></div>
+            <div id="entry"><span class="prompt ascii">medchem$&nbsp;</span><input id="command" aria-label="Command"
+                spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></div>
+        </div>
+        <aside id="guide" aria-live="polite">
+            <p class="faint" id="progress"></p>
+            <h2 id="title"></h2>
+            <p class="intro" id="before"></p>
+            <p class="takeaway" id="after"></p>
+            <div class="toolbar" id="controls"></div>
+        </aside>
+    </div>
+{% endblock %}
+{% block script %}
+<script>
+const STORY = {{ steps | tojson }};
+const COMPLETIONS = {{ completions | tojson }};
+</script>
+<script src="/static/terminal.js"></script>
+{% endblock %}

@@ -5,9 +5,11 @@ import rdkit
 from flask import Flask, jsonify, render_template, request
 
 import kitty
+import medchem
 import molecule
 import render as renderer
 import samples
+import story
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
@@ -34,6 +36,27 @@ def index():
 def demo():
     default = next(s for _, items in samples.GROUPS for name, s, _ in items if name == samples.DEFAULT)
     return render_template("demo.html", page="demo", groups=samples.GROUPS, default=default, **SERVICE)
+
+
+@app.route("/terminal")
+def terminal():
+    completions = sorted({*medchem.COMMANDS, *medchem.ALL_NAMES, *medchem.PROPERTY_NAMES})
+    return render_template("terminal.html", page="terminal", steps=story.STEPS, completions=completions, **SERVICE)
+
+
+@app.route("/api/v1/term", methods=["POST"])
+def term():
+    """JSON body {"line": "<command>", "selection": [names] or null, "cols": width}; returns output, selection and clear."""
+    body = request.get_json(silent=True)
+    line = body.get("line") if isinstance(body, dict) else None
+    if not isinstance(line, str):
+        return jsonify(error={"code": "bad_request", "message": "Send a JSON object with a \"line\" field."}), 400
+    selection, cols = body.get("selection"), body.get("cols", medchem.DEFAULT_COLS)
+    if selection is not None and not (isinstance(selection, list) and all(isinstance(n, str) for n in selection)):
+        return jsonify(error={"code": "bad_request", "message": "selection must be a list of names."}), 400
+    if isinstance(cols, bool) or not isinstance(cols, int):
+        return jsonify(error={"code": "bad_request", "message": "cols must be a whole number."}), 400
+    return jsonify(medchem.run(line, selection, cols))
 
 
 @app.route("/health")

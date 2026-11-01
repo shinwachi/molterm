@@ -21,8 +21,14 @@ Add an environment by creating `env/<name>.env` (and optionally `docker-compose.
 in a virtual environment inside the image (`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
 
 Open http://molterm-dev.localhost/demo to type a SMILES or pick one of 23 samples and see it drawn in text, with the
-`curl` command for the same drawing. http://molterm-dev.localhost also takes molblocks and sets the canvas size. Or use
-a terminal:
+`curl` command for the same drawing. http://molterm-dev.localhost also takes molblocks and sets the canvas size.
+
+http://molterm-dev.localhost/terminal shows what the drawings are for: a medicinal chemistry session on 15 known compounds,
+in a web terminal. Choose **Play demo** to watch it, **Walk me through it** to run each step yourself, or type `help` and
+explore. Results are computed live with RDKit from structure alone, so there is no assay data and nothing about potency.
+The terminal is simulated: it only runs the commands in `help`, and never a shell.
+
+Or use a real terminal:
 
 ```sh
 curl -G --data-urlencode 'input=c1ccccc1O' --data-urlencode 'mode=octant' --data-urlencode 'color=1' \
@@ -55,12 +61,15 @@ and `color` does not apply.
 | `server/octant.py` | The same bitmap to Unicode octants. The table was checked entry by entry against the Unicode 16 names. |
 | `server/render.py` | RDKit draws the bonds at 4x, which are reduced to dots and mapped to characters. Each cell takes the colour of the element covering most of it. Atom labels are real letters placed over them. |
 | `server/samples.py` | The demo page's samples. Each one's formula, legibility and PubChem identity by InChIKey were checked. |
+| `server/medchem.py` | The web terminal's commands and its 15 compounds, each matched to its name on PubChem by InChIKey. |
+| `server/story.py` | The guided session. Each finding it states is checked against the real output by `tests/test_medchem.py`. |
 | `server/kitty.py` | RDKit draws the whole molecule, labels included, as a transparent PNG cropped to whole columns. It is sent in Kitty escape sequences that give only the width, so the terminal keeps its shape with any cell size. |
 
 | endpoint | input | result |
 |---|---|---|
 | `POST /api/v1/parse` | JSON `input`, optional `format` (`auto`, `smiles`, `molblock`) | `format`, `coords`, `name`, `smiles`, `formula`, `atoms`, `bonds` |
 | `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`) | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
+| `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols` | `output` (text with ANSI colours), `selection`, `clear` |
 | `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (also `kitty`), `color=1`, `theme` (`dark`, `light`; `kitty` only) | plain text, with ANSI colours when asked, or Kitty escape sequences |
 
 Failures return HTTP 400. The JSON endpoints give `{"error": {"code", "message"}}`, where `code` is one of `bad_request`,
@@ -90,6 +99,7 @@ Open issues:
 - The renderer page keeps the last good drawing on screen beside an error message. The demo page clears it.
 - Octant output has not been confirmed by eye in Ghostty beyond a single test of the characters.
 - Kitty output has not been seen in a real terminal yet.
+- The web terminal draws in Braille only, since browsers usually have no octant font. On a phone, wide tables scroll sideways.
 - Kitty output does not pass through tmux, which needs its own wrapping and `allow-passthrough`. Terminals without the
   protocol may show nothing or stray characters.
 - With only the width set, a tall drawing can use a few more rows than `rows` when a terminal's cell is taller than 1:2.
