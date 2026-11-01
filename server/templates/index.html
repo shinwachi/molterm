@@ -15,8 +15,10 @@
         label { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-2); font-size: var(--fs-sm); }
         /* no wrapping and no gaps between rows, or the dots stop lining up; JS sizes rows from the measured glyph */
         #out { display: inline-block; min-width: 100%; white-space: pre; min-height: var(--sp-6); }
-        /* .term is dark in both themes, so labels take the dark theme's accent ink rather than the page's */
-        #out b { display: inline-block; vertical-align: top; text-align: center; color: #86b6ef; font-weight: 600; }
+        #out b { display: inline-block; vertical-align: top; text-align: center; font-weight: 600; }
+        /* element colours, by ANSI code as the API reports them; these are data, and .term is dark in both themes */
+        #out .c31 { color: #ff8a80; } #out .c32 { color: #7ddc7d; } #out .c33 { color: #f0d060; }
+        #out .c34 { color: #86b6ef; } #out .c35 { color: #e0a0f0; }
         #status { min-height: 18px; margin: var(--sp-2) 0; }
         #facts { margin-top: var(--sp-3); }
         #facts td:first-child { color: var(--text-2); font-size: var(--fs-sm); width: 96px; }
@@ -76,9 +78,18 @@ function draw(render) {
         lines[label.row][label.col + i] = b;
     }));
     lines.forEach((line, r) => {
-        let run = "";
-        const flush = () => { if (run) out.append(run); run = ""; };
-        line.forEach(c => { if (typeof c === "string") run += c; else { flush(); out.append(c); } });
+        let run = "", code = null;
+        const flush = () => {
+            if (run && code) { const s = document.createElement("span"); s.className = "c" + code; s.textContent = run; out.append(s); }
+            else if (run) out.append(run);
+            run = "";
+        };
+        line.forEach((c, i) => {
+            const k = render.colors[r][i];
+            if (typeof c !== "string") { flush(); c.className = "c" + k; out.append(c); return; }
+            if (k !== code) { flush(); code = k; }
+            run += c;
+        });
         flush();
         if (r < lines.length - 1) out.append("\n");
     });

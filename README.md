@@ -23,21 +23,29 @@ environment inside the image (`/opt/venv`, on `PATH`), never on the host. `/heal
 Open http://molterm-dev.localhost to render a molecule, or use a terminal:
 
 ```sh
-curl -G --data-urlencode 'input=c1ccccc1O' --data-urlencode 'cols=60' --data-urlencode 'color=1' \
+curl -G --data-urlencode 'input=c1ccccc1O' --data-urlencode 'mode=octant' --data-urlencode 'color=1' \
     http://molterm-dev.localhost/api/v1/render.txt
 ```
+
+Two modes draw the same dots. `braille` (the default) works almost everywhere and looks speckled. `octant` is solid and
+sharper, but needs Unicode 16 (2024) characters that many terminals and fonts lack. Ghostty draws them itself. The page
+only offers Braille, since browsers usually have no octant font.
+
+Colour shows elements on bonds as well as labels: O red, N blue, S yellow, P magenta, halogens green. It uses the terminal's
+16 colours, so it follows a light or dark theme.
 
 | module | job |
 |---|---|
 | `server/molecule.py` | SMILES or molblock to a sanitized molecule with 2D coordinates. A molblock's own 2D layout is kept; 3D or all-zero coordinates are replaced. From an SDF, only the first record is read. |
 | `server/braille.py` | Boolean bitmap to Braille characters, 2 dots wide and 4 tall per character. |
-| `server/render.py` | RDKit draws the bonds at 4x, which are reduced to dots and mapped to Braille. Atom labels are real letters placed over them. |
+| `server/octant.py` | The same bitmap to Unicode octants. The table was checked entry by entry against the Unicode 16 names. |
+| `server/render.py` | RDKit draws the bonds at 4x, which are reduced to dots and mapped to characters. Each cell takes the colour of the element covering most of it. Atom labels are real letters placed over them. |
 
 | endpoint | input | result |
 |---|---|---|
 | `POST /api/v1/parse` | JSON `input`, optional `format` (`auto`, `smiles`, `molblock`) | `format`, `coords`, `name`, `smiles`, `formula`, `atoms`, `bonds` |
-| `POST /api/v1/render` | as above, plus optional `cols`, `rows` | as above, plus `render` (`text`, `ansi`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
-| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `color=1` | plain text, with ANSI colours when asked |
+| `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`) | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
+| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode`, `color=1` | plain text, with ANSI colours when asked |
 
 Failures return HTTP 400. The JSON endpoints give `{"error": {"code", "message"}}`, where `code` is one of `bad_request`,
 `empty`, `format`, `syntax`, `chemistry` or `too_large`.
@@ -45,7 +53,11 @@ Failures return HTTP 400. The JSON endpoints give `{"error": {"code", "message"}
 Limits: 500 atoms, 10,000 SMILES characters, 100,000 molblock characters, 10-240 columns, 5-120 rows. Layout time grows
 steeply with size, so the atom cap keeps requests well inside gunicorn's 30 s worker timeout.
 
-`rdkit` is pinned because the Braille output depends on its exact layout and drawing.
+`rdkit` is pinned because the output depends on its exact layout and drawing.
+
+Drawings use the smallest readable size, 6 dots per bond (phenol is 11 x 4 characters), and `cols` and `rows` only
+set a maximum. A larger canvas does not enlarge them. Stereo wedges are not drawn at this size, so stereochemistry shows
+only in the SMILES.
 
 Verified with `make dev` and `make test`, through Traefik with `curl`, and in Chrome: light and dark themes, error and
 warning states, and phone width. Hard inputs at the atom cap parse in about 1 s or less.
@@ -54,10 +66,11 @@ Open issues:
 
 - gunicorn logs `Control server error: [Errno 13] Permission denied: '/.gunicorn'` at startup because the container user
   has no home directory; requests are still served. `make prod` itself has not been run yet.
-- Below about 6 dots per bond, double bonds and zigzags stop being readable. The output is flagged `cramped` and the page
-  warns, but the drawing is still returned.
+- A canvas too small for 6 dots per bond loses detail. The output is flagged `cramped` and the page warns, but the drawing
+  is still returned.
 - Atom labels are not protected from each other, so crowded molecules can overwrite a label.
 - The page keeps the last good drawing on screen beside an error message.
+- Octant output has not been confirmed by eye in Ghostty beyond a single test of the characters.
 
 ## Versioning
 

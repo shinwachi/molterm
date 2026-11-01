@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 import braille  # noqa: E402
 import molecule  # noqa: E402
+import octant  # noqa: E402
 import render  # noqa: E402
 from app import app  # noqa: E402
 
@@ -139,6 +140,37 @@ def test_many_ions_wrap_and_stop_at_the_canvas():
     assert {len(row) for row in result.grid} == {len(result.grid[0])}
 
 
+DRUGS = ["c1ccccc1O", "CC(=O)Oc1ccccc1C(=O)O", "Cn1cnc2c1c(=O)n(C)c(=O)n2C", "C[C@H](N)C(=O)O", "CCCCCC",
+         "CC(C)Cc1ccc(cc1)C(C)C(=O)O", "CC(=O)Nc1ccc(O)cc1", "CC1(C)S[C@@H]2[C@H](NC(=O)Cc3ccccc3)C(=O)N2[C@H]1C(=O)O",
+         "C[N+](=O)[O-]", "O=C(O)c1ccccc1Cl", "CN1CCC[C@H]1c1cccnc1", "C/C=C/C", "N#Cc1ccccc1"]
+
+
+@pytest.mark.parametrize("smiles", DRUGS)
+def test_every_bond_leaves_ink_at_the_smallest_size(smiles):
+    mol = molecule.parse(smiles).mol
+    bitmap, _, positions = render._rasterize(mol, 80, 30)
+    for bond in mol.GetBonds():
+        (x1, y1), (x2, y2) = positions[bond.GetBeginAtomIdx()], positions[bond.GetEndAtomIdx()]
+        col, row = (x1 + x2) / 2 * braille.CELL_WIDTH, (y1 + y2) / 2 * braille.CELL_HEIGHT
+        near = bitmap[max(int(row) - 1, 0):int(row) + 2, max(int(col) - 1, 0):int(col) + 2]
+        assert near.any(), f"bond {bond.GetIdx()} of {smiles} left no dots"
+
+
+@pytest.mark.parametrize("smiles", DRUGS)
+def test_no_label_is_overwritten_at_the_smallest_size(smiles):
+    result = draw(smiles)
+    assert len(result.labels) == sum(render._label_text(a) is not None for a in molecule.parse(smiles).mol.GetAtoms())
+    for label in result.labels:
+        row = "".join(result.grid[label["row"]])
+        assert row[label["col"]:label["col"] + len(label["text"])] == label["text"]
+
+
+def test_size_is_compact_and_independent_of_the_canvas():
+    small, large = draw("c1ccccc1O", 80, 30), draw("c1ccccc1O", 240, 120)
+    assert (len(small.grid[0]), len(small.grid)) == (len(large.grid[0]), len(large.grid))
+    assert len(small.grid[0]) <= 12 and len(small.grid) <= 4
+
+
 def test_ansi_only_adds_colour():
     result = draw("CC(=O)O")
     assert "\x1b[31m" in result.ansi
@@ -235,3 +267,116 @@ def test_text_endpoint_errors_are_plain(query):
 def test_page_offers_the_renderer():
     html = app.test_client().get("/").get_data(as_text=True)
     assert 'id="term"' in html and 'id="theme"' in html
+
+
+# octants
+
+
+def octant_mask(char):
+    return octant.CHARS.index(char)
+
+
+def test_octant_table_covers_every_pattern_once():
+    assert len(octant.CHARS) == 256
+    assert len(set(octant.CHARS)) == 256
+
+
+@pytest.mark.parametrize("mask, code", [
+    (0x04, 0x1CD00),  # BLOCK OCTANT-3, the first in the block
+    (0x06, 0x1CD01),  # BLOCK OCTANT-23
+    (0x07, 0x1CD02),  # BLOCK OCTANT-123
+    (0x08, 0x1CD03),  # BLOCK OCTANT-4
+    (0xFE, 0x1CDE5),  # BLOCK OCTANT-2345678, the last in the block
+])
+def test_octant_table_anchors(mask, code):
+    assert octant.CHARS[mask] == chr(code)
+
+
+@pytest.mark.parametrize("rows, cols, char", [
+    ((0, 1), (0, 1), "▀"), ((2, 3), (0, 1), "▄"), ((0, 1, 2, 3), (0,), "▌"), ((0, 1, 2, 3), (1,), "▐"),
+    ((0, 1), (0,), "▘"), ((0, 1), (1,), "▝"), ((2, 3), (0,), "▖"), ((2, 3), (1,), "▗"),
+    ((3,), (0, 1), "▂"), ((0, 1, 2, 3), (0, 1), "█"),
+])
+def test_octant_shapes_use_the_existing_block_characters(rows, cols, char):
+    bitmap = np.zeros((4, 2), dtype=bool)
+    bitmap[np.ix_(rows, cols)] = True
+    assert octant.bitmap_to_grid(bitmap) == [[char]]
+
+
+def test_octant_empty_cell_is_a_space():
+    assert octant.bitmap_to_grid(np.zeros((4, 2))) == [[" "]]
+
+
+@pytest.mark.parametrize("smiles", DRUGS)
+def test_octant_draws_the_same_dots_as_braille(smiles):
+    mol = molecule.parse(smiles).mol
+    bitmap, _, _ = render._rasterize(mol, 80, 30)
+    for row, chars in zip(range(0, 120, 4), octant.bitmap_to_grid(bitmap)):
+        for col, char in zip(range(0, 160, 2), chars):
+            mask = octant_mask(char)
+            for bit, (y, x) in enumerate((y, x) for y in range(4) for x in range(2)):
+                assert bool(mask >> bit & 1) == bitmap[row + y, col + x]
+
+
+def test_octant_rendering_matches_braille_in_size_and_labels():
+    a, b = draw("CC(=O)Oc1ccccc1C(=O)O"), render.render(molecule.parse("CC(=O)Oc1ccccc1C(=O)O").mol, 80, 30, "octant")
+    assert (len(a.grid), len(a.grid[0])) == (len(b.grid), len(b.grid[0]))
+    assert a.labels == b.labels
+    assert b.mode == "octant"
+    assert not any(0x2801 <= ord(c) <= 0x28FF for row in b.grid for c in row)
+    assert any(0x1CD00 <= ord(c) <= 0x1CDE5 for row in b.grid for c in row)
+
+
+def test_octant_ions_use_plain_spaces():
+    assert render.render(molecule.parse("[Na+].[Cl-]").mol, 40, 10, "octant").text == "Na⁺ Cl⁻"
+
+
+# colour
+
+
+def test_colors_match_the_grid():
+    result = draw("CC(=O)Nc1ccc(O)cc1")
+    assert [len(row) for row in result.colors] == [len(row) for row in result.grid]
+
+
+def test_plain_carbon_has_no_colour():
+    assert {code for row in draw("c1ccccc1").colors for code in row} == {None}
+
+
+@pytest.mark.parametrize("smiles, code", [("CCO", 31), ("CCN", 34), ("CCS", 33), ("CCCl", 32), ("CCP", 35), ("CCF", 32)])
+def test_bonds_take_their_elements_colour(smiles, code):
+    result = draw(smiles)
+    label = {(result.labels[0]["row"], result.labels[0]["col"] + i) for i in range(len(result.labels[0]["text"]))}
+    coloured = {(r, c) for r, row in enumerate(result.colors) for c, k in enumerate(row) if k == code}
+    assert coloured - label, "no bond cell carries the colour"
+
+
+def test_blank_cells_have_no_colour():
+    result = draw("CCO")
+    assert all(k is None for gr, cr in zip(result.grid, result.colors) for g, k in zip(gr, cr) if g == BLANK)
+
+
+def test_ansi_starts_and_ends_a_colour_around_a_bond():
+    assert ANSI.sub("", draw("CCO").ansi) == draw("CCO").text
+    assert all(line.endswith("\x1b[0m") or "\x1b[" not in line for line in draw("CCO").ansi.split("\n"))
+
+
+# mode in the API
+
+
+@pytest.mark.parametrize("mode", ["fancy", ["octant"], 1, None])
+def test_api_rejects_bad_modes(mode):
+    r = post(input="CCO", mode=mode)
+    assert r.status_code == 400
+    assert r.get_json()["error"]["code"] == "bad_request"
+
+
+def test_api_octant_mode():
+    data = post(input="c1ccccc1O", mode="octant").get_json()["render"]
+    assert data["mode"] == "octant"
+    assert any(0x1CD00 <= ord(c) <= 0x1CDE5 for c in data["text"])
+
+
+def test_text_endpoint_octant_mode():
+    assert any(0x1CD00 <= ord(c) <= 0x1CDE5 for c in text_get(input="c1ccccc1O", mode="octant").get_data(as_text=True))
+    assert text_get(input="CCO", mode="fancy").status_code == 400
