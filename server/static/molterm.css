@@ -1,0 +1,23 @@
+/* The drawing and the controls around it, shared by the pages. Built on the tokens in house.css. */
+label { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-2); font-size: var(--fs-sm); }
+.topbar nav { display: flex; gap: var(--sp-1); }
+.topbar nav a[aria-current] { background: var(--accent-tint); }
+.topbar .brand { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.topbar .chip { flex: none; }
+@media (max-width: 640px) {   /* the links matter more than the version and the health check on a phone */
+    .topbar { gap: var(--sp-1); padding: 0 var(--sp-3); }
+    .topbar .chip, .topbar nav a[href="/health"] { display: none; }
+    .topbar .btn { padding: 0 var(--sp-2); }
+}
+
+/* no wrapping and no gaps between rows, or the dots stop lining up; JS sizes rows from the measured glyph */
+.drawing { display: inline-block; min-width: 100%; white-space: pre; min-height: var(--sp-6); }
+.drawing b { display: inline-block; vertical-align: top; text-align: center; font-weight: 600; }
+/* element colours, by ANSI code as the API reports them; these are data, and .term is dark in both themes */
+.drawing .c31 { color: #ff8a80; } .drawing .c32 { color: #7ddc7d; } .drawing .c33 { color: #f0d060; }
+.drawing .c34 { color: #86b6ef; } .drawing .c35 { color: #e0a0f0; }
+
+#status { min-height: 18px; margin: var(--sp-2) 0; }
+#facts { margin-top: var(--sp-3); }
+#facts td:first-child { color: var(--text-2); font-size: var(--fs-sm); width: 96px; }
+#facts .mono { overflow-wrap: anywhere; }

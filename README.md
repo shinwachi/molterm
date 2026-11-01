@@ -20,7 +20,9 @@ Add an environment by creating `env/<name>.env` (and optionally `docker-compose.
 **Done: environment, molecule parser, and rendering as Braille, octants and Kitty graphics.** RDKit and Flask are installed
 in a virtual environment inside the image (`/opt/venv`, on `PATH`), never on the host. `/health` reports the RDKit version.
 
-Open http://molterm-dev.localhost to render a molecule, or use a terminal:
+Open http://molterm-dev.localhost/demo to type a SMILES or pick one of 23 samples and see it drawn in text, with the
+`curl` command for the same drawing. http://molterm-dev.localhost also takes molblocks and sets the canvas size. Or use
+a terminal:
 
 ```sh
 curl -G --data-urlencode 'input=c1ccccc1O' --data-urlencode 'mode=octant' --data-urlencode 'color=1' \
@@ -52,6 +54,7 @@ and `color` does not apply.
 | `server/braille.py` | Boolean bitmap to Braille characters, 2 dots wide and 4 tall per character. |
 | `server/octant.py` | The same bitmap to Unicode octants. The table was checked entry by entry against the Unicode 16 names. |
 | `server/render.py` | RDKit draws the bonds at 4x, which are reduced to dots and mapped to characters. Each cell takes the colour of the element covering most of it. Atom labels are real letters placed over them. |
+| `server/samples.py` | The demo page's samples. Each one's formula, legibility and PubChem identity by InChIKey were checked. |
 | `server/kitty.py` | RDKit draws the whole molecule, labels included, as a transparent PNG cropped to whole columns. It is sent in Kitty escape sequences that give only the width, so the terminal keeps its shape with any cell size. |
 
 | endpoint | input | result |
@@ -84,7 +87,7 @@ Open issues:
 - A canvas too small for 6 dots per bond loses detail. The output is flagged `cramped` and the page warns, but the drawing
   is still returned.
 - Atom labels are not protected from each other, so crowded molecules can overwrite a label.
-- The page keeps the last good drawing on screen beside an error message.
+- The renderer page keeps the last good drawing on screen beside an error message. The demo page clears it.
 - Octant output has not been confirmed by eye in Ghostty beyond a single test of the characters.
 - Kitty output has not been seen in a real terminal yet.
 - Kitty output does not pass through tmux, which needs its own wrapping and `allow-passthrough`. Terminals without the

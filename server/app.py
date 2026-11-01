@@ -7,6 +7,7 @@ from flask import Flask, jsonify, render_template, request
 import kitty
 import molecule
 import render as renderer
+import samples
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__)
@@ -25,8 +26,14 @@ SERVICE = {"service": "molterm", "version": version(), "env": os.environ.get("AP
 
 @app.route("/")
 def index():
-    return render_template("index.html", cols=renderer.DEFAULT_COLS, rows=renderer.DEFAULT_ROWS,
+    return render_template("index.html", page="renderer", cols=renderer.DEFAULT_COLS, rows=renderer.DEFAULT_ROWS,
                            cols_range=renderer.COLS_RANGE, rows_range=renderer.ROWS_RANGE, **SERVICE)
+
+
+@app.route("/demo")
+def demo():
+    default = next(s for _, items in samples.GROUPS for name, s, _ in items if name == samples.DEFAULT)
+    return render_template("demo.html", page="demo", groups=samples.GROUPS, default=default, **SERVICE)
 
 
 @app.route("/health")
