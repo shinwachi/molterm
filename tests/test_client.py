@@ -503,3 +503,40 @@ def test_script_is_served_pointing_at_this_server():
 
 def test_script_is_valid_sh():
     assert subprocess.run(["sh", "-n", SCRIPT]).returncode == 0
+
+
+def test_a_boxed_editor_leaves_the_screen_to_its_host(stub):
+    editor_stub(stub)
+    seen, code, restored, stdout, _ = run_editor(stub, [b"a", b"b"], args=("-b", "2,4,26,100", "-T", "Compound 3", "edit", "CCO"))
+    assert code == 0 and restored and stdout == b"CCO\n"
+    assert values(stub, "box")[0] == "2,4,26,100" and values(stub, "title")[0] == "Compound 3" and values(stub, "smiles") == ["CCO"]
+    assert b"\x1b[?1049" not in seen and b"\x1b_Ga=d,q=2" not in seen
+    assert b"\x1b_Ga=d,d=I,i=7001,q=2" in seen and b"\x1b_Ga=d,d=I,i=7021,q=2" in seen
+    assert b"\x1b[?1003l" in seen and b"\x1b[?25h" in seen
+
+
+def test_a_cancelled_box_exits_3_and_prints_nothing(stub):
+    editor_stub(stub, states=("0 STATE1", "3 "))
+    _, code, restored, stdout, _ = run_editor(stub, [b"\x03"], args=("-b", "2,4,26,100", "edit"))
+    assert code == 3 and restored and stdout == b""
+
+
+def test_the_list_sends_its_items_once_to_its_own_endpoint(stub):
+    editor_stub(stub)
+    seen, code, restored, stdout, _ = run_editor(stub, [b"a", b"b"], args=("tui", "CCO ethanol", "ro:c1ccccc1 benzene"))
+    assert code == 0 and restored and stdout == b"CCO\n"
+    assert values(stub, "items") == ["CCO ethanol"] and "ro:c1ccccc1 benzene" in sent(stub)  # the log has one line per line
+    assert "http://test/api/v1/tui" in sent(stub) and "http://test/api/v1/edit" not in sent(stub)
+    assert b"\x1b[?1049h" in seen and b"\x1b[?1049l" in seen
+
+
+def test_the_list_needs_kitty_graphics_too(stub):
+    editor_stub(stub)
+    _, code, _, _, stderr = run_editor(stub, [], args=("tui",), reply=DA1_SIXEL)
+    assert code == 1 and b"Kitty" in stderr
+
+
+def test_the_editor_still_uses_its_endpoint(stub):
+    editor_stub(stub)
+    run_editor(stub, [b"a", b"b"])
+    assert "http://test/api/v1/edit" in sent(stub)

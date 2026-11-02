@@ -776,8 +776,13 @@ def test_quitting_an_empty_drawing_prints_nothing():
     assert editor.step(Session().text, "", "\x11", COLS, ROWS, CW, CH)[::2] == (editor.QUIT, "")
 
 
-def test_quitting_an_invalid_drawing_says_so():
-    status, _, output = editor.step(overvalent().text, "", "\x11", COLS, ROWS, CW, CH)
+def test_quitting_an_invalid_drawing_keeps_it_open_and_says_why():
+    session = overvalent().send("\x11")
+    assert session.status == editor.CONTINUE and session.state["atoms"] and "valence" in session.output.lower()
+
+
+def test_ctrl_c_leaves_an_invalid_drawing_and_says_why():
+    status, _, output = editor.step(overvalent().text, "", "\x03", COLS, ROWS, CW, CH)
     assert status == editor.FAILED and "valence" in output.lower()
 
 

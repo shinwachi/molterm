@@ -110,12 +110,50 @@ smiles=$(./molterm edit)                       # Ctrl-Q prints the SMILES on std
 - **Selection:** drag across empty space to select, drag to move, Delete to remove, and arrows to nudge.
 - **Menus:** a menu bar (also F10), and right-click for the menu of what is under the pointer.
 - The SMILES, formula, MW and cLogP update below the drawing. Atoms RDKit can't accept, such as an oxygen with three bonds, get a red
-  box, so a drawing can be invalid on its way to being finished. Quitting then prints the problem, exits with 1 and loses the drawing.
+  box, so a drawing can be invalid on its way to being finished. Ctrl-Q then stays in the editor and says why. Ctrl-C leaves anyway, printing
+  the problem and exiting with 1.
 
 The client only passes raw input to the server, and the server keeps no sessions: the drawing travels with each request and is checked
 when it comes back. So every action needs a round trip. The palette, molecule and marks are separate images, and only those that
 changed are sent: hovering costs 1 to 9 KB, and a change to the molecule about 60 KB. It needs the same tools as the rest of the client,
 plus `od`.
+
+### Editing inside a text interface
+
+`molterm tui` is a text interface with structures in it: a grid of drawings, where hovering marks a tile and clicking an editable one opens
+the editor in a box over the rest. Done (or Ctrl-Q) puts the edit back in the list and redraws that tile, and Cancel (or Ctrl-C) leaves it as it was.
+
+```sh
+./molterm tui                                                   # a sample list
+./molterm tui 'ro:CC(=O)Oc1ccccc1C(=O)O Aspirin' 'CCO Ethanol'  # "SMILES name"; ro: means read-only
+./molterm tui 'CCO Ethanol' > edited.smi                        # q prints the list as it now stands
+```
+
+A drawing left as it was keeps its SMILES exactly, an empty drawing isn't saved, and an invalid one stays open with the reason.
+Clicks outside the box do nothing, so a stray one can't lose work.
+
+To open the same box from another text interface, run the client with the area to use and read the result:
+
+```sh
+new=$(molterm -b 2,4,26,100 -T 'Compound 3' edit "$old")   # row,col,rows,cols from 0 at the top left, counting the border
+case $? in
+    0) ;;             # Done: $new is the SMILES
+    3) new=$old ;;    # Cancel
+    *) ;;             # it failed, and said why on stderr
+esac
+```
+
+The box stays inside that area and doesn't change screens, but the host has work to do around it:
+
+- Stop reading the terminal while the client runs.
+- Afterwards, redraw what the box covered, turn your own mouse reporting on again, and hide the cursor again if you hid it. The client can't
+  know what they were.
+- Keep your own Kitty images at z -1073741834 or below while the box is open, or delete them first, as anything above that would show over it.
+  Don't use image ids 7001 to 7021.
+- The box needs at least 38 columns and enough rows for four of canvas, counting its border. Otherwise the client exits with 1.
+
+A host that talks HTTP can skip the client: `POST /api/v1/edit` takes `box` and `title`, and answers `3` in its first line on Cancel.
+`server/board.py`, behind `/api/v1/tui`, shows one way to use the editor from Python.
 
 The client also reads the terminal's background, to pick `theme` and blend Sixel's edges, and its cell size, because Sixel's
 pixels are the screen's and can't be scaled. It needs only `sh`, `curl`, `stty` and `dd` (the editor also `od`).
@@ -136,6 +174,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/client/molterm.sh` | The terminal client, served at `/molterm`: asks the terminal what it supports and chooses a mode, then draws one molecule or runs the guided session. |
 | `server/editor_icons.py` | The editor's tool palette, drawn as one image with Pillow. |
 | `server/editor.py` | The molecular editor: all of its input handling, geometry and drawing. The drawing is kept as plain atoms and bonds, since it often isn't valid chemistry while it's being made, and RDKit reads it as a molblock for each frame. |
+| `server/board.py` | `molterm tui`: the grid of structures, which hosts the editor in a box and carries its state inside its own. |
 | `server/static/kitty.js` | The `/kitty` page: a line editor and the guided session, written for restty. It uses the same commands and story as the client, but not its code. |
 
 | endpoint | input | result |
@@ -177,6 +216,10 @@ It was then run in real Ghostty 1.4 on Linux, on a virtual display: the pointer 
 each other, ring keys doing nothing over nothing, six fast presses of `6` giving one ring, sprouting a chain, labels, a key over nothing changing
 nothing, help covering the drawing, and quitting.
 `tests/test_editor.py` drives it with raw input, including random input, tampered states, and checks that atoms are drawn where clicks find them.
+`molterm tui` was run in the same Ghostty: hovering and clicking tiles, the box hiding the pictures below it, the hotspot and keys landing correctly
+inside the box, its menus and help, a click outside doing nothing, Done redrawing the tile, Cancel, scrolling, resizing with the box open, and the
+printed list. `-b` was run there from a shell script standing in for a host, with text all around the box. `tests/test_board.py` checks that nothing
+from the box lands outside it, and refuses tampered states.
 
 `/kitty` was checked in Chrome: a full automated run at normal speed, typing with Backspace, Tab, Up and a mistake, the scrollback,
 no console errors, and no page overflow at 320, 375 and 640 px.
@@ -206,6 +249,12 @@ Open issues:
   redo is Ctrl-Y, and Clean Up is Ctrl-K.
 - Each action in `molterm edit` is a request to the server, so a slow connection makes it lag. Inside tmux it stops with a message,
   since tmux doesn't pass Kitty graphics on. With the mouse in use, selecting text needs the terminal's own override, usually Shift.
+- `molterm tui` and `-b` have only been seen in Ghostty 1.4 on Linux, not in Kitty or on macOS, and `-b` only from that shell script, not from a
+  real TUI framework. A framework may need suspending around the call so that it stops reading the terminal, and Kitty images it places at z 0
+  would show over the box.
+- `molterm tui` opens, edits and prints a list. It can't add or remove structures or read a file. It holds at most 60 structures, and cuts names
+  at 60 characters. A very large drawing gives up its oldest undo steps to keep the state small enough to send.
+- In a window under 64 columns or 16 rows, the box takes the whole window. In a narrow box the help text is cut at the edge.
 - `molterm edit` keeps elements, charges, Kekulé bonds, wedges and 2D positions. A loaded SMILES with isotopes or unusual bonds loses
   them, and says so. It holds at most 200 atoms and 30 undo steps.
 - xterm cuts a Sixel image off at 1000 x 1000 pixels by default, so `grid` is clipped in `molterm demo` there.

@@ -5,6 +5,7 @@ import re
 import rdkit
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
+import board
 import editor
 import graphics
 import medchem
@@ -185,15 +186,8 @@ def story_text():
     return "\n".join(rows) + "\n", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
-@app.route("/api/v1/edit", methods=["POST"])
-def edit():
-    """One step of the molecular editor, for the client. Form fields: `cols` and `rows`, `events` (raw input, as hex), `state` (from
-    the last answer) or `smiles` to begin, and optional `cell_width`, `cell_height`, `pixels=1` (mouse reports are in pixels), `theme`.
-
-    The first line of the answer is "<0 to go on, 1 finished, 2 failed> <state>". After it comes what to print: on finishing, the SMILES.
-    """
-    plain = {"Content-Type": "text/plain; charset=utf-8"}
-    form = request.form
+def terminal_form(form):
+    """What the editor and the list both need from a request: cols, rows, raw input, cell width, cell height, pixels and theme."""
 
     def whole(name, limits, required=True):
         value = form.get(name)
@@ -203,18 +197,57 @@ def edit():
             raise molecule.ParseError("bad_request", f"{name} must be a whole number from {limits[0]} to {limits[1]}.")
         return int(value)
 
+    cols, rows = whole("cols", editor.COLS_RANGE), whole("rows", editor.ROWS_RANGE)
+    cell_width = whole("cell_width", editor.CELL_WIDTH_RANGE, required=False)
+    cell_height = whole("cell_height", editor.CELL_HEIGHT_RANGE, required=False)
+    theme = form.get("theme", graphics.DEFAULT_THEME)
+    if theme not in graphics.THEMES:
+        raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
+    events = form.get("events", "")
+    if len(events) > editor.MAX_EVENTS * 2 or not re.fullmatch(r"(?:[0-9a-fA-F]{2})*", events):
+        raise molecule.ParseError("bad_request", "events must be hexadecimal bytes, and not too many.")
+    return cols, rows, bytes.fromhex(events).decode("latin-1"), cell_width, cell_height, form.get("pixels") == "1", theme
+
+
+def editor_box(text):
+    """A box as row,col,rows,cols, counted from 0 at the top left of the window."""
+    if not text:
+        return None
+    if not re.fullmatch(r"[0-9]{1,4},[0-9]{1,4},[0-9]{1,4},[0-9]{1,4}", text, re.ASCII):
+        raise molecule.ParseError("bad_request", "box must be row,col,rows,cols, as whole numbers.")
+    return tuple(int(part) for part in text.split(","))
+
+
+@app.route("/api/v1/edit", methods=["POST"])
+def edit():
+    """One step of the molecular editor, for the client. Form fields: `cols` and `rows`, `events` (raw input, as hex), `state` (from
+    the last answer) or `smiles` to begin, and optional `cell_width`, `cell_height`, `pixels=1` (mouse reports are in pixels), `theme`.
+    To stay inside part of a window that a host program owns, `box` (row,col,rows,cols, from 0 and counting the border) and `title`.
+
+    The first line of the answer is "<0 to go on, 1 finished, 2 failed, 3 cancelled> <state>". After it comes what to print: on finishing,
+    the SMILES.
+    """
+    plain = {"Content-Type": "text/plain; charset=utf-8"}
+    form = request.form
     try:
-        cols, rows = whole("cols", editor.COLS_RANGE), whole("rows", editor.ROWS_RANGE)
-        cell_width = whole("cell_width", editor.CELL_WIDTH_RANGE, required=False)
-        cell_height = whole("cell_height", editor.CELL_HEIGHT_RANGE, required=False)
-        theme = form.get("theme", graphics.DEFAULT_THEME)
-        if theme not in graphics.THEMES:
-            raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
-        events = form.get("events", "")
-        if len(events) > editor.MAX_EVENTS * 2 or not re.fullmatch(r"(?:[0-9a-fA-F]{2})*", events):
-            raise molecule.ParseError("bad_request", "events must be hexadecimal bytes, and not too many.")
-        status, state, output = editor.step(form.get("state", ""), form.get("smiles", ""), bytes.fromhex(events).decode("latin-1"),
-                                            cols, rows, cell_width, cell_height, form.get("pixels") == "1", theme)
+        cols, rows, raw, cell_width, cell_height, pixels, theme = terminal_form(form)
+        status, state, output = editor.step(form.get("state", ""), form.get("smiles", ""), raw, cols, rows, cell_width, cell_height, pixels, theme,
+                                            editor_box(form.get("box", "")), form.get("title", "")[:200])
+    except (molecule.ParseError, editor.StateError) as e:
+        return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
+    return f"{status} {state}\n{output}", 200, plain
+
+
+@app.route("/api/v1/tui", methods=["POST"])
+def tui():
+    """One step of the list of structures, whose editable ones open the editor in a box. The fields and answer are those of /api/v1/edit,
+    with `items` instead of `smiles` to begin: lines of "SMILES name", with ro: in front of what can't be edited. On finishing, it prints
+    the list as it now stands, in the same form without the ro:."""
+    plain = {"Content-Type": "text/plain; charset=utf-8"}
+    form = request.form
+    try:
+        cols, rows, raw, cell_width, cell_height, pixels, theme = terminal_form(form)
+        status, state, output = board.step(form.get("state", ""), form.get("items", ""), raw, cols, rows, cell_width, cell_height, pixels, theme)
     except (molecule.ParseError, editor.StateError) as e:
         return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
     return f"{status} {state}\n{output}", 200, plain

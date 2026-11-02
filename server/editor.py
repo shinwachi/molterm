@@ -12,7 +12,9 @@ import json
 import math
 import re
 import zlib
+from io import BytesIO
 
+from PIL import Image
 from rdkit import Chem, rdBase
 from rdkit.Chem import AllChem, Crippen, Descriptors, rdMolDescriptors
 from rdkit.Chem.Draw import rdMolDraw2D
@@ -47,11 +49,13 @@ DRAG_START = 0.35  # bond lengths the pointer must travel before a press counts 
 MERGE = 0.25  # a new ring atom this close to an existing one becomes that atom
 MAX_LABEL = 32
 PRESS_MODES = ("draw", "move", "marquee", "pan", "none")
-LAYERS = ("palette", "structure", "overlay", "text")
+LAYERS = ("palette", "structure", "overlay", "text", "backing")
+MIN_BOX_COLS = 36  # room for the buttons on the bottom edge
 
 ACCENT, RED = (0.22, 0.53, 0.9), (0.94, 0.33, 0.31)
 HOTSPOT, HOTSPOT_DOT = (0.45, 0.72, 1.0), (0.2, 0.8, 0.35)  # ChemDraw marks an atom with a light blue circle and a green dot
-CONTINUE, QUIT, FAILED = 0, 1, 2
+CONTINUE, QUIT, FAILED, CANCELLED = 0, 1, 2, 3
+CANCEL, INTERRUPT = "cancel", "interrupt"  # how the editor can end, besides Done
 
 # Text for the atom label box. Each group is written from the atom it replaces, with * as whatever that atom is bonded to.
 GROUPS = {"ch3": "*C", "me": "*C", "et": "*CC", "pr": "*CCC", "npr": "*CCC", "ipr": "*C(C)C", "bu": "*CCCC", "nbu": "*CCCC", "tbu": "*C(C)(C)C",
@@ -96,7 +100,7 @@ def new_state():
     return {"atoms": [], "bonds": [], "next": 1, "tool": "bond", "bond": SINGLE, "ring": "benzene",
             "view": [0.0, 0.0, DEFAULT_ZOOM], "focus": None, "hover": None, "last": None, "selected": [], "pointer": None,
             "press": None, "drag": None, "undo": [], "redo": [], "entry": None, "label": None, "help": False, "message": "",
-            "menu": None, "menu_target": None, "menu_hover": None, "tip": None, "cover": False, "shown": {}, "flips": {}, "size": None,
+            "menu": None, "menu_target": None, "menu_hover": None, "tip": None, "button": None, "cover": False, "shown": {}, "flips": {}, "size": None,
             "partial": ""}
 
 
@@ -105,7 +109,8 @@ def encode(state):
     return base64.urlsafe_b64encode(packed).decode()
 
 
-def decode(text):
+def decode(text, check=None):
+    """The state from its text, checked by `check`: a drawing's own checks unless a host keeps a drawing inside its state."""
     if len(text) > MAX_STATE:
         raise StateError("The drawing is too large.")
     try:
@@ -114,7 +119,7 @@ def decode(text):
         if unpacker.unconsumed_tail:
             raise StateError("The drawing is too large.")
         state = json.loads(raw)
-        _check_state(state)
+        (check or check_state)(state)
     except StateError:
         raise
     except (ValueError, TypeError, KeyError, IndexError, AttributeError, zlib.error, RecursionError, RuntimeError) as error:
@@ -214,7 +219,7 @@ def _check_menu(menu):
         raise StateError("A menu in the drawing is not valid.")
 
 
-def _check_state(s):
+def check_state(s):
     _check_structure(s["atoms"], s["bonds"], s["next"])
     if s["tool"] not in TOOLS or s["bond"] not in _ORDER or isinstance(s["bond"], bool):
         raise StateError("A tool in the drawing is not valid.")
@@ -255,6 +260,8 @@ def _check_state(s):
     for name in ("menu_hover", "tip"):
         if s[name] is not None:
             _integer(s[name], 1000)
+    if s["button"] not in (None, "done", "cancel"):
+        raise StateError("A choice in the drawing is not valid.")
     if not isinstance(s["shown"], dict) or not all(k in LAYERS and isinstance(v, str) and len(v) <= 64 for k, v in s["shown"].items()):
         raise StateError("A choice in the drawing is not valid.")
     if not isinstance(s["flips"], dict) or not all(k in LAYERS and v in (0, 1) and not isinstance(v, bool) for k, v in s["flips"].items()):
@@ -396,7 +403,7 @@ def analyse(s):
     return None, text, atoms
 
 
-def _facts(smiles):
+def facts(smiles):
     with rdBase.BlockLogs():
         mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -720,9 +727,15 @@ CONTEXT_MENUS = {
 
 
 class Layout:
-    """Where everything is on the screen. Columns and rows here count from 0."""
+    """Where everything is. Columns and rows here count from 0 at the top left of the editor, which is the screen's unless the editor
+    is in a box: then `box` is (row, col, rows, cols) on the screen, counting its border, and `title` goes in the border."""
 
-    def __init__(self, cols, rows, cell_width=None, cell_height=None, pixels=False):
+    def __init__(self, cols, rows, cell_width=None, cell_height=None, pixels=False, box=None, title=""):
+        self.box, self.title = box, title
+        self.boxed = box is not None
+        self.origin = (box[0] + 1, box[1] + 1) if box else (0, 0)
+        if box:
+            rows, cols = box[2] - 2, box[3] - 2
         self.cols, self.rows = cols, rows
         self.cell_width, self.cell_height = cell_width or DEFAULT_CELL[0], cell_height or DEFAULT_CELL[1]
         self.pixels = pixels
@@ -742,13 +755,43 @@ class Layout:
             self.titles.append((col, len(title) + 2, index))
             col += len(title) + 2
 
+    def at(self, row, col, text=""):
+        """Print at a place in the editor."""
+        return _ansi(row + self.origin[0], col + self.origin[1], text)
+
+    def erase(self):
+        """Blank the rest of a row, in the current colours, without touching what is beside a box."""
+        return " " * self.cols if self.boxed else "\x1b[K"
+
+    def blank(self, row):
+        return self.at(row, 0, " " * self.cols if self.boxed else "\x1b[2K")
+
+    def from_report(self, x, y, pixels):
+        """A mouse report to a position here, as floats, which is outside the editor for a pointer outside the box."""
+        if pixels:
+            return x / self.cell_width - self.origin[1], y / self.cell_height - self.origin[0]
+        return x - 0.5 - self.origin[1], y - 0.5 - self.origin[0]
+
+    def buttons(self):
+        """On the bottom edge of the box: (name, label, column)."""
+        col, found = self.cols, []
+        for name, label in (("done", " Done Ctrl-Q "), ("cancel", " Cancel Ctrl-C ")):
+            col -= len(label) + 1
+            found.append((name, label, col))
+        return found
+
+    def button_at(self, col, row):
+        if not self.boxed or math.floor(row) != self.rows:
+            return None
+        return next((name for name, label, start in self.buttons() if start <= col < start + len(label)), None)
+
     def title_at(self, col, row):
-        if int(row) >= MENU_ROWS:
+        if not 0 <= row < MENU_ROWS:
             return None
         return next((index for start, width, index in self.titles if start <= col < start + width), None)
 
     def palette_at(self, col, row):
-        if not (self.top <= row < self.top + self.palette_rows and col < self.per_row * self.button_cols):
+        if not (self.top <= row < self.top + self.palette_rows and 0 <= col < self.per_row * self.button_cols):
             return None
         index = (int(row) - self.top) // 2 * self.per_row + int(col) // self.button_cols
         return index if index < len(PALETTE) else None
@@ -933,12 +976,14 @@ def draw_overlay(s, ui, marks):
 
 # Kitty draws images whose z is below this under any cell with its own background, so the menus, which have one, cover the drawing.
 _BELOW_CELLS = -1_073_741_824
-_Z = {"palette": _BELOW_CELLS - 1, "structure": _BELOW_CELLS - 2, "overlay": _BELOW_CELLS - 1}
-_IDS = {"palette": 7010, "structure": 7001, "overlay": 7005}
+_Z = {"palette": _BELOW_CELLS - 1, "structure": _BELOW_CELLS - 2, "overlay": _BELOW_CELLS - 1, "backing": _BELOW_CELLS - 3}
+_IDS = {"palette": 7010, "structure": 7001, "overlay": 7005, "backing": 7020}  # each also uses the id after it
+HOST_Z = _BELOW_CELLS - 10  # a host's images at or below this are hidden by the box
+_BACKING = {"dark": (32, 32, 30, 255), "light": (250, 249, 245, 255)}
 _CHROME = {"dark": {"bar": "48;2;42;42;40", "ink": "38;2;240;239;236", "dim": "38;2;143;142;134", "pick": "48;2;57;135;229", "on_pick": "38;2;255;255;255",
-                    "err": "38;2;239;83;80", "warn": "38;2;240;165;0"},
+                    "err": "38;2;239;83;80", "warn": "38;2;240;165;0", "pick_ink": "38;2;57;135;229"},
            "light": {"bar": "48;2;238;237;232", "ink": "38;2;29;29;27", "dim": "38;2;92;91;85", "pick": "48;2;42;120;214", "on_pick": "38;2;255;255;255",
-                     "err": "38;2;198;40;40", "warn": "38;2;180;83;9"}}
+                     "err": "38;2;198;40;40", "warn": "38;2;180;83;9", "pick_ink": "38;2;42;120;214"}}
 
 
 def _ansi(row, col, text=""):
@@ -950,14 +995,18 @@ def _fit_text(text, width):
     return text if len(text) <= width else text[:max(width - 1, 0)] + "…"
 
 
-def _menu_items(s):
+def _menu_items(s, ui=None):
     menu = s["menu"]
-    return MENUS[menu[1]][1] if menu[0] == "bar" else CONTEXT_MENUS[menu[1]]
+    if menu[0] == "context":
+        return CONTEXT_MENUS[menu[1]]
+    if menu[1] == 0 and ui and ui.boxed:
+        return [MENUS[0][1][0], ("Done", "Ctrl-Q", ("command", "quit")), ("Cancel", "Ctrl-C", ("command", "cancel"))]
+    return MENUS[menu[1]][1]
 
 
 def _menu_box(s, ui):
     """Where the open menu is: (col, row, width), kept on the screen."""
-    items = _menu_items(s)
+    items = _menu_items(s, ui)
     width = max(len(item[0]) + len(item[1]) for item in items if item) + 5
     if s["menu"][0] == "bar":
         col, row = ui.titles[s["menu"][1]][0], MENU_ROWS
@@ -968,8 +1017,8 @@ def _menu_box(s, ui):
 
 def _menu_item_at(s, ui, col, row):
     start_col, start_row, width = _menu_box(s, ui)
-    index = int(row) - start_row
-    items = _menu_items(s)
+    index = math.floor(row) - start_row
+    items = _menu_items(s, ui)
     if start_col <= col < start_col + width and 0 <= index < len(items) and items[index]:
         return index
     return None
@@ -977,11 +1026,11 @@ def _menu_item_at(s, ui, col, row):
 
 def _menu_bar(s, ui, colours):
     bar = f"\x1b[{colours['bar']};{colours['ink']}m"
-    out = [_ansi(0, 0, f"{bar}\x1b[K")]
+    out = [ui.at(0, 0, f"{bar}{ui.erase()}")]
     for start, width, index in ui.titles:
         chosen = s["menu"] and s["menu"][0] == "bar" and s["menu"][1] == index
         style = f"\x1b[{colours['pick']};{colours['on_pick']}m" if chosen else bar
-        out.append(_ansi(0, start, f"{style} {MENUS[index][0]} "))
+        out.append(ui.at(0, start, f"{style} {MENUS[index][0]} "))
     out.append("\x1b[0m")
     return "".join(out)
 
@@ -992,25 +1041,26 @@ def _popups(s, ui, colours):
     out = []
     if s["menu"]:
         start_col, start_row, width = _menu_box(s, ui)
-        for index, item in enumerate(_menu_items(s)):
+        for index, item in enumerate(_menu_items(s, ui)):
             if item is None:
                 text, style = "─" * width, f"\x1b[{colours['bar']};{colours['dim']}m"
             else:
                 label, key, _ = item
                 text = f" {label}{' ' * (width - len(label) - len(key) - 2)}{key} "
                 style = f"\x1b[{colours['pick']};{colours['on_pick']}m" if index == s["menu_hover"] else bar
-            out.append(_ansi(start_row + index, start_col, style + text))
+            out.append(ui.at(start_row + index, start_col, style + text))
     if s["label"]:
         col, row = ui.to_cell(s, *s["label"]["at"])
         text = f" {_fit_text(s['label']['text'], MAX_LABEL)}"
         col = max(min(int(col) - 1, ui.cols - len(text) - 2), ui.left)
         row = max(min(int(row), ui.top + ui.canvas_rows - 1), ui.top)
-        out.append(_ansi(row, col, f"{bar}{text}\x1b[7m \x1b[27m "))
+        out.append(ui.at(row, col, f"{bar}{text}\x1b[7m \x1b[27m "))
     if s["help"]:
-        lines = KEYS_HELP.split("\n")[:ui.canvas_rows]
+        text = KEYS_HELP.replace("Ctrl-Q quit and print the SMILES", "Ctrl-Q done   Ctrl-C cancel") if ui.boxed else KEYS_HELP
+        lines = text.split("\n")[:ui.canvas_rows]
         width = min(max(len(line) for line in lines) + 2, ui.canvas_cols)
         for index, line in enumerate(lines):
-            out.append(_ansi(ui.top + index, ui.left, f"{bar} {_fit_text(line, width - 2):<{width - 2}} "))
+            out.append(ui.at(ui.top + index, ui.left, f"{bar} {_fit_text(line, width - 2):<{width - 2}} "))
     return "".join(out) + ("\x1b[0m" if out else "")
 
 
@@ -1022,19 +1072,19 @@ def _status(s, ui, smiles, problem, colours):
         second = _fit_text(s["message"], ui.cols) if s["message"] else "Type or paste, then Enter to load it. Esc cancels."
         return f"\x1b[1mSMILES:\x1b[0m {shown}\x1b[7m \x1b[0m", f"{dim}{second}\x1b[0m"
     if smiles:
-        first, facts = _fit_text(smiles, ui.cols), _facts(smiles)
+        first, details = _fit_text(smiles, ui.cols), facts(smiles)
     elif smiles is None:
         first = err + _fit_text(problem or "RDKit can't read this structure.", ui.cols) + "\x1b[0m"
-        facts = f"{err}Atoms in red boxes need attention.\x1b[0m"
+        details = f"{err}Atoms in red boxes need attention.\x1b[0m"
     else:
-        first, facts = f"{dim}Empty. Click to draw a bond, or press u for the cyclohexane tool and click. Press ? for all keys.\x1b[0m", ""
+        first, details = f"{dim}Empty. Click to draw a bond, or press u for the cyclohexane tool and click. Press ? for all keys.\x1b[0m", ""
     if s["message"]:
         return first, warn + _fit_text(s["message"], ui.cols) + "\x1b[0m"
     if s["label"]:
         return first, dim + _fit_text("Type an element or group, such as N, OMe, CF3 or Ph. Enter applies, Esc cancels.", ui.cols) + "\x1b[0m"
     if s["tip"] is not None and s["tip"] < len(PALETTE):
         return first, dim + _fit_text(PALETTE[s["tip"]][2], ui.cols) + "\x1b[0m"
-    return first, facts
+    return first, details
 
 
 def _place(layer, s, ui, png, cols, rows, row, col):
@@ -1043,14 +1093,42 @@ def _place(layer, s, ui, png, cols, rows, row, col):
     s["flips"][layer] = 1 - s["flips"].get(layer, 0)
     new = _IDS[layer] + s["flips"][layer]
     sequence = graphics.kitty_sequence(png, cols, rows=rows, image_id=new, move_cursor=False, z=_Z[layer]).rstrip("\n")
-    return _ansi(row, col) + sequence + f"\x1b_Ga=d,d=I,i={old},q=2\x1b\\"
+    return ui.at(row, col) + sequence + f"\x1b_Ga=d,d=I,i={old},q=2\x1b\\"
+
+
+def _border(s, ui, colours):
+    """The box's edge, with its title and buttons."""
+    dim, ink = f"\x1b[{colours['dim']}m", f"\x1b[{colours['ink']}m"
+    title = f" {_fit_text(ui.title, ui.cols - 4)} " if ui.title else ""
+    out = [ui.at(-1, -1, f"{dim}╭─\x1b[1m{ink}{title}\x1b[22m{dim}{'─' * (ui.cols - 1 - len(title))}╮")]
+    for row in range(ui.rows):
+        out.append(ui.at(row, -1, f"{dim}│") + ui.at(row, ui.cols, f"{dim}│"))
+    out.append(ui.at(ui.rows, -1, f"{dim}╰{'─' * ui.cols}╯"))
+    for name, label, col in ui.buttons():
+        chosen = s["button"] == name
+        style = f"\x1b[{colours['pick']};{colours['on_pick']}m" if chosen else f"\x1b[{colours['bar']};{colours['ink']}m"
+        out.append(ui.at(ui.rows, col, style + label))
+    out.append("\x1b[0m")
+    return "".join(out)
+
+
+def _backing(theme):
+    """One pixel, stretched over the box, so that whatever a host has drawn below doesn't show through the drawing."""
+    buffer = BytesIO()
+    Image.new("RGBA", (1, 1), _BACKING.get(theme, _BACKING["dark"])).save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+def images_gone():
+    """Remove all of the editor's images, for a host closing the box."""
+    return "".join(f"\x1b_Ga=d,d=I,i={base + flip},q=2\x1b\\" for base in _IDS.values() for flip in (0, 1))
 
 
 def frame(s, ui, theme):
     """What to print for the current state: only the layers that changed, or nothing if the screen already shows it."""
     smiles, problem, wrong = analyse(s)
     colours = _CHROME.get(theme, _CHROME["dark"])
-    screen = [ui.cols, ui.rows, ui.cell_width, ui.cell_height, theme]
+    screen = [ui.cols, ui.rows, ui.cell_width, ui.cell_height, theme, ui.box]
 
     def digest(*parts):
         return hashlib.sha256(json.dumps([screen, *parts]).encode()).hexdigest()[:16]
@@ -1061,16 +1139,24 @@ def frame(s, ui, theme):
     menu_bar = _menu_bar(s, ui, colours)
     status = _status(s, ui, smiles, problem, colours)
     keys = {"palette": digest(active, s["tip"]), "structure": digest(s["atoms"], s["bonds"], s["view"]),
-            "overlay": digest(marks, s["view"]), "text": digest(popups, menu_bar, status)}
-    size = f"{ui.cols}x{ui.rows}"
+            "overlay": digest(marks, s["view"]), "text": digest(popups, menu_bar, status, ui.title, s["button"])}
+    if ui.boxed:
+        keys["backing"] = digest()
+    size = f"{ui.cols}x{ui.rows}+{ui.origin[0]}+{ui.origin[1]}"
     resized = s["size"] != size
-    if not resized and all(s["shown"].get(name) == keys[name] for name in LAYERS):
+    if not resized and all(s["shown"].get(name) == keys[name] for name in keys):
         return ""
     out = ["\x1b[?2026h"]  # terminals that know this show the whole frame at once
     if resized:
-        out.append("\x1b[2J")  # which also removes the images, so all of them are sent again
+        if ui.boxed:  # what is beside the box is the host's
+            out.append(images_gone())
+            out.extend(ui.at(row, -1, " " * (ui.cols + 2)) for row in range(-1, ui.rows + 1))
+        else:
+            out.append("\x1b[2J")  # which also removes the images, so all of them are sent again
         s["size"] = size
         s["shown"] = {}
+    if ui.boxed and s["shown"].get("backing") != keys["backing"]:
+        out.append(_place("backing", s, ui, _backing(theme), ui.cols + 2, ui.rows + 2, -1, -1))
     if s["shown"].get("palette") != keys["palette"]:
         png = editor_icons.palette_image(_ICON_NAMES, ui.per_row, ui.button_cols * ui.cell_width, 2 * ui.cell_height, active, s["tip"], theme)
         out.append(_place("palette", s, ui, png, ui.per_row * ui.button_cols, ui.palette_rows, ui.top, 0))
@@ -1084,12 +1170,15 @@ def frame(s, ui, theme):
     if s["shown"].get("text") != keys["text"]:
         if s["cover"]:  # plain cells again, so that the images show through where a menu was
             for row in range(ui.top, ui.top + ui.canvas_rows):
-                out.append(_ansi(row, 0, "\x1b[2K"))
+                out.append(ui.blank(row))
         s["cover"] = bool(popups)
+        if ui.boxed:
+            out.append(_border(s, ui, colours))
         out.append(menu_bar)
         out.append(popups)
         for index, text in enumerate(status):
-            out.append(_ansi(ui.rows - STATUS_ROWS + index, 0, "\x1b[K" + text))
+            row = ui.rows - STATUS_ROWS + index
+            out.append(ui.at(row, 0, ui.erase()) + ui.at(row, 0, text))
     s["shown"] = keys
     out.append("\x1b[?2026l")
     return "".join(out)
@@ -1102,7 +1191,7 @@ _TOKEN = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[([0-9;]*)([A-Za-z~])|
 _INCOMPLETE = re.compile(r"\x1b(\[[<0-9;]*|O)?$")
 _ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 _TILDE_KEYS = {"3": "delete", "15": "f5", "17": "f6", "18": "f7", "19": "f8", "21": "f10"}
-_CONTROL_KEYS = {"\r": "enter", "\n": "enter", "\t": "tab", "\x7f": "backspace", "\b": "backspace", "\x03": "quit", "\x11": "quit",
+_CONTROL_KEYS = {"\r": "enter", "\n": "enter", "\t": "tab", "\x7f": "backspace", "\b": "backspace", "\x03": "interrupt", "\x11": "quit",
                  "\x0c": "redraw", "\x1a": "undo", "\x19": "redo", "\x01": "select_all", "\x0b": "tidy"}
 
 
@@ -1337,9 +1426,11 @@ def _zoom(s, factor):
 
 
 def _command(s, ui, name):
-    """Run a command; returns True to quit."""
+    """Run a command; returns what ends the editor, if it does: see `finish`."""
     if name == "quit":
         return True
+    if name == "cancel":
+        return CANCEL
     if name in ("undo", "redo"):
         _restore(s, name, "redo" if name == "undo" else "undo")
         if s["pointer"]:  # the pointer hasn't moved, but what is under it may have changed
@@ -1704,8 +1795,8 @@ def _label_key(s, name):
 
 
 def _menu_key(s, ui, name):
-    """Handle a key while a menu is open; returns True to quit."""
-    items = _menu_items(s)
+    """Handle a key while a menu is open; returns what ends the editor, if it does."""
+    items = _menu_items(s, ui)
     choices = [i for i, item in enumerate(items) if item]
     if name in ("up", "down"):
         position = choices.index(s["menu_hover"]) if s["menu_hover"] in choices else (-1 if name == "down" else 0)
@@ -1723,9 +1814,11 @@ def _menu_key(s, ui, name):
 
 
 def _key(s, ui, name):
-    """Handle one key; returns True to quit."""
+    """Handle one key; returns what ends the editor, if it does."""
     if name == "quit":
         return True
+    if name == "interrupt":
+        return CANCEL if ui.boxed else INTERRUPT
     if s["entry"] is not None:
         _entry_key(s, name)
         return False
@@ -1787,7 +1880,7 @@ def _choose(s, action):
 
 
 def _mouse_in_menu(s, ui, col, row, motion, release, wheel):
-    """A mouse report while a menu is open; returns True to quit."""
+    """A mouse report while a menu is open; returns what ends the editor, if it does."""
     if wheel or release:
         return False
     title = ui.title_at(col, row)
@@ -1797,7 +1890,7 @@ def _mouse_in_menu(s, ui, col, row, motion, release, wheel):
         s["menu_hover"] = _menu_item_at(s, ui, col, row)
         return False
     item = _menu_item_at(s, ui, col, row)
-    action = _menu_items(s)[item][2] if item is not None else None
+    action = _menu_items(s, ui)[item][2] if item is not None else None
     same = s["menu"] == ["bar", title]
     target = s["menu_target"]
     s["menu"], s["menu_hover"], s["menu_target"] = None, None, None
@@ -1848,11 +1941,8 @@ def _start_press(s, target, col, row, x, y, button):
 
 
 def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
-    """Handle one mouse report; returns True to quit."""
-    if pixels:
-        col, row = x_cell / ui.cell_width, y_cell / ui.cell_height
-    else:
-        col, row = x_cell - 0.5, y_cell - 0.5
+    """Handle one mouse report; returns what ends the editor, if it does."""
+    col, row = ui.from_report(x_cell, y_cell, pixels)
     button, motion, wheel = code & 3, bool(code & 32), bool(code & 64)
     if s["menu"]:
         return _mouse_in_menu(s, ui, col, row, motion, release, wheel)
@@ -1868,6 +1958,7 @@ def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
     if motion:
         s["pointer"] = [x, y] if inside else None
         s["tip"] = ui.palette_at(col, row)
+        s["button"] = ui.button_at(col, row)
         if s["press"]:
             _drag_motion(s, ui, s["press"], col, row, x, y)
         else:
@@ -1898,6 +1989,9 @@ def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
     if s["entry"] is not None:
         s["entry"] = None
         return False
+    pressed = ui.button_at(col, row) if button == 0 else None
+    if pressed:  # a stray click outside the box does nothing, but these end it
+        return True if pressed == "done" else CANCEL
     title = ui.title_at(col, row)
     if title is not None and button == 0:
         s["menu"], s["menu_hover"], s["menu_target"] = ["bar", title], None, None
@@ -1918,21 +2012,28 @@ def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
 
 
 def handle(s, ui, raw, pixels):
-    """Apply a run of raw input to the state; returns True to quit."""
+    """Apply a run of raw input to the state; returns what ends the editor, if it does."""
     events, s["partial"] = parse_events(s["partial"] + raw)
     if len(s["partial"]) > 64:
         s["partial"] = ""
+    return handle_events(s, ui, events, pixels)
+
+
+def handle_events(s, ui, events, pixels):
+    """Apply parsed input, for a host that parses it first. Stops at what ends the editor, and returns it, for `finish`."""
     for event in events:
         _settle(s)
         if event[0] == "key":
             s["message"] = ""
-            if _key(s, ui, event[1]):
-                return True
+            ended = _key(s, ui, event[1])
+            if ended:
+                return ended
         else:
             if not (event[1] & 32):  # moving the pointer doesn't dismiss a message
                 s["message"] = ""
-            if _mouse(s, ui, event[1], event[2], event[3], event[4], pixels):
-                return True
+            ended = _mouse(s, ui, event[1], event[2], event[3], event[4], pixels)
+            if ended:
+                return ended
     _settle(s)
     return False
 
@@ -1945,8 +2046,23 @@ def _settle(s):
         s["press"], s["drag"] = None, None
 
 
-def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None, pixels=False, theme=graphics.DEFAULT_THEME):
-    """Run one request: return (status, new state as text, what to print)."""
+def finish(s, ended):
+    """What the editor's end comes to: (status, text), or None to stay open, because Done can't save a drawing RDKit can't read."""
+    if ended == CANCEL:
+        return CANCELLED, ""
+    answer, problem, _ = analyse(s)
+    if answer is not None:
+        return QUIT, answer
+    if ended == INTERRUPT:
+        return FAILED, f"The drawing isn't valid chemistry, so there is no SMILES: {problem}"
+    s["message"] = f"Not saved, because the drawing isn't valid: {problem}"
+    return None
+
+
+def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None, pixels=False, theme=graphics.DEFAULT_THEME, box=None, title=""):
+    """Run one request: return (status, new state as text, what to print). With a `box`, see Layout, the editor stays inside it."""
+    if box and (box[0] + box[2] > rows or box[1] + box[3] > cols):
+        return FAILED, "", "The box doesn't fit in the window."
     if state_text:
         s = decode(state_text)
         first = False
@@ -1954,17 +2070,23 @@ def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None,
         s = new_state()
         first = True
     pixels = pixels and bool(cell_width) and bool(cell_height)
-    ui = Layout(cols, rows, cell_width, cell_height, pixels)
+    ui = Layout(cols, rows, cell_width, cell_height, pixels, box, title)
+    if box and not fits(ui):
+        return FAILED, "", "The box is too small for the editor."
     if ui.canvas_rows < 4 or ui.canvas_cols < 20:
         return CONTINUE, encode(s), "\x1b[2J\x1b[H" + "This window is too small for the editor."
     if first and smiles:
         if not load_smiles(s, smiles):
             return FAILED, "", s["message"]
         _fit(s, ui)
-    if handle(s, ui, raw, pixels):
-        answer, problem, _ = analyse(s)
-        if answer is None:
-            return FAILED, "", f"The drawing isn't valid chemistry, so there is no SMILES: {problem}"
-        return QUIT, "", answer
+    ended = handle(s, ui, raw, pixels)
+    result = finish(s, ended) if ended else None
+    if result:
+        return result[0], "", result[1]
     output = frame(s, ui, theme)
     return CONTINUE, encode(s), output
+
+
+def fits(ui):
+    """Is a box big enough to use?"""
+    return ui.canvas_rows >= 4 and ui.canvas_cols >= 20 and ui.cols >= MIN_BOX_COLS
