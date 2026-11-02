@@ -19,8 +19,9 @@ from app import app  # noqa: E402
 
 COLS, ROWS, CW, CH = 120, 40, 10, 20
 UI = editor.Layout(COLS, ROWS, CW, CH)
-PLACE = re.compile("\x1b_G(a=T[^;]*);")
+IMAGE = re.compile("\x1b_G(a=T[^;]*);(.*?)(?=\x1b\\[|\x1b_Ga=d|$)", re.S)
 CHUNK = re.compile("\x1b_G([^;\x1b]*);([^\x1b]*)\x1b\\\\")
+MOTION_FAR = f"\x1b[<35;{COLS - 2};{ROWS - 4}M"  # the pointer over a far corner of the canvas
 
 
 class Session:
@@ -49,9 +50,8 @@ class Session:
 
     def cell(self, x, y):
         """The screen position, counting from 1, of a point in the molecule's coordinates."""
-        vx, vy, zoom = self.state["view"]
-        return (round((x - vx) * zoom + UI.canvas_cols / 2 + 0.5),
-                round((vy - y) * zoom * CW / CH + UI.canvas_rows / 2 + UI.top + 0.5))
+        col, row = UI.to_cell(self.state, x, y)
+        return round(col + 0.5), round(row + 0.5)
 
     def click(self, col, row, button=0):
         return self.send(f"\x1b[<{button};{col};{row}M\x1b[<{button};{col};{row}m")
@@ -59,15 +59,12 @@ class Session:
     def click_at(self, x, y, button=0):
         return self.click(*self.cell(x, y), button)
 
+    def hover(self, x, y):
+        col, row = self.cell(x, y)
+        return self.send(f"\x1b[<35;{col};{row}M")
+
     def atom(self, index):
         return self.state["atoms"][index]
-
-    def focus_on(self, index):
-        ident = self.atom(index)[0]
-        self.send("\x1b")
-        while self.state["focus"] != ["a", ident]:
-            self.send("\t")
-        return self
 
     def click_atom(self, index, button=0):
         return self.click_at(self.atom(index)[2], self.atom(index)[3], button)
@@ -76,154 +73,658 @@ class Session:
         a, b = self.atom(first), self.atom(second)
         return self.click_at((a[2] + b[2]) / 2, (a[3] + b[3]) / 2, button)
 
+    def hover_atom(self, index):
+        return self.hover(*self.atom(index)[2:4])
+
+    def hover_bond(self, first, second):
+        a, b = self.atom(first), self.atom(second)
+        return self.hover((a[2] + b[2]) / 2, (a[3] + b[3]) / 2)
+
     def drag(self, start, end):
         self.send(f"\x1b[<0;{start[0]};{start[1]}M")
         self.send(f"\x1b[<32;{end[0]};{end[1]}M")
         return self.send(f"\x1b[<0;{end[0]};{end[1]}m")
 
-    def button(self, label):
-        row, col, width, _, _ = next(b for b in UI.buttons if b[3] == label)
-        return self.click(col + 2, row + 1)
+    def tool(self, name):
+        index = next(i for i, entry in enumerate(editor.PALETTE) if entry[0] == name)
+        col = index % UI.per_row * UI.button_cols + 2
+        row = index // UI.per_row * 2 + UI.top + 1
+        return self.click(col, row)
+
+    def menu(self, title, label):
+        col = next(start for start, _, index in UI.titles if editor.MENUS[index][0] == title) + 2
+        self.click(col, 1)
+        return self.pick(label)
+
+    def pick(self, label):
+        """Click an item in the open menu."""
+        state = self.state
+        start_col, start_row, _ = editor._menu_box(state, UI)
+        index = next(i for i, item in enumerate(editor._menu_items(state)) if item and item[0] == label)
+        return self.click(start_col + 2, start_row + index + 1)
+
+    def label(self, text):
+        return self.send(text).send("\r")
 
 
 def overvalent():
     """An oxygen with three bonds, left that way while drawing."""
-    session = Session().keys("o").button("-")
-    for _ in range(3):
+    session = Session().click(60, 20)
+    session.hover_atom(0).keys("o")
+    for _ in range(2):
         session.click_atom(0)
     return session
 
 
-def picture(output):
-    data = "".join(m[2] for m in CHUNK.finditer(output))
-    return Image.open(BytesIO(base64.b64decode(data))).convert("RGBA")
+def pictures(output):
+    """Each image in some output, by its id."""
+    found, current, data = {}, None, []
+    for keys, chunk in CHUNK.findall(output):
+        if "a=d" in keys:
+            continue
+        if "a=T" in keys:
+            current, data = int(re.search(r"i=(\d+)", keys)[1]), []
+        data.append(chunk)
+        if "m=0" in keys:
+            found[current] = Image.open(BytesIO(base64.b64decode("".join(data)))).convert("RGBA")
+    return found
+
+
+def layer(output, name):
+    ids = [editor._IDS[name], editor._IDS[name] + 1]
+    return next((image for ident, image in pictures(output).items() if ident in ids), None)
 
 
 def canonical(smiles):
     return Chem.MolToSmiles(Chem.MolFromSmiles(smiles))
 
 
-# with the keyboard
+# drawing with the bond tool, which is what it starts with
 
 
 def test_starts_empty_and_says_how_to_begin():
     session = Session()
-    assert session.state["atoms"] == [] and "Click anywhere" in session.output
+    assert session.state["atoms"] == [] and "Click to draw a bond" in session.output and session.state["tool"] == "bond"
 
 
-def test_enter_builds_a_chain():
-    assert Session().keys("\r", "\r", "\r", "\r").smiles == "CCCC"
+def test_a_click_in_empty_space_draws_a_whole_bond_from_there():
+    session = Session().click(60, 20)
+    assert session.smiles == "CC" and session.cell(*session.atom(0)[2:4]) == (60, 20)
+
+
+def test_clicking_an_atom_grows_a_bond():
+    assert Session().click(60, 20).click_atom(1).smiles == "CCC"
 
 
 def test_a_zigzag_keeps_atoms_apart():
-    atoms = Session().keys(*["\r"] * 8).state["atoms"]
+    session = Session().click(60, 20)
+    for index in range(1, 8):
+        session.click_atom(index)
+    atoms = session.state["atoms"]
     assert min(np.hypot(a[2] - b[2], a[3] - b[3]) for i, a in enumerate(atoms) for b in atoms[:i]) > 0.9
 
 
-def test_keys_build_acetic_acid():
-    session = Session().keys("\r", "\r", "\r", "o", "=")
-    assert session.smiles == "CC=O"
-    session.focus_on(1).send("\r")  # the atom tool is still on oxygen, so the next atom is one
-    assert session.smiles == "CC(=O)O"
+def test_clicking_a_bond_steps_through_its_orders():
+    session = Session().click(60, 20)
+    for expected in ("C=C", "C#C", "CC"):
+        session.click_bond(0, 1)
+        assert session.smiles == expected
 
 
-def test_a_bond_key_changes_only_the_bond_just_drawn():
-    session = Session().keys("\r", "\r", "=", "\r")
-    assert session.smiles == "C=CC"
-
-
-def test_a_bond_key_with_nothing_to_change_sets_the_tool():
-    session = Session().keys("=", "\r", "\r")
+def test_the_double_bond_tool_draws_and_sets_doubles():
+    session = Session().tool("double").click(60, 20)
     assert session.smiles == "C=C"
+    session.tool("single").click(90, 20).tool("double").click_bond(2, 3)
+    assert session.smiles == "C=C.C=C"
 
 
-def test_triple_bonds_are_straight():
-    session = Session().keys("#", "\r", "\r", "\r")
-    (ax, ay), (bx, by), (cx, cy) = [(a[2], a[3]) for a in session.state["atoms"][:3]]
-    assert abs((bx - ax) * (cy - by) - (by - ay) * (cx - bx)) < 1e-6
+def test_the_tool_stays_chosen():
+    session = Session().tool("double").click(60, 20).click_atom(1)
+    assert session.state["tool"] == "bond" and session.state["bond"] == editor.DOUBLE
 
 
-def test_element_keys_set_the_chosen_atom():
-    for key, symbol in [("n", "N"), ("o", "O"), ("s", "S"), ("p", "P"), ("f", "F"), ("l", "Cl"), ("b", "Br"), ("i", "I")]:
-        assert Session().keys("\r", key).atom(0)[1] == symbol
+def test_drag_from_an_atom_draws_a_bond_at_a_snapped_angle():
+    session = Session().click(60, 20)
+    start = session.cell(*session.atom(1)[2:4])
+    session.drag(start, (start[0] + 5, start[1] + 1))
+    a, b = session.atom(1), session.atom(2)
+    angle = np.degrees(np.arctan2(b[3] - a[3], b[2] - a[2]))
+    assert session.smiles == "CCC" and abs(angle / 30 - round(angle / 30)) < 1e-6
+    assert abs(np.hypot(b[2] - a[2], b[3] - a[3]) - 1) < 1e-6
 
 
-def test_the_first_key_can_place_an_element():
-    assert Session().keys("n").smiles == "N"
+def test_a_pixel_pointer_snaps_to_finer_angles():
+    session = Session().click(60, 20)
+    x, y = session.atom(1)[2:4]
+    col, row = UI.to_cell(session.state, x, y)
+    px, py = int(col * CW), int(row * CH)
+    # 15 degrees below the horizontal is a step only the finer snap has
+    events = f"\x1b[<0;{px};{py}M\x1b[<32;{px + 100};{py + 27}M\x1b[<0;{px + 100};{py + 27}m"
+    _, text, _ = editor.step(session.text, "", events, COLS, ROWS, CW, CH, pixels=True)
+    atoms = editor.decode(text)["atoms"]
+    angle = np.degrees(np.arctan2(atoms[2][3] - atoms[1][3], atoms[2][2] - atoms[1][2]))
+    assert abs(angle + 15) < 1e-6
 
 
-def test_digit_keys_add_rings():
-    for key, size in [("3", 3), ("4", 4), ("5", 5), ("6", 6), ("7", 7)]:
-        mol = Chem.MolFromSmiles(Session().keys(key).smiles)
-        assert [len(r) for r in mol.GetRingInfo().AtomRings()] == [size]
+def test_drag_onto_another_atom_joins_them():
+    session = Session().click(60, 20).click(90, 20)
+    assert session.smiles == "CC.CC"
+    session.drag(session.cell(*session.atom(1)[2:4]), session.cell(*session.atom(2)[2:4]))
+    assert session.smiles == "CCCC" and len(session.state["atoms"]) == 4
 
 
-def test_a_makes_benzene():
-    assert Session().keys("a").smiles == "c1ccccc1"
+def test_closing_a_ring_by_dragging():
+    session = Session().click(60, 20)
+    for index in range(1, 5):
+        session.click_atom(index)
+    session.drag(session.cell(*session.atom(5)[2:4]), session.cell(*session.atom(0)[2:4]))
+    assert session.smiles == "C1CCCCC1" and len(session.state["atoms"]) == 6
 
 
-def test_a_ring_attaches_to_a_chosen_atom_that_has_neighbours():
-    assert Session().keys("\r", "\r", "a").smiles == canonical("CCc1ccccc1")
+def test_drag_from_empty_space_draws_a_bond_with_both_atoms():
+    assert Session().drag((60, 20), (66, 20)).smiles == "CC"
 
 
-def test_a_ring_includes_a_lone_chosen_atom():
-    assert Session().keys("\r", "6").smiles == "C1CCCCC1"
+def test_drag_shows_a_preview_and_changes_nothing_until_release():
+    session = Session().click(60, 20)
+    start = session.cell(*session.atom(1)[2:4])
+    session.send(f"\x1b[<0;{start[0]};{start[1]}M")
+    session.send(f"\x1b[<32;{start[0] + 8};{start[1]}M")
+    assert len(session.state["atoms"]) == 2 and layer(session.output, "overlay") is not None
+    assert layer(session.output, "structure") is None
 
 
-def test_arrows_move_between_atoms():
-    session = Session().keys("\r", "\r")
+def test_hovering_an_atom_previews_the_bond_a_click_would_add():
+    session = Session().click(60, 20).hover_atom(1)
+    assert any(mark[0] == "line" and mark[4] == 0.5 for mark in editor._marks(session.state, UI, []))
+    assert len(session.state["atoms"]) == 2
+
+
+def test_hovering_with_a_ring_tool_previews_the_ring_and_changes_nothing():
+    session = Session().tool("benzene").send("\x1b[<35;60;20M")
+    marks = editor._marks(session.state, UI, [])
+    assert len([m for m in marks if m[0] == "line"]) == 6 and session.state["atoms"] == []
+
+
+# the other tools
+
+
+def test_ring_tool_in_empty_space_is_centred_on_the_click():
+    session = Session().tool("benzene").click(60, 20)
+    xs, ys = [a[2] for a in session.state["atoms"]], [a[3] for a in session.state["atoms"]]
+    assert session.smiles == "c1ccccc1"
+    assert session.cell(sum(xs) / 6, sum(ys) / 6) == (60, 20)
+
+
+@pytest.mark.parametrize("name, sides", [("ring3", 3), ("ring4", 4), ("ring5", 5), ("ring6", 6), ("ring7", 7)])
+def test_rings_are_regular_with_bonds_of_one(name, sides):
+    state = Session().tool(name).click(60, 20).state
+    by_id = {a[0]: a for a in state["atoms"]}
+    lengths = [np.hypot(by_id[b[0]][2] - by_id[b[1]][2], by_id[b[0]][3] - by_id[b[1]][3]) for b in state["bonds"]]
+    assert len(lengths) == sides and max(lengths) - min(lengths) < 1e-6 and abs(lengths[0] - 1) < 1e-6
+
+
+def test_fusing_benzene_onto_a_bond_makes_naphthalene():
+    session = Session().tool("benzene").click(60, 20)
+    bond = session.state["bonds"][0]
+    ids = [a[0] for a in session.state["atoms"]]
+    session.click_bond(ids.index(bond[0]), ids.index(bond[1]))
+    assert session.smiles == "c1ccc2ccccc2c1" and len(session.state["atoms"]) == 10
+
+
+def test_a_fused_ring_goes_to_the_side_without_atoms():
+    session = Session().tool("ring6").click(60, 20)
+    centre = np.mean([[a[2], a[3]] for a in session.state["atoms"]], axis=0)
+    session.click_bond(0, 1)
+    new = session.state["atoms"][6:]
+    assert len(new) == 4
+    a, b = session.atom(0), session.atom(1)
+    middle = np.array([(a[2] + b[2]) / 2, (a[3] + b[3]) / 2])
+    assert all(np.dot(np.array([n[2], n[3]]) - middle, middle - centre) > 0 for n in new)
+
+
+def test_three_fused_rings_reuse_the_atoms_they_meet():
+    session = Session().tool("ring6").click(60, 20)
+    session.click_bond(0, 1)
+    session.click_bond(1, 2)
+    atoms = session.state["atoms"]
+    assert min(np.hypot(a[2] - b[2], a[3] - b[3]) for i, a in enumerate(atoms) for b in atoms[:i]) > 0.5
+
+
+def test_ring_tool_on_an_atom_shares_it():
+    assert Session().click(60, 20).tool("benzene").click_atom(1).smiles == canonical("Cc1ccccc1")
+
+
+def test_ring_tool_on_a_ring_atom_makes_a_spiro_link_and_alt_sprouts():
+    assert Session("C1CCCCC1").tool("ring5").click_atom(0).smiles == canonical("C1CCC2(CC1)CCCC2")
+    assert Session("C1CCCCC1").tool("ring5").click_atom(0, button=8).smiles == canonical("C1CCC(C2CCCC2)CC1")
+
+
+def test_cyclopentadiene_has_its_double_bonds():
+    assert Session().tool("cyclopentadiene").click(60, 20).smiles == "C1=CCC=C1"
+
+
+def test_a_ring_still_lands_if_the_hand_wobbles():
+    assert Session().tool("ring5").drag((60, 20), (66, 20)).smiles == "C1CCCC1"
+
+
+def test_eraser_deletes_atoms_and_bonds():
+    session = Session("CCC").tool("erase").click_atom(2)
+    assert session.smiles == "CC"
+    session.click_bond(0, 1)
+    assert session.smiles == "C.C"
+
+
+def test_eraser_takes_a_bond_down_one_order():
+    session = Session("C#C").tool("erase").click_bond(0, 1)
+    assert session.smiles == "C=C"
+    assert session.click_bond(0, 1).smiles == "CC"
+    assert session.click_bond(0, 1).smiles == "C.C"
+
+
+def test_charge_tools():
+    session = Session("CN").tool("plus")
+    session.click_atom(1)
+    assert session.smiles == "C[NH3+]"
+    session.tool("minus").click_atom(1).click_atom(1)
+    assert session.smiles == "C[NH-]"
+
+
+def test_charge_tool_needs_an_atom():
+    assert "Point at an atom" in Session().tool("plus").click(60, 20).output
+
+
+def test_pan_tool_moves_the_view_not_the_atoms():
+    session = Session("CC").tool("pan")
+    x, y = session.state["view"][:2]
+    atoms = session.state["atoms"]
+    session.drag((100, 30), (90, 30))
+    assert session.state["view"][0] == pytest.approx(x + 10 / session.state["view"][2]) and session.state["view"][1] == y
+    assert session.state["atoms"] == atoms
+
+
+def test_middle_button_pans_with_any_tool():
+    session = Session("CC")
+    x = session.state["view"][0]
+    session.send("\x1b[<1;100;30M\x1b[<33;90;30M\x1b[<1;90;30m")
+    assert session.state["view"][0] > x and session.smiles == "CC"
+
+
+def test_wheel_zooms_about_the_pointer():
+    session = Session().click(60, 20)
+    before = session.cell(*session.atom(0)[2:4])
+    zoom = session.state["view"][2]
+    session.send("\x1b[<64;60;20M")
+    assert session.state["view"][2] > zoom and session.cell(*session.atom(0)[2:4]) == before
+    session.send("\x1b[<65;60;20M\x1b[<65;60;20M")
+    assert session.state["view"][2] < zoom
+
+
+# selecting and moving
+
+
+def test_selection_tool_moves_an_atom_and_undo_puts_it_back():
+    session = Session("CC").tool("select")
+    before = session.atom(0)[2:4]
+    start = session.cell(*before)
+    session.drag(start, (start[0], start[1] + 5))
+    assert session.atom(0)[2:4] != before and session.atom(1)[2:4] != session.atom(0)[2:4] and session.smiles == "CC"
+    session.send("\x1a")
+    assert session.atom(0)[2:4] == before
+
+
+def test_selection_tool_moves_a_bond_with_both_ends():
+    session = Session("CCC").tool("select")
+    a0, a1, a2 = (session.atom(i)[2:4] for i in range(3))
+    bond_mid = session.cell((a0[0] + a1[0]) / 2, (a0[1] + a1[1]) / 2)
+    session.drag(bond_mid, (bond_mid[0] + 12, bond_mid[1]))
+    assert session.atom(0)[2] > a0[0] and session.atom(1)[2] > a1[0] and session.atom(2)[2:4] == a2
+
+
+def marquee_all(session):
+    session.tool("select")
+    return session.drag((UI.left + 2, UI.top + 2), (COLS - 2, UI.top + UI.canvas_rows - 2))
+
+
+def test_dragging_across_empty_space_selects():
+    session = marquee_all(Session("CC.CCC"))
+    assert len(session.state["selected"]) == 5 and session.smiles == "CC.CCC"
+
+
+def test_a_marquee_selects_only_what_it_covers():
+    session = Session().click(40, 20).click(100, 20).tool("select")
+    session.drag((30, 12), (60, 28))
+    assert sorted(session.state["selected"]) == [session.atom(0)[0], session.atom(1)[0]]
+
+
+def test_the_marquee_shows_while_dragging():
+    session = Session("CC").tool("select").send(f"\x1b[<0;{UI.left + 2};3M").send(f"\x1b[<32;{COLS - 2};30M")
+    assert any(mark[0] == "rect" for mark in editor._marks(session.state, UI, []))
+
+
+def test_dragging_a_selection_moves_all_of_it():
+    session = marquee_all(Session("CC.CCC"))
+    before = [a[2:4] for a in session.state["atoms"]]
+    start = session.cell(*session.atom(0)[2:4])
+    session.drag(start, (start[0] + 6, start[1]))
+    after = [a[2:4] for a in session.state["atoms"]]
+    assert all(b[0] > a[0] and b[1] == pytest.approx(a[1]) for a, b in zip(before, after))
+    assert after[0][0] - before[0][0] == pytest.approx(after[4][0] - before[4][0])
+    session.send("\x1a")
+    assert [a[2:4] for a in session.state["atoms"]] == before
+
+
+def test_delete_removes_the_selection():
+    assert marquee_all(Session("CC.CCC")).send("\x7f").smiles == ""
+
+
+def test_select_all_key_and_arrows_nudge_it():
+    session = Session("CC").send("\x01")
+    assert len(session.state["selected"]) == 2
+    x = session.atom(0)[2]
+    assert session.send("\x1b[C").atom(0)[2] == pytest.approx(x + 0.25)
+
+
+def test_a_click_clears_the_selection():
+    session = marquee_all(Session("CC"))
+    session.click(COLS - 3, ROWS - 4)
+    assert session.state["selected"] == []
+
+
+def test_selection_survives_undo_only_where_atoms_do():
+    session = Session().click(60, 20).send("\x01").click(90, 20)
+    session = session.send("\x1a")
+    assert all(editor._atom(session.state, i) for i in session.state["selected"])
+
+
+# keys act on the hotspot, as in the tables in chapter 5 of the ChemDraw 17.1 user guide
+
+
+@pytest.mark.parametrize("key, symbol", [("c", "C"), ("n", "N"), ("w", "N"), ("o", "O"), ("q", "O"), ("s", "S"), ("S", "Si"), ("p", "P"), ("f", "F"), ("l", "Cl"),
+                                         ("C", "Cl"), ("b", "Br"), ("B", "B"), ("i", "I"), ("h", "H"), ("k", "K"), ("N", "Na")])
+def test_atom_labels_from_the_table(key, symbol):
+    session = Session("CC").hover_atom(1).keys(key)
+    assert session.atom(1)[1] == symbol and session.atom(0)[1] == "C"
+
+
+@pytest.mark.parametrize("key, smiles", [("m", "CC"), ("e", "CCC"), ("A", "CC(C)=O"), ("P", "Cc1ccccc1"), ("E", "CC(=O)OC"), ("F", "CC(F)(F)F")])
+def test_atom_groups_from_the_table(key, smiles):
+    assert Session("CC").hover_atom(1).keys(key).smiles == canonical(smiles)
+
+
+# the kinds of carbon that the table tells apart, each with the atom to press on
+PRIMARY, SECONDARY, TERTIARY, AROMATIC = ("CC", 1), ("CCC", 1), ("CC(C)C", 1), ("c1ccccc1", 0)
+
+
+@pytest.mark.parametrize("key, start, smiles", [
+    ("1", PRIMARY, "CCC"), ("0", PRIMARY, "CCC"), ("1", AROMATIC, "Cc1ccccc1"),
+    ("2", PRIMARY, "CC(C)=O"), ("2", SECONDARY, "CC(C)=O"), ("2", TERTIARY, "CC(=O)C(C)(C)C"), ("2", AROMATIC, "CC(=O)c1ccccc1"),
+    ("3", PRIMARY, "Cc1ccccc1"), ("a", PRIMARY, "Cc1ccccc1"), ("3", SECONDARY, "CC(C)c1ccccc1"), ("3", AROMATIC, "c1ccc(-c2ccccc2)cc1"),
+    ("6", PRIMARY, "CC1CCCCC1"), ("6", SECONDARY, "CC1(C)CCCCC1"), ("6", TERTIARY, "CC(C)(C)C1CCCCC1"), ("6", AROMATIC, "c1ccc(C2CCCCC2)cc1"),
+    ("7", PRIMARY, "CC1CCCC1"), ("7", SECONDARY, "CC1(C)CCCC1"), ("7", AROMATIC, "c1ccc(C2CCCC2)cc1"),
+    ("8", PRIMARY, "C=CC"), ("9", PRIMARY, "CC(C)C"), ("9", SECONDARY, "CC(C)(C)C"), ("9", TERTIARY, "CC(C)C(C)(C)C"), ("9", AROMATIC, "CC(C)c1ccccc1"),
+    ("z", PRIMARY, "C#CCC"), ("z", AROMATIC, "C#Cc1ccccc1"),
+])
+def test_sprouting_from_each_kind_of_carbon(key, start, smiles):
+    session = Session(start[0]).hover_atom(start[1]).keys(key)
+    assert session.smiles == canonical(smiles)
+    assert session.keys("\x1a").smiles == canonical(start[0])  # however many atoms it took, one undo
+
+
+@pytest.mark.parametrize("key, kind", [("4", editor.WEDGE), ("5", editor.HASH)])
+def test_wedge_and_hash_sprout_from_the_hotspot(key, kind):
+    session = Session("CC").hover_atom(1).keys(key)
+    assert session.state["bonds"][-1] == [session.atom(1)[0], session.atom(2)[0], kind]
+    session = Session("c1ccccc1").hover_atom(0).keys(key)
+    assert session.state["bonds"][-1][2] == kind and len(session.state["atoms"]) == 8  # a new bond first, from a ring
+
+
+def test_methylidene_may_leave_a_wrong_valence_on_purpose():
+    assert Session(TERTIARY[0]).hover_atom(TERTIARY[1]).keys("8").smiles is None
+
+
+def test_the_hotspot_goes_on_to_the_sprouted_atom():
+    assert Session("CC").hover_atom(1).keys("1", "1", "1").smiles == "CCCCC"
+    assert Session("CC").hover_atom(1).keys("1", "o").smiles == "CCO"
+
+
+def test_repeated_zero_curls_into_a_ring_and_one_makes_a_zigzag():
+    assert Session("CC").hover_atom(1).keys(*"00000").smiles == "C1CCCCC1"
+    session = Session("CC").hover_atom(1).keys(*"11111")
+    atoms = session.state["atoms"]
+    assert session.smiles == "CCCCCCC" and min(np.hypot(a[2] - b[2], a[3] - b[3]) for i, a in enumerate(atoms) for b in atoms[:i]) > 0.9
+
+
+@pytest.mark.parametrize("key", list("3a67"))
+def test_holding_a_ring_key_makes_one_ring(key):
+    assert Chem.MolFromSmiles(Session("CC").hover_atom(1).send(key * 8).smiles).GetRingInfo().NumRings() == 1
+
+
+@pytest.mark.parametrize("key", list("456789"))
+def test_ring_keys_over_nothing_place_nothing_and_say_why(key):
+    session = Session().keys(key, key, key)
+    assert session.state["atoms"] == [] and "under the pointer" in session.state["message"]
+
+
+def test_a_key_over_nothing_leaves_the_last_atom_alone():
+    session = Session().click(60, 20).send(MOTION_FAR).keys("o")
+    assert session.smiles == "CC" and "under the pointer" in session.output
+
+
+def test_the_atom_just_drawn_has_the_hotspot_until_the_mouse_moves():
+    assert Session().click(60, 20).keys("o").smiles == "CO"
+
+
+def test_sprouting_leaves_the_tool_alone():
+    session = Session("CC").tool("double").hover_atom(1).keys("6")
+    assert session.state["tool"] == "bond" and session.state["bond"] == editor.DOUBLE
+
+
+@pytest.mark.parametrize("key, smiles", [("1", "CC"), ("2", "C=C"), ("3", "C#C")])
+def test_bond_order_keys(key, smiles):
+    assert Session("C=C").hover_bond(0, 1).keys(key).smiles == smiles
+
+
+def test_wedge_and_hash_keys_on_a_bond():
+    def carbon_methyl(session):
+        atoms = session.state["atoms"]
+        carbon = next(i for i, a in enumerate(atoms) if a[1] == "C" and len(editor._neighbours(session.state, a[0])) == 3)
+        return carbon, next(i for i, a in enumerate(atoms) if a[1] == "C" and i != carbon)
+    wedged, hashed = Session("CC(N)O"), Session("CC(N)O")
+    wedged.hover_bond(*carbon_methyl(wedged)).keys("w")
+    hashed.hover_bond(*carbon_methyl(hashed)).keys("h")
+    assert "@" in wedged.smiles and "@" in hashed.smiles and wedged.smiles != hashed.smiles
+
+
+def test_pressing_wedge_again_turns_it_round():
+    session = Session("CC").hover_bond(0, 1).keys("w")
+    first = session.state["bonds"][0][:2]
+    assert session.keys("w").state["bonds"][0][:2] == first[::-1]
+
+
+@pytest.mark.parametrize("key, smiles", [("a", "c1ccc2ccccc2c1"), ("z", "C1=Cc2ccccc2C1"), ("v", "c1ccc2c(c1)C2"), ("4", "c1ccc2c(c1)CC2"), ("5", "c1ccc2c(c1)CCC2"),
+                                         ("6", "c1ccc2c(c1)CCCC2"), ("7", "c1ccc2c(c1)CCCCC2"), ("8", "c1ccc2c(c1)CCCCCC2")])
+def test_ring_keys_fuse_on_a_bond(key, smiles):
+    assert Session("c1ccccc1").hover_bond(0, 1).keys(key).smiles == canonical(smiles)
+
+
+def test_the_same_key_means_different_things_on_an_atom_and_a_bond():
+    assert Session("CC").hover_atom(1).keys("3").smiles == canonical("Cc1ccccc1")
+    assert Session("CC").hover_bond(0, 1).keys("3").smiles == "C#C"
+
+
+@pytest.mark.parametrize("start, key", [(0, "r"), (0, "x"), (0, "d"), (0, "."), (0, "'"), (1, "d"), (1, "b"), (1, "B"), (1, "y"), (1, "H"), (1, "l"), (1, "c"), (1, "r"), (1, "f"), (1, "9")])
+def test_chemdraw_keys_for_what_this_editor_lacks_say_so_and_change_nothing(start, key):
+    session = Session("CCC")
+    (session.hover_bond(0, 1) if start else session.hover_atom(0)).keys(key)
+    assert session.smiles == "CCC" and "this editor doesn't" in session.state["message"]
+
+
+@pytest.mark.parametrize("key, action", [("x", ("bond", editor.SINGLE)), ("t", ("tool", "text")), (" ", ("tool", "select")), ("j", ("ring", "benzene")),
+                                         ("J", ("ring", "cyclopentadiene")), ("u", ("ring", 6)), ("U", ("ring", 5))])
+def test_over_nothing_keys_choose_tools(key, action):
+    session = Session("CC").send(MOTION_FAR).keys("\x1a" if key == "x" else key)
+    if key == "x":
+        session.tool("select").keys("x")
+    assert editor._is_active(session.state, action) and session.smiles == "CC"
+
+
+@pytest.mark.parametrize("key", list("XTeEgGlLkK"))
+def test_tools_this_editor_lacks_say_so(key):
+    assert "this editor doesn't" in Session().keys(key).state["message"]
+
+
+def test_u_then_a_click_makes_one_cyclohexane():
+    assert Session().keys("u").click(60, 20).smiles == "C1CCCCC1"
+
+
+@pytest.mark.parametrize("key", ["\x7f", "\x1b[3~", " "])
+def test_keys_that_remove_a_label_leave_carbon(key):
+    assert Session("CO").hover_atom(1).keys(key).smiles == "CC"
+    assert Session("C[NH3+]").hover_atom(1).keys(key).smiles == "CC"
+
+
+def test_delete_on_plain_carbon_or_a_bond_removes_it_and_space_does_not():
+    assert Session("CCC").hover_atom(0).keys("\x7f").smiles == "CC"
+    assert Session("CCC").hover_bond(0, 1).keys("\x7f").smiles == "C.CC"
+    assert Session("CCC").hover_atom(0).keys(" ").smiles == "CCC"
+    assert Session("CCC").hover_bond(0, 1).keys(" ").smiles == "CCC"
+
+
+def test_delete_needs_something_to_act_on():
+    assert "Point at" in Session().keys("\x7f").output
+
+
+def test_charge_keys():
+    assert Session("CN").hover_atom(1).keys("+").smiles == "C[NH3+]"
+    assert Session("CO").hover_atom(1).keys("-").smiles == "C[O-]"
+
+
+@pytest.mark.parametrize("key", ["\r", "="])
+def test_enter_and_equals_open_the_label_box(key):
+    assert Session("CC").hover_atom(0).keys(key).state["label"]
+
+
+@pytest.mark.parametrize("key", ["/", "?"])
+def test_properties_keys_open_the_menu_of_the_hotspot(key):
+    assert Session("CC").hover_atom(0).keys(key).state["menu"][:2] == ["context", "atom"]
+    assert Session("CC").hover_bond(0, 1).keys(key).state["menu"][:2] == ["context", "bond"]
+
+
+def test_a_letter_labels_every_selected_atom():
+    session = marquee_all(Session("CC(C)(C)C")).send(MOTION_FAR).keys("n")
+    assert {a[1] for a in session.state["atoms"]} == {"N"}
+    assert session.keys("\x1a").smiles == "CC(C)(C)C"
+
+
+def test_shift_click_adds_to_the_selection_and_click_replaces_it():
+    session = Session("CCC").tool("select")
+    col, row = session.cell(*session.atom(0)[2:4])
+    session.click(col, row)
+    assert session.state["selected"] == [session.atom(0)[0]]
+    col, row = session.cell(*session.atom(2)[2:4])
+    session.click(col, row, button=4)
+    assert session.state["selected"] == [session.atom(0)[0], session.atom(2)[0]]
+    session.click(col, row)
+    assert session.state["selected"] == [session.atom(2)[0]]
+
+
+def test_the_hotspot_looks_as_in_chemdraw():
+    atom = editor._marks(Session("CC").hover_atom(0).state, UI, [])
+    assert [m[0] for m in atom if m[0] == "spot"] == ["spot"]
+    bond = editor._marks(Session("CC").hover_bond(0, 1).state, UI, [])
+    assert any(m[0] == "line" and m[3] == list(editor.HOTSPOT) for m in json.loads(json.dumps(bond)))
+
+
+def test_a_key_prefers_the_pointer_to_the_arrow_choice():
+    session = Session("CC").keys("\t")
+    assert session.state["focus"][1] == session.atom(0)[0]
+    session.hover_atom(1).keys("n")
+    assert session.atom(1)[1] == "N" and session.atom(0)[1] == "C"
+
+
+def test_moving_the_mouse_takes_the_hotspot_from_the_arrows():
+    session = Session("CC").keys("\t").send(MOTION_FAR)
+    assert session.state["focus"] is None and session.keys("n").smiles == "CC"
+
+
+# without a mouse
+
+
+def test_arrows_go_from_atom_to_bond_to_atom():
+    session = Session("CCCCCCC").keys("\x1b[C")
+    kinds = [session.state["focus"][0]]
+    for _ in range(3):
+        kinds.append(session.keys("\x1b[C").state["focus"][0])
+    assert kinds == ["a", "b", "a", "b"]
+
+
+def test_shift_arrows_go_from_atom_to_atom():
+    session = Session("CCC").keys("\x1b[D")
     start = session.state["focus"]
-    session.send("\x1b[D")
-    assert session.state["focus"] != start
+    session.keys("\x1b[1;2C")
+    assert session.state["focus"][0] == "a" and session.state["focus"] != start
+
+
+def test_a_drawing_can_be_made_without_the_mouse():
+    session = Session().keys("\r").send("C").send("\r").keys("\x1b[C", "1", "1", "o")
+    assert session.smiles == "CCO"
 
 
 def test_tab_visits_atoms_then_bonds_and_wraps():
-    session = Session().keys("\r", "\r", "\x1b")
+    session = Session("CC")
     seen = [json.dumps(session.send("\t").state["focus"]) for _ in range(3)]
     assert len(set(seen)) == 3 and json.dumps(session.send("\t").state["focus"]) == seen[0]
     assert json.dumps(session.send("\x1b[Z").state["focus"]) == seen[-1]
 
 
-def test_delete_keys_remove_the_chosen_atom_and_its_bonds():
-    for key in ("x", "\x7f", "\x1b[3~"):
-        session = Session().keys("\r", "\r", "\r", key)
-        assert session.smiles == "CC"
-
-
-def test_delete_needs_a_choice():
-    assert "Choose" in Session().keys("x").output
-
-
-def test_charge_keys():
-    assert Session().keys("n", "+").smiles == "[NH4+]"
-    assert Session().keys("o", "~").smiles == "[OH-]"
+def test_triple_bonds_are_straight():
+    session = Session("CC").hover_atom(1).keys("z")
+    (ax, ay), (bx, by), (cx, cy) = [(a[2], a[3]) for a in session.state["atoms"][1:4]]
+    assert abs((bx - ax) * (cy - by) - (by - ay) * (cx - bx)) < 1e-6
 
 
 def test_undo_and_redo_step_through_every_change():
-    session = Session().keys("\r", "\r", "n")
-    session.send("u")
+    session = Session("CC").hover_atom(1).keys("1", "n")
+    session.send("\x1a")
+    assert session.smiles == "CCC"
+    session.send("\x1a")
     assert session.smiles == "CC"
-    session.send("u")
-    assert session.smiles == "C"
-    session.keys("r", "r")
-    assert session.smiles == "CN"
-    assert "Nothing" in session.keys("r").output
+    session.keys("\x19", "\x19")
+    assert session.smiles == "CCN"
+    assert "Nothing" in session.keys("\x19").output
+
+
+def test_undo_gives_the_hotspot_back_to_the_atom_under_the_pointer():
+    assert Session("CC").hover_atom(1).keys("1", "\x1a", "o").smiles == "CO"
 
 
 def test_new_changes_clear_redo():
-    session = Session().keys("\r", "\r", "u", "\r", "r")
-    assert session.state["redo"] == []
+    assert Session("CC").hover_atom(1).keys("1", "\x1a", "1").state["redo"] == []
 
 
 def test_undo_is_limited_so_the_state_stays_small():
-    session = Session()
+    session = Session("CC").hover_atom(1)
     for _ in range(50):
-        session.keys("\r", "x")
+        session.keys("1")
     assert len(session.state["undo"]) <= editor.MAX_UNDO
 
 
-def test_esc_starts_a_new_piece():
-    assert Session().keys("\r", "\r", "\x1b", "\r").smiles == "C.CC"
+def test_esc_backs_out_one_level_at_a_time():
+    session = Session().click(60, 20)
+    assert session.keys("\x1b").state["focus"] is None and session.state["tool"] == "bond"
+    assert session.keys("\x1b").state["tool"] == "select"
+
+
+@pytest.mark.parametrize("key, zoom", [("\x1b[18~", 1.2), ("\x1b[19~", 1 / 1.2)])
+def test_function_keys_zoom(key, zoom):
+    assert Session().keys(key).state["view"][2] == pytest.approx(editor.DEFAULT_ZOOM * zoom)
+
+
+def test_function_keys_fit_and_reset():
+    session = Session("CCCCCCCC").keys("]", "]", "\x1b[15~")
+    assert session.state["view"][2] == editor.DEFAULT_ZOOM
+    assert session.keys("\x1b[17~").state["view"][2] <= editor.DEFAULT_ZOOM
 
 
 def test_typing_a_smiles():
@@ -233,35 +734,17 @@ def test_typing_a_smiles():
 
 def test_a_bad_smiles_stays_in_the_entry_with_a_message():
     session = Session().keys("/").send("C(").send("\r")
-    assert session.state["entry"] == "C(" and session.state["message"]
+    assert session.state["entry"] == "C(" and session.state["message"] and session.state["message"][:30] in session.output
 
 
 def test_esc_leaves_the_entry_without_changing_anything():
-    session = Session().keys("\r", "/").send("CCC").send("\x1b")
-    assert session.smiles == "C" and session.state["entry"] is None
+    session = Session("CC").keys("/").send("CCC").send("\x1b")
+    assert session.smiles == "CC" and session.state["entry"] is None
 
 
 def test_entry_takes_keys_as_text_not_commands():
     session = Session().keys("/").send("q").send("\x7f").send("n")
     assert session.status == editor.CONTINUE and session.state["entry"] == "n"
-
-
-def test_help_shows_and_hides():
-    session = Session().keys("?")
-    assert session.state["help"] and "Drag from an atom" in session.output and "a=T" not in session.output
-    assert not session.keys("x").state["help"]
-
-
-def test_every_key_in_the_help_text_exists():
-    for key in "c n o s p f i h l b - = # w d 3 4 5 6 7 a + ~ x m e u r t v / ? q".split():
-        assert key in editor.KEYS_HELP
-    for key in "cnospfih":
-        assert key in editor._ELEMENT_KEYS
-
-
-def test_leaving_help_clears_its_text():
-    session = Session().keys("\r", "?")
-    assert "\x1b[2J" in session.keys("?").output
 
 
 def test_zoom_keys_stay_in_range():
@@ -275,251 +758,323 @@ def test_zoom_keys_stay_in_range():
 
 
 def test_a_long_chain_keeps_the_new_atom_on_the_canvas():
-    session = Session().keys("]", "]", "]", "]")
+    session = Session("CC").keys("]", "]", "]", "]").hover_atom(1)
     for _ in range(40):
-        session.send("\r")
+        session.send("1")
     atom = next(a for a in session.state["atoms"] if a[0] == session.state["focus"][1])
     col, row = session.cell(atom[2], atom[3])
-    assert 1 <= col <= COLS and UI.top < row <= UI.top + UI.canvas_rows
+    assert UI.left < col <= COLS and UI.top < row <= UI.top + UI.canvas_rows
 
 
-def test_ctrl_c_and_q_finish_with_the_smiles():
-    for key in ("q", "\x03"):
-        status, state, output = editor.step(Session("CCO").text, "", key, COLS, ROWS, CW, CH)
-        assert (status, output) == (editor.QUIT, "CCO")
+@pytest.mark.parametrize("key", ["\x03", "\x11"])
+def test_quit_keys_finish_with_the_smiles(key):
+    status, _, output = editor.step(Session("CCO").text, "", key, COLS, ROWS, CW, CH)
+    assert (status, output) == (editor.QUIT, "CCO")
 
 
 def test_quitting_an_empty_drawing_prints_nothing():
-    assert editor.step(Session().text, "", "q", COLS, ROWS, CW, CH)[::2] == (editor.QUIT, "")
+    assert editor.step(Session().text, "", "\x11", COLS, ROWS, CW, CH)[::2] == (editor.QUIT, "")
 
 
 def test_quitting_an_invalid_drawing_says_so():
-    status, _, output = editor.step(overvalent().text, "", "q", COLS, ROWS, CW, CH)
+    status, _, output = editor.step(overvalent().text, "", "\x11", COLS, ROWS, CW, CH)
     assert status == editor.FAILED and "valence" in output.lower()
 
 
-# with the mouse
+# the label box
 
 
-def test_click_in_empty_space_places_an_atom_where_clicked():
-    session = Session().click(40, 20)
-    atom = session.atom(0)
-    assert session.cell(atom[2], atom[3]) == (40, 20)
+def test_text_tool_on_an_atom_opens_a_box_there():
+    session = Session("CC").tool("text").click_atom(0)
+    assert session.state["label"]["target"] == ["a", session.atom(0)[0]]
+    col, row = UI.to_cell(session.state, *session.atom(0)[2:4])
+    assert f"\x1b[{int(row) + 1};" in session.output
 
 
-def test_atom_tool_places_and_sets_elements():
-    session = Session().button("N").click(40, 20)
-    assert session.smiles == "N"
-    session.button("O").click_atom(0)
-    assert session.smiles == "O"
+def test_enter_opens_the_box_on_the_atom_under_the_pointer():
+    assert Session("CC").hover_atom(0).keys("\r").state["label"]
 
 
-def test_bond_tool_click_on_an_atom_grows():
-    assert Session().click(40, 20).click_atom(0).smiles == "CC"
+@pytest.mark.parametrize("text, smiles", [("N", "CN"), ("Cl", "CCl"), ("cl", "CCl"), ("OH", "CO"), ("NH2", "CN"), ("OMe", "COC"), ("ome", "COC"),
+                                          ("CF3", "CC(F)(F)F"), ("CO2H", "CC(=O)O"), ("COOH", "CC(=O)O"), ("CO2Me", "CC(=O)OC"), ("CN", "CC#N"),
+                                          ("NO2", "C[N+](=O)[O-]"), ("Ac", "CC(C)=O"), ("Ph", "Cc1ccccc1"), ("Bn", "CCc1ccccc1"),
+                                          ("tBu", "CC(C)(C)C"), ("Ts", "CS(=O)(=O)c1ccc(C)cc1"), ("Boc", "CC(=O)OC(C)(C)C"), ("Si", "C[SiH3]")])
+def test_labels_become_real_atoms(text, smiles):
+    session = Session("CC").hover_atom(1).keys("\r").label(text)
+    assert session.smiles == canonical(smiles) and session.state["label"] is None
 
 
-def test_clicking_a_bond_steps_through_its_orders():
-    session = Session().click(40, 20).click_atom(0)
-    for expected in ("C=C", "C#C", "CC"):
-        session.click_bond(0, 1)
-        assert session.smiles == expected
+@pytest.mark.parametrize("text", ["Ac", "Pr", "Ts", "Cn"])
+def test_a_group_wins_over_an_element_of_the_same_name(text):
+    session = Session("CC").hover_atom(1).keys("\r").label(text)
+    assert all(atom[1] in ("C", "H", "N", "O", "S") for atom in session.state["atoms"])
 
 
-def test_double_bond_tool_sets_a_clicked_bond():
-    session = Session().click(40, 20).click_atom(0).button("=").click_bond(0, 1)
-    assert session.smiles == "C=C"
+@pytest.mark.parametrize("text, smiles", [("OMe", "COc1ccccc1"), ("CF3", "FC(F)(F)c1ccccc1"), ("Ph", "c1ccc(-c2ccccc2)cc1")])
+def test_a_group_on_a_ring_atom_becomes_a_substituent(text, smiles):
+    session = Session().tool("benzene").click(60, 20).hover_atom(0).keys("\r").label(text)
+    assert session.smiles == canonical(smiles) and session.atom(0)[1] == "C"
 
 
-def test_drag_from_an_atom_draws_a_bond_at_a_snapped_angle():
-    session = Session().click(40, 20)
-    start = session.cell(session.atom(0)[2], session.atom(0)[3])
-    session.drag(start, (start[0] + 3, start[1] - 1))
-    a, b = session.atom(0), session.atom(1)
-    angle = np.degrees(np.arctan2(b[3] - a[3], b[2] - a[2]))
-    assert session.smiles == "CC" and abs(angle / 30 - round(angle / 30)) < 1e-6
-    assert abs(np.hypot(b[2] - a[2], b[3] - a[3]) - 1) < 1e-6
+def test_a_group_key_on_a_ring_atom_becomes_a_substituent():
+    assert Session().tool("benzene").click(60, 20).hover_atom(0).keys("F").smiles == canonical("FC(F)(F)c1ccccc1")
 
 
-def test_drag_onto_another_atom_joins_them():
-    session = Session().click(40, 20).click(60, 20)
-    assert session.smiles == "C.C"
-    session.drag(session.cell(*session.atom(0)[2:4]), session.cell(*session.atom(1)[2:4]))
-    assert session.smiles == "CC" and len(session.state["atoms"]) == 2
+def test_an_element_on_a_ring_atom_replaces_it():
+    assert Session().tool("benzene").click(60, 20).hover_atom(0).keys("n").smiles == "c1ccncc1"
 
 
-def test_closing_a_ring_by_dragging():
-    session = Session().keys(*["\r"] * 6)
-    assert session.smiles == "CCCCCC"
-    session.drag(session.cell(*session.atom(5)[2:4]), session.cell(*session.atom(0)[2:4]))
-    assert session.smiles == "C1CCCCC1" and len(session.state["atoms"]) == 6
-
-
-def test_drag_from_empty_space_draws_a_bond_with_both_atoms():
-    assert Session().drag((40, 20), (46, 20)).smiles == "CC"
-
-
-def test_atom_tool_drag_ends_in_its_element():
-    session = Session().button("O").click(40, 20).button("N")
-    session.drag(session.cell(*session.atom(0)[2:4]), (50, 20))
-    assert session.smiles == "NO"
-
-
-def test_drag_shows_a_preview_and_changes_nothing_until_release():
-    session = Session().click(40, 20).send("\x1b[<35;100;30M")
-    start = session.cell(*session.atom(0)[2:4])
-    before = np.asarray(picture(session.output))
-    session.send(f"\x1b[<0;{start[0]};{start[1]}M")
-    session.send(f"\x1b[<32;{start[0] + 8};{start[1]}M")
-    assert len(session.state["atoms"]) == 1
-    assert (np.asarray(picture(session.output)) != before).any()
-
-
-def test_right_click_deletes_in_any_tool():
-    session = Session().click(40, 20).click_atom(0).click_atom(1, button=2)
-    assert session.smiles == "C"
-    session = Session().click(40, 20).click_atom(0).click_bond(0, 1, button=2)
-    assert session.smiles == "C.C"
-
-
-def test_erase_tool_deletes_atoms_and_bonds():
-    session = Session("CCC").button("Erase").click_atom(2)
-    assert session.smiles == "CC"
-    session.click_bond(0, 1)
-    assert session.smiles == "C.C"
-
-
-def test_ring_tool_in_empty_space_is_centred_on_the_click():
-    session = Session().button("Benzene").click(60, 20)
-    xs, ys = [a[2] for a in session.state["atoms"]], [a[3] for a in session.state["atoms"]]
-    assert session.smiles == "c1ccccc1"
-    assert session.cell(sum(xs) / 6, sum(ys) / 6) == (60, 20)
-
-
-@pytest.mark.parametrize("label, sides", [("3", 3), ("4", 4), ("5", 5), ("6", 6), ("7", 7)])
-def test_rings_are_regular_with_bonds_of_one(label, sides):
-    session = Session().button(label).click(60, 20)
+def test_a_group_points_away_from_the_molecule_with_bonds_of_one():
+    session = Session("CC").hover_atom(1).keys("\r").label("OMe")
     state = session.state
     by_id = {a[0]: a for a in state["atoms"]}
-    lengths = [np.hypot(by_id[b[0]][2] - by_id[b[1]][2], by_id[b[0]][3] - by_id[b[1]][3]) for b in state["bonds"]]
-    assert len(lengths) == sides and max(lengths) - min(lengths) < 1e-6 and abs(lengths[0] - 1) < 1e-6
+    for begin, end, _ in state["bonds"]:
+        assert np.hypot(by_id[begin][2] - by_id[end][2], by_id[begin][3] - by_id[end][3]) == pytest.approx(1, abs=0.1)
+    atoms = state["atoms"]
+    assert min(np.hypot(a[2] - b[2], a[3] - b[3]) for i, a in enumerate(atoms) for b in atoms[:i]) > 0.9
 
 
-def test_fusing_benzene_onto_a_bond_makes_naphthalene():
-    session = Session().button("Benzene").click(60, 20)
-    bond = session.state["bonds"][0]
-    ids = [a[0] for a in session.state["atoms"]]
-    session.click_bond(ids.index(bond[0]), ids.index(bond[1]))
-    assert session.smiles == "c1ccc2ccccc2c1" and len(session.state["atoms"]) == 10
+def test_a_label_in_empty_space_places_it_there():
+    session = Session().tool("text").click(60, 20).label("Ph")
+    assert session.smiles == "c1ccccc1"
+    session = Session().tool("text").click(60, 20).label("N")
+    assert session.smiles == "N" and session.cell(*session.atom(0)[2:4]) == (60, 20)
 
 
-def test_a_fused_ring_goes_to_the_side_without_atoms():
-    session = Session().button("6").click(60, 20)
-    centre = np.mean([[a[2], a[3]] for a in session.state["atoms"]], axis=0)
-    session.click_bond(0, 1)
-    new = session.state["atoms"][6:]
-    assert len(new) == 4
-    a, b = session.atom(0), session.atom(1)
-    middle = np.array([(a[2] + b[2]) / 2, (a[3] + b[3]) / 2])
-    assert all(np.dot(np.array([n[2], n[3]]) - middle, middle - centre) > 0 for n in new)
+def test_an_unknown_label_stays_open_and_says_so():
+    session = Session("CC").hover_atom(0).keys("\r").label("Zork")
+    assert session.state["label"]["text"] == "Zork" and "isn't an element" in session.state["message"] and session.smiles == "CC"
 
 
-def test_three_fused_rings_reuse_the_atoms_they_meet():
-    # phenalene-like closure: a new ring whose corners land on existing atoms must not stack atoms on them
-    session = Session().button("6").click(60, 20)
-    session.click_bond(0, 1)
-    session.click_bond(1, 2)
-    atoms = session.state["atoms"]
-    closest = min(np.hypot(a[2] - b[2], a[3] - b[3]) for i, a in enumerate(atoms) for b in atoms[:i])
-    assert closest > 0.5
+def test_label_box_is_cancelled_by_esc_and_takes_keys_as_text():
+    session = Session("CC").hover_atom(0).keys("\r").send("q").send("\x7f").send("x").send("\x1b")
+    assert session.status == editor.CONTINUE and session.state["label"] is None and session.smiles == "CC"
 
 
-def test_ring_tool_on_an_atom_attaches_it():
-    session = Session().click(40, 20).click_atom(0).button("Benzene").click_atom(1)
-    assert session.smiles == canonical("CCc1ccccc1")
+def test_a_label_can_be_undone_in_one_step():
+    assert Session("CC").hover_atom(1).keys("\r").label("Ph").keys("\x1a").smiles == "CC"
 
 
-def test_move_tool_moves_an_atom_and_undo_puts_it_back():
-    session = Session("CC").button("Move")
-    before = session.atom(0)[2:4]
-    start = session.cell(*before)
-    session.drag(start, (start[0], start[1] + 5))
-    assert session.atom(0)[2:4] != before and session.smiles == "CC"
-    session.send("u")
-    assert session.atom(0)[2:4] == before
+def test_labels_can_run_out_of_room_without_breaking():
+    session = Session("C" * 198).hover_atom(0).keys("\r").label("Ts")
+    assert len(session.state["atoms"]) <= editor.MAX_ATOMS and "at most" in session.output
 
 
-def test_move_tool_pans_in_empty_space():
-    session = Session("CC").button("Move")
-    x, y = session.state["view"][:2]
-    session.drag((100, 30), (90, 30))
-    assert session.state["view"][0] == pytest.approx(x + 10 / session.state["view"][2]) and session.state["view"][1] == y
+# menus
 
 
-def test_wheel_zooms_about_the_pointer():
-    session = Session().click(40, 20)
-    before = session.cell(*session.atom(0)[2:4])
-    zoom = session.state["view"][2]
-    session.send("\x1b[<64;40;20M")
-    assert session.state["view"][2] > zoom and session.cell(*session.atom(0)[2:4]) == before
-    session.send("\x1b[<65;40;20M\x1b[<65;40;20M")
-    assert session.state["view"][2] < zoom
+def test_every_menu_title_opens_its_menu():
+    for start, _, index in UI.titles:
+        session = Session().click(start + 2, 1)
+        assert session.state["menu"] == ["bar", index]
+        assert editor.MENUS[index][1][0][0] in session.output
+
+
+def test_menu_items_run():
+    assert Session("CC").hover_atom(0).keys("\x7f").menu("Edit", "Undo").smiles == "CC"
+    session = Session().menu("File", "Load SMILES...")
+    assert session.state["entry"] == ""
+    assert len(Session("CC").menu("Edit", "Select All").state["selected"]) == 2
+    assert Session("CCC").keys("]").menu("View", "Reduce").state["view"][2] == pytest.approx(editor.DEFAULT_ZOOM)
+    assert Session().menu("Help", "Keys and Mouse").state["help"]
+
+
+def test_quit_is_in_the_file_menu():
+    session = Session("CCO").menu("File", "Quit and print SMILES")
+    assert session.status == editor.QUIT and session.output == "CCO"
+
+
+def test_clean_up_is_in_the_structure_menu():
+    assert Session("CCO").menu("Structure", "Clean Up").smiles == "CCO"
+
+
+def test_moving_along_the_bar_switches_menus_and_clicking_away_closes():
+    session = Session().click(3, 1)
+    other = UI.titles[2]
+    session.send(f"\x1b[<35;{other[0] + 2};1M")
+    assert session.state["menu"] == ["bar", 2]
+    session.click(COLS - 3, ROWS - 4)
+    assert session.state["menu"] is None and session.state["atoms"] == []
+
+
+def test_clicking_an_open_title_closes_it():
+    assert Session().click(3, 1).click(3, 1).state["menu"] is None
+
+
+def test_a_menu_covers_the_drawing_in_cells_with_a_background_and_clears_after():
+    session = Session("CCO").click(3, 1)
+    assert "\x1b[48;2;" in session.output and "Load SMILES" in session.output
+    closed = session.send("\x1b").output
+    assert "\x1b[2K" in closed and "Load SMILES" not in closed
+
+
+def test_menus_work_from_the_keyboard():
+    session = Session("CCO").keys("\x1b[21~")
+    assert session.state["menu"] == ["bar", 0]
+    session.keys("\x1b[C")
+    assert session.state["menu"] == ["bar", 1]
+    session.keys("\x1b[B", "\r")  # Undo, with nothing to undo
+    assert session.state["menu"] is None and "Nothing" in session.output
+
+
+def test_right_click_opens_the_menu_for_what_is_under_it():
+    session = Session("CC")
+    assert session.click_atom(0, button=2).state["menu"][:2] == ["context", "atom"]
+    session = Session("CC")
+    assert session.click_bond(0, 1, button=2).state["menu"][:2] == ["context", "bond"]
+    assert Session("CC").click(COLS - 3, ROWS - 4, button=2).state["menu"][:2] == ["context", "empty"]
+
+
+def test_right_click_changes_nothing_by_itself():
+    assert Session("CC").click_atom(0, button=2).smiles == "CC"
+
+
+def test_context_menu_items_act_on_what_was_clicked():
+    assert Session("CC").click_atom(1, button=2).pick("N").smiles == "CN"
+    assert Session("CC").click_atom(1, button=2).pick("Delete").smiles == "C"
+    assert Session("CN").click_atom(1, button=2).pick("Charge +").smiles == "C[NH3+]"
+    assert Session("CC").click_bond(0, 1, button=2).pick("Double").smiles == "C=C"
+    assert Session("CC").click_bond(0, 1, button=2).pick("Delete").smiles == "C.C"
+    assert Session("CC").click_atom(1, button=2).pick("Label...").state["label"]
+
+
+def test_a_context_menu_near_the_edge_stays_on_the_screen():
+    session = Session("CC").click(COLS, ROWS - 3, button=2)
+    col, row, width = editor._menu_box(session.state, UI)
+    assert col + width <= COLS and row + len(editor._menu_items(session.state)) <= ROWS
+
+
+# the palette
+
+
+def test_every_palette_button_chooses_its_tool_and_is_marked():
+    for index, (name, action, _) in enumerate(editor.PALETTE):
+        session = Session().tool(name)
+        state = session.state
+        assert editor._is_active(state, action)
+        assert next(i for i, entry in enumerate(editor.PALETTE) if editor._is_active(state, entry[1])) == index
+
+
+def test_hovering_a_button_names_it():
+    col, row = UI.per_row * UI.button_cols - 1, UI.top + 1
+    session = Session().send(f"\x1b[<35;{col};{row}M")
+    assert session.state["tip"] == 1 and "Eraser" in session.output
+
+
+def test_palette_is_an_image_and_only_sent_when_it_changes():
+    session = Session()
+    assert layer(session.output, "palette") is not None
+    assert layer(session.click(60, 20).output, "palette") is None
+    assert layer(session.tool("wedge").output, "palette") is not None
+
+
+def test_active_button_looks_different():
+    plain = np.asarray(layer(Session().output, "palette"))
+    chosen = np.asarray(layer(Session().tool("benzene").output, "palette"))
+    assert (plain != chosen).any()
+
+
+def test_icons_are_all_different():
+    names = editor._ICON_NAMES
+    image = np.asarray(Image.open(BytesIO(editor.editor_icons.palette_image(names, 2, 40, 40, None, None, "dark"))))
+    tiles = [image[i // 2 * 40:i // 2 * 40 + 40, i % 2 * 40:i % 2 * 40 + 40].tobytes() for i in range(len(names))]
+    assert len(set(tiles)) == len(names) and all(np.frombuffer(t, np.uint8).any() for t in tiles)
+
+
+@pytest.mark.parametrize("cols, rows", [(50, 14), (60, 20), (80, 24), (120, 40), (200, 60)])
+def test_palette_fits_any_window(cols, rows):
+    ui = editor.Layout(cols, rows)
+    assert ui.palette_rows <= ui.canvas_rows and ui.left < cols and ui.canvas_cols >= 20
+    spots = {(ui.palette_at(col, row)) for col in range(ui.left) for row in range(rows)}
+    assert spots - {None} == set(range(len(editor.PALETTE)))
+
+
+# help
+
+
+def test_help_shows_and_hides_leaving_the_drawing_in_place():
+    session = Session("CCO").keys("?")
+    assert session.state["help"] and "Selection" in session.output and "a=T" not in session.output and "a=d" not in session.output
+    assert not session.keys("x").state["help"] and session.smiles == "CCO"
+
+
+def test_every_key_in_the_help_text_exists():
+    tables = [editor._ATOM_ELEMENTS, editor._ATOM_GROUPS, editor._ATOM_SPROUTS, editor._BOND_KINDS, editor._BOND_RINGS, editor._GENERIC_TOOLS]
+    for key in {key for table in tables for key in table} - {" "}:
+        assert re.search(rf"(?<!\S){re.escape(key)}(?!\S)", editor.KEYS_HELP), key
+    assert all(len(line) <= 110 for line in editor.KEYS_HELP.split("\n"))
+
+
+def test_a_click_closes_help_without_drawing():
+    assert Session().keys("?").click(60, 20).state["atoms"] == []
+
+
+# what is sent
+
+
+def test_hovering_sends_only_the_small_overlay():
+    session = Session("CN(C)C/C=C/C(=O)Nc1cc2c(Nc3ccc(F)c(Cl)c3)ncnc2cc1O[C@H]1CCOC1")
+    structure_frame = session.output
+    session.hover_atom(0)
+    assert layer(session.output, "structure") is None and layer(session.output, "overlay") is not None
+    assert len(session.output) < len(structure_frame) / 4
 
 
 def test_hover_redraws_only_when_the_target_changes():
-    session = Session().click(40, 20).send("\x1b[<35;100;30M")
+    session = Session().click(60, 20).send(MOTION_FAR)
     assert session.state["hover"] is None
-    assert session.send("\x1b[<35;101;30M").output == ""
+    assert session.send(f"\x1b[<35;{COLS - 3};{ROWS - 4}M").output == ""
     col, row = session.cell(*session.atom(0)[2:4])
-    assert PLACE.search(session.send(f"\x1b[<35;{col};{row}M").output) and session.state["hover"]
+    assert session.send(f"\x1b[<35;{col};{row}M").state["hover"] and session.output
     assert session.send(f"\x1b[<35;{col};{row}M").output == ""
 
 
+def test_leaving_an_atom_removes_the_overlay():
+    session = Session("CC").hover_atom(0)
+    output = session.send(MOTION_FAR).output
+    assert "a=d,d=I" in output and "a=T" not in output
+
+
 def test_moving_the_pointer_keeps_a_message():
-    session = Session().keys("x")
+    session = Session().keys("6")
     assert session.state["message"]
-    assert session.send("\x1b[<35;100;30M").state["message"]
+    assert session.send(MOTION_FAR).state["message"]
 
 
 def test_pixel_reports_land_on_the_same_atom():
-    session = Session().click(40, 20)
-    col, row = session.cell(*session.atom(0)[2:4])
+    session = Session().click(60, 20)
+    col, row = session.cell(*session.atom(1)[2:4])
     x, y = (col - 1) * CW + CW // 2, (row - 1) * CH + CH // 2
     _, text, _ = editor.step(session.text, "", f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m", COLS, ROWS, CW, CH, pixels=True)
-    assert editor.analyse(editor.decode(text))[0] == "CC"
+    assert editor.analyse(editor.decode(text))[0] == "CCC"
 
 
-def test_every_button_can_be_clicked():
-    for button in UI.buttons:
-        session = Session("CCO").keys("\t")
-        session.click(button[1] + 2, button[0] + 1)
-        assert session.status in (editor.CONTINUE, editor.QUIT)
+def test_images_are_stacked_under_cells_that_have_a_background():
+    output = Session("CC").hover_atom(0).output + Session("CC").output
+    for z in re.findall(r"z=(-?\d+)", output):
+        assert int(z) < -1_073_741_824
 
 
-def test_buttons_show_the_active_tool():
-    assert "\x1b[7m N " in Session().button("N").output
-    assert "\x1b[7m = " in Session().button("=").output
-    assert "\x1b[7m Benzene " in Session().button("Benzene").output
-
-
-@pytest.mark.parametrize("cols", [50, 60, 80, 120, 200])
-def test_toolbar_wraps_and_stays_on_the_screen(cols):
-    ui = editor.Layout(cols, 40)
-    assert all(start + width <= cols for _, start, width, _, _ in ui.buttons)
-    spots = [(row, col) for row, start, width, _, _ in ui.buttons for col in range(start, start + width)]
-    assert len(spots) == len(set(spots)) and ui.canvas_rows > 4
-
-
-# the picture
+def test_overlay_sits_above_the_molecule():
+    assert editor._Z["overlay"] > editor._Z["structure"]
 
 
 def test_atoms_are_drawn_where_clicks_find_them():
-    session = Session().button("O").click(40, 20)
-    image = np.asarray(picture(session.output)).astype(int)
-    assert image.shape[:2] == (UI.canvas_rows * CH, COLS * CW)
+    session = Session().click(60, 20).hover_atom(1).keys("o").keys("\x1b")
+    image = np.asarray(Image.open(BytesIO(editor.draw_structure(session.state, UI, "dark"))).convert("RGBA")).astype(int)
+    assert image.shape[:2] == (UI.canvas_rows * CH, UI.canvas_cols * CW)
     red = (image[:, :, 0] > 200) & (image[:, :, 1] < 170) & (image[:, :, 3] > 200)
     ys, xs = np.nonzero(red)
-    col, row = xs.mean() / CW + 1, ys.mean() / CH + UI.top + 1
-    assert abs(col - 40) < 2 and abs(row - 20) < 1.5
+    want = session.cell(*session.atom(1)[2:4])
+    assert abs(xs.mean() / CW + UI.left + 1 - want[0]) < 2 and abs(ys.mean() / CH + UI.top + 1 - want[1]) < 1.5
+
+
+def test_marks_are_drawn_on_the_atom_they_mark():
+    session = Session("CC").hover_atom(0)
+    image = np.asarray(layer(session.output, "overlay")).astype(int)
+    ys, xs = np.nonzero(image[:, :, 3] > 40)
+    want = session.cell(*session.atom(0)[2:4])
+    assert abs(xs.mean() / CW + UI.left + 1 - want[0]) < 1.5 and abs(ys.mean() / CH + UI.top + 1 - want[1]) < 1
 
 
 def test_mapping_holds_at_other_cell_sizes_and_zooms():
@@ -527,44 +1082,41 @@ def test_mapping_holds_at_other_cell_sizes_and_zooms():
         ui = editor.Layout(100, 40, *cell)
         s = editor.new_state()
         x, y = ui.to_model(s, 30.5, 18.5)
-        status, text, output = editor.step("", "", f"\x1b[<0;31;19M\x1b[<0;31;19m", 100, 40, *cell)
+        _, text, _ = editor.step("", "", "\x1b[<0;31;19M\x1b[<0;31;19m", 100, 40, *cell)
         assert editor.decode(text)["atoms"][0][2:4] == pytest.approx([x, y])
+        col, row = ui.to_cell(s, x, y)
+        assert (col, row) == pytest.approx((30.5, 18.5))
 
 
-def test_placement_fills_the_canvas_and_keeps_the_cursor():
-    keys = PLACE.search(Session().click(40, 20).output)[1]
-    assert f"c={COLS}," in keys and f"r={UI.canvas_rows}," in keys and "C=1," in keys and "i=" in keys
+def test_canvas_image_fills_the_canvas_and_keeps_the_cursor():
+    keys = next(k for k, _ in CHUNK.findall(Session().output) if f"i={editor._IDS['structure']}" in k or f"i={editor._IDS['structure'] + 1}" in k)
+    assert f"c={UI.canvas_cols}," in keys and f"r={UI.canvas_rows}," in keys and "C=1," in keys
 
 
-def test_each_frame_places_a_new_image_then_deletes_the_old():
-    first = Session().click(40, 20)
-    second_output = first.click_atom(0).output
-    placed = int(re.search(r"a=T[^;]*i=(\d+)", second_output)[1])
-    deleted = int(re.search(r"a=d,d=I,i=(\d+)", second_output)[1])
-    assert placed != deleted and second_output.index("a=T") < second_output.index("a=d")
+def test_a_new_image_goes_up_before_the_old_comes_down():
+    session = Session().click(60, 20)
+    output = session.click_atom(1).output
+    placed = [int(i) for i in re.findall(r"a=T[^;]*?i=(\d+)", output) if int(i) in (7001, 7002)]
+    deleted = [int(i) for i in re.findall(r"a=d,d=I,i=(\d+)", output) if int(i) in (7001, 7002)]
+    assert placed and deleted and placed[0] != deleted[0]
+    assert output.index(f"i={placed[0]},") < output.index(f"a=d,d=I,i={deleted[0]}")
 
 
 def test_frames_are_synchronised():
-    output = Session().click(40, 20).output
+    output = Session().click(60, 20).output
     assert output.startswith("\x1b[?2026h") and output.endswith("\x1b[?2026l")
 
 
-def test_a_wedge_is_drawn_and_sets_chirality():
-    session = Session("CC(N)O")
-    assert "@" not in session.smiles
-    atoms = session.state["atoms"]
-    carbon = next(i for i, a in enumerate(atoms) if a[1] == "C" and len(editor._neighbours(session.state, a[0])) == 3)
+def test_a_wedge_is_drawn():
+    plain = Session("CC(N)O")
+    wedged = Session("CC(N)O").tool("wedge")
+    atoms = wedged.state["atoms"]
+    carbon = next(i for i, a in enumerate(atoms) if a[1] == "C" and len(editor._neighbours(wedged.state, a[0])) == 3)
     methyl = next(i for i, a in enumerate(atoms) if a[1] == "C" and i != carbon)
-
-    def drawing(state):
-        state["focus"] = state["hover"] = None
-        return np.asarray(Image.open(BytesIO(editor.draw(state, UI, "dark", []))))
-
-    plain = drawing(session.state)
-    wedged = Session("CC(N)O").button("Wedge").click_bond(carbon, methyl)
-    hashed = Session("CC(N)O").button("Hash").click_bond(carbon, methyl)
-    assert "@" in wedged.smiles and "@" in hashed.smiles and wedged.smiles != hashed.smiles
-    assert (drawing(wedged.state) != plain).any() and (drawing(hashed.state) != drawing(wedged.state)).any()
+    wedged.click_bond(carbon, methyl)
+    first = np.asarray(Image.open(BytesIO(editor.draw_structure(plain.state, UI, "dark"))))
+    second = np.asarray(Image.open(BytesIO(editor.draw_structure(wedged.state, UI, "dark"))))
+    assert "@" in wedged.smiles and (first != second).any()
 
 
 def test_loading_keeps_stereochemistry():
@@ -573,23 +1125,24 @@ def test_loading_keeps_stereochemistry():
         assert Session(smiles).smiles == canonical(smiles)
 
 
-def test_tidy_keeps_the_molecule_including_its_stereo():
+def test_clean_up_keeps_the_molecule_including_its_stereo():
     for smiles in ["C[C@H](N)C(=O)O", "C/C=C/C", "CC(=O)Oc1ccccc1C(=O)O"]:
-        assert Session(smiles).keys("t").smiles == canonical(smiles)
+        assert Session(smiles).keys("\x0b").smiles == canonical(smiles)
 
 
-def test_tidy_refuses_an_invalid_drawing_and_can_be_undone():
-    assert "valid" in overvalent().keys("t").output
-    session = Session().keys("\r", "\r").keys("t", "u")
-    assert session.smiles == "CC"
+def test_clean_up_refuses_an_invalid_drawing_and_can_be_undone():
+    assert "valid" in overvalent().keys("\x0b").output
+    assert Session("CC").keys("\x0b", "\x1a").smiles == "CC"
 
 
-def test_an_invalid_drawing_is_still_drawn_and_named():
+def test_an_invalid_drawing_is_still_drawn_with_a_red_box():
     session = overvalent()
     smiles, problem, wrong = editor.analyse(session.state)
     assert smiles is None and "valence" in problem.lower() and wrong == [0]
-    assert "red" in session.output
-    image = np.asarray(picture(session.output)).astype(int)
+    assert "red boxes" in session.output
+    marks = editor._marks(session.state, UI, wrong)
+    assert any(mark[0] == "box" and mark[2] == list(editor.RED) for mark in json.loads(json.dumps(marks)))
+    image = np.asarray(Image.open(BytesIO(editor.draw_overlay(session.state, UI, marks)))).astype(int)
     assert ((image[:, :, 0] > 180) & (image[:, :, 2] < 170) & (image[:, :, 3] > 60)).any()
 
 
@@ -599,23 +1152,22 @@ def test_details_the_editor_cant_keep_are_mentioned():
 
 
 def test_status_shows_formula_and_weight():
-    output = Session("CCO").send("\x1b[<35;100;30M").keys("\t").output
+    output = Session("CCO").output
     assert "C2H6O" in output and "MW 46.1" in output
 
 
 def test_light_theme_changes_the_ink():
     def ink(theme):
         _, _, output = editor.step("", "CCCC", "", COLS, ROWS, CW, CH, theme=theme)
-        pixels = np.asarray(picture(output)).astype(int)
+        pixels = np.asarray(layer(output, "structure")).astype(int)
         return pixels[pixels[:, :, 3] == 255][:, :3].sum(axis=1).mean()
     assert ink("dark") > 400 > ink("light")
 
 
 def test_a_huge_window_is_drawn_smaller():
     _, _, output = editor.step("", "CCCC", "", 400, 200, 40, 80)
-    image = picture(output)
+    image = layer(output, "structure")
     assert image.width * image.height <= editor.MAX_PIXELS * 1.01
-    assert PLACE.search(output)[1].startswith("a=T,f=100,c=400,r=")
 
 
 def test_a_small_window_says_so():
@@ -623,22 +1175,23 @@ def test_a_small_window_says_so():
     assert status == editor.CONTINUE and "too small" in output and editor.decode(text)
 
 
-def test_resizing_clears_the_screen():
-    session = Session().click(40, 20)
+def test_resizing_clears_the_screen_and_sends_every_image_again():
+    session = Session().click(60, 20)
     _, _, output = editor.step(session.text, "", "", COLS + 10, ROWS, CW, CH)
-    assert "\x1b[2J" in output
+    assert "\x1b[2J" in output and layer(output, "palette") is not None and layer(output, "structure") is not None
 
 
 def test_ctrl_l_redraws():
-    session = Session().click(40, 20)
+    session = Session().click(60, 20)
     assert session.send("").output == ""
-    assert "\x1b[2J" in session.send("\x0c").output
+    output = session.send("\x0c").output
+    assert "\x1b[2J" in output and layer(output, "palette") is not None
 
 
 def test_too_many_atoms_is_a_message_not_an_error():
-    session = Session()
+    session = Session("CC").hover_atom(1)
     for _ in range(editor.MAX_ATOMS + 3):
-        session.send("\r")
+        session.send("1")
     assert len(session.state["atoms"]) == editor.MAX_ATOMS and "at most" in session.state["message"]
     session.send("a")
     assert len(session.state["atoms"]) == editor.MAX_ATOMS
@@ -649,44 +1202,68 @@ def test_too_many_atoms_is_a_message_not_an_error():
 
 def test_input_split_across_reads_is_put_back_together():
     session = Session()
-    session.send("\x1b[<0;40")
+    session.send("\x1b[<0;60")
     assert session.state["partial"] and session.state["atoms"] == []
-    session.send(";20M\x1b[<0;40;20m")
-    assert session.state["partial"] == "" and session.smiles == "C"
+    session.send(";20M\x1b[<0;60;20m")
+    assert session.state["partial"] == "" and session.smiles == "CC"
 
 
 def test_a_lone_esc_is_the_esc_key():
-    session = Session().keys("\r")
+    session = Session().click(60, 20)
     assert session.send("\x1b").state["focus"] is None
 
 
 def test_unknown_sequences_are_ignored():
     session = Session("CC")
-    session.send("\x1b[15~\x1b[1;5P\x1bOQ\x01\x02\xff")
+    session.send("\x1b[15~\x1b[1;5P\x1bOQ\x02\xff")
     assert session.smiles == "CC" and session.status == editor.CONTINUE
 
 
+@pytest.mark.parametrize("key", ["\x1a", "\x7f"])
+def test_the_atom_going_in_the_middle_of_a_drag_ends_the_drag(key):
+    session = Session().click(60, 20).click(90, 20)
+    col, row = session.cell(*session.atom(3)[2:4])
+    session.send(f"\x1b[<35;{col};{row}M\x1b[<0;{col};{row}M\x1b[<32;{col + 8};{row}M")
+    target = session.state["press"]["target"]
+    assert target == ["a", session.atom(3)[0]]
+    state = session.state
+    state["hover"] = target  # the pointer was on the atom when the key came
+    session.text = editor.encode(state)
+    session.send(key).send(f"\x1b[<32;{col + 9};{row}M").send(f"\x1b[<0;{col + 9};{row}m")
+    assert session.status == editor.CONTINUE and session.state["press"] is None
+
+
+def test_a_state_pointing_at_missing_atoms_does_no_harm():
+    state = Session("CC").state
+    state.update(focus=["a", 999], hover=["a", 999], last=["b", 999, 998], selected=[999], menu_target=["a", 999])
+    state["press"] = {"cell": [50, 20], "view": [0.0, 0.0, 6.0], "model": [0.0, 0.0], "last": [0.0, 0.0], "target": ["a", 999], "moved": True,
+                      "mode": "draw", "ids": [999]}
+    state["drag"] = [1.0, 1.0]
+    status, _, _ = editor.step(editor.encode(state), "", "n+x\x1b[<32;50;20M", COLS, ROWS, CW, CH)
+    assert status == editor.CONTINUE
+
+
 def test_several_events_in_one_read_all_count():
-    assert Session().send("\r\r\r\r").smiles == "CCCC"
+    assert Session("CC").hover_atom(1).send("1111").smiles == "CCCCCC"
 
 
 def test_state_stays_small_for_a_large_molecule():
-    assert len(Session("CN(C)C/C=C/C(=O)Nc1cc2c(Nc3ccc(F)c(Cl)c3)ncnc2cc1O[C@H]1CCOC1").keys(*["\r"] * 40).text) < editor.MAX_STATE
+    assert len(Session("CN(C)C/C=C/C(=O)Nc1cc2c(Nc3ccc(F)c(Cl)c3)ncnc2cc1O[C@H]1CCOC1").hover_atom(0).keys(*["1"] * 40).text) < editor.MAX_STATE
 
 
 def test_random_input_never_breaks_it():
     rng = random.Random(20261101)
-    keys = list("cnospfihlb-=#wd34567a+~xmeurtv/?") + ["\r", " ", "\t", "\x1b", "\x7f", "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", "\x1b[1;2A",
-                                                       "\x1b[Z", "\x1b[3~", "[", "]", "\x0c"]
+    keys = list("abcdefghijklmnopqrstuvwxyzABCEFHJKLNPSTUXZ0123456789+-=./?'") + ["\r", " ", "\t", "\x1b", "\x7f", "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", "\x1b[1;2A",
+                                                         "\x1b[Z", "\x1b[3~", "\x1b[21~", "\x1b[15~", "\x1b[17~", "\x1b[18~", "\x1b[19~", "[", "]", "\x0c", "\x01", "\x1a", "\x19", "\x0b"]
     for _ in range(6):
         session = Session(rng.choice(["", "CCO", "c1ccccc1C(=O)O", "C[C@H](N)C(=O)O"]))
-        for _ in range(150):
-            if rng.random() < 0.5:
+        for _ in range(200):
+            if rng.random() < 0.4:
                 session.send(rng.choice(keys))
             else:
                 col, row = rng.randint(1, COLS), rng.randint(1, ROWS)
-                code = rng.choice([0, 0, 2, 32, 35, 64, 65])
-                session.send(f"\x1b[<{code};{col};{row}{rng.choice('Mm')}")
+                code = rng.choice([0, 0, 0, 1, 2, 4, 8, 32, 33, 35, 64, 65])
+                session.send(f"\x1b[<{code};{col};{row}{rng.choice('MMm')}")
             editor.decode(session.text)
             if session.status != editor.CONTINUE:
                 break
@@ -700,7 +1277,7 @@ def pack(state):
 
 
 def good():
-    return Session("CCO").keys("\t", "u").state
+    return Session("CCO").keys("\t", "\x7f", "\x1a").state
 
 
 @pytest.mark.parametrize("change", [
@@ -717,13 +1294,23 @@ def good():
     lambda s: s["bonds"].append(list(s["bonds"][0])),
     lambda s: s.update(atoms=[[i + 1, "C", 0, 0, 0] for i in range(editor.MAX_ATOMS + 1)], bonds=[], next=editor.MAX_ATOMS + 2),
     lambda s: s.update(tool="shell"),
-    lambda s: s.update(element="Xx"),
+    lambda s: s.update(menu=["bar", 99]),
+    lambda s: s.update(menu=["context", "shell", 1, 1]),
+    lambda s: s.update(menu=["context", "atom", 1e9, 1]),
+    lambda s: s.update(selected="x"),
+    lambda s: s.update(selected=[True, "x"]),
+    lambda s: s.update(label={"target": None, "at": [0, 0], "text": "x" * 99}),
+    lambda s: s.update(label={"target": ["z", 1], "at": [0, 0], "text": ""}),
+    lambda s: s.update(pointer=[1e300, 0]),
+    lambda s: s.update(flips={"palette": 7}),
+    lambda s: s.update(shown={"elsewhere": "x"}),
     lambda s: s.update(bond=True),
     lambda s: s.update(ring=99),
     lambda s: s.update(view=[0, 0, 1e9]),
     lambda s: s.update(view=[0, 0]),
     lambda s: s.update(focus=["z", 1]),
-    lambda s: s.update(press={"cell": [1], "view": [0, 0, 4], "model": [0, 0], "target": None, "moved": False}),
+    lambda s: s.update(press={"cell": [1], "view": [0, 0, 4], "model": [0, 0], "last": [0, 0], "target": None, "moved": False, "mode": "draw", "ids": []}),
+    lambda s: s.update(press={"cell": [1, 1], "view": [0, 0, 4], "model": [0, 0], "last": [0, 0], "target": None, "moved": False, "mode": "shell", "ids": []}),
     lambda s: s.update(entry=5),
     lambda s: s.update(entry="x" * (editor.MAX_ENTRY + 1)),
     lambda s: s.update(undo=[[[], [], 1]] * (editor.MAX_UNDO + 1)),
@@ -772,7 +1359,7 @@ def split(response):
 def test_endpoint_runs_a_session(client):
     status, state, output = split(client.post("/api/v1/edit", data=form(smiles="CCO", cell_width="10", cell_height="20")))
     assert status == editor.CONTINUE and "a=T" in output
-    status, state, output = split(client.post("/api/v1/edit", data=form(state=state, events="71")))  # q
+    status, state, output = split(client.post("/api/v1/edit", data=form(state=state, events="11")))  # Ctrl-Q
     assert (status, output) == (editor.QUIT, "CCO")
 
 

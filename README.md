@@ -86,24 +86,36 @@ It chooses the first of these that the terminal supports. `-m` or `$MOLTERM_MODE
 
 ### Drawing a molecule
 
-`molterm edit` is a molecular editor inside the terminal, for Kitty and Ghostty, with the mouse and the keyboard. Press `?` in it for
-every control.
+`molterm edit` is a molecular editor inside the terminal, for Kitty and Ghostty, laid out like a desktop drawing program such as
+ChemDraw. Press `?` in it for every control.
 
 ```sh
 ./molterm edit                                 # start empty
 ./molterm edit 'CC(=O)Oc1ccccc1C(=O)O'         # start from a SMILES
-smiles=$(./molterm edit)                       # q prints the SMILES on stdout, so it can be captured
+smiles=$(./molterm edit)                       # Ctrl-Q prints the SMILES on stdout, so it can be captured
 ```
 
-- **Mouse:** click the toolbar to choose an element, bond, ring or tool. Click to place atoms, grow bonds and fuse rings. Drag from an
-  atom to draw a bond, at 30 degree steps or onto another atom. Right-click deletes, and the wheel zooms.
-- **Keyboard:** arrows and Tab choose an atom or bond. Enter grows a bond. Letters set elements, `- = # w d` set bonds, digits and `a`
-  add rings, `u` and `r` undo and redo, `t` tidies the layout, `/` reads a SMILES, and `q` quits.
-- The SMILES, formula, MW and cLogP update below the drawing as you go. Atoms RDKit can't accept, such as an oxygen with three bonds,
-  are marked in red, so a drawing can be invalid on its way to being finished. Quitting then prints the problem and exits with 1.
+- **Tool palette, on the left:** selection, eraser, pan, text, bonds, charges and rings, drawn as icons. A tool stays chosen until you
+  pick another.
+- **Drawing:** click for a whole bond, click an atom to grow one, click a bond to change it, or drag, in steps of 15 degrees or onto
+  another atom. Ring tools fuse onto a bond, share an atom (a spiro link on a ring atom; Alt+click sprouts instead) or land in empty space, and show where they will go before you click.
+- **Keys follow the atom, bond and generic tables in chapter 5 of the ChemDraw 17.1 User Guide.** They act on the hotspot, the atom or
+  bond under the pointer, marked as there with a light blue circle and green dot or a light blue bar. A key means what the table says
+  for what is there: on an atom `3` sprouts a phenyl and `n` makes nitrogen, on a bond `3` makes it triple and `a` fuses a benzene, and
+  over nothing keys only choose tools, such as `u` for cyclohexane. After a sprout the hotspot moves to the new atom, so `1` `1` `o`
+  builds a chain. After a ring or group it clears until the pointer moves, so a held key can't scatter copies. Arrows move the hotspot
+  instead, atom to bond to atom, so a mouse is optional.
+- **Text tool, or Enter on an atom:** a box opens at the atom for an element or a group such as OMe, CF3, CO2H, NO2, Ph, Boc or Ts.
+  Groups become real atoms. A group replaces an atom at the end of a chain, and is added as a substituent to a ring atom.
+- **Selection:** drag across empty space to select, drag to move, Delete to remove, and arrows to nudge.
+- **Menus:** a menu bar (also F10), and right-click for the menu of what is under the pointer.
+- The SMILES, formula, MW and cLogP update below the drawing. Atoms RDKit can't accept, such as an oxygen with three bonds, get a red
+  box, so a drawing can be invalid on its way to being finished. Quitting then prints the problem, exits with 1 and loses the drawing.
 
 The client only passes raw input to the server, and the server keeps no sessions: the drawing travels with each request and is checked
-when it comes back. So every action needs a round trip and a new image. It needs the same tools as the rest of the client, plus `od`.
+when it comes back. So every action needs a round trip. The palette, molecule and marks are separate images, and only those that
+changed are sent: hovering costs 1 to 9 KB, and a change to the molecule about 60 KB. It needs the same tools as the rest of the client,
+plus `od`.
 
 The client also reads the terminal's background, to pick `theme` and blend Sixel's edges, and its cell size, because Sixel's
 pixels are the screen's and can't be scaled. It needs only `sh`, `curl`, `stty` and `dd` (the editor also `od`).
@@ -122,6 +134,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/story.py` | The guided session. Each finding it states is checked against the real output by `tests/test_medchem.py`. |
 | `server/graphics.py` | RDKit draws the whole molecule, labels included, as a transparent image cropped to whole columns. Kitty and iTerm2 get a PNG with only its width given, so the terminal keeps its shape with any cell size. Sixel is encoded here, at the terminal's real cell size. |
 | `server/client/molterm.sh` | The terminal client, served at `/molterm`: asks the terminal what it supports and chooses a mode, then draws one molecule or runs the guided session. |
+| `server/editor_icons.py` | The editor's tool palette, drawn as one image with Pillow. |
 | `server/editor.py` | The molecular editor: all of its input handling, geometry and drawing. The drawing is kept as plain atoms and bonds, since it often isn't valid chemistry while it's being made, and RDKit reads it as a molblock for each frame. |
 | `server/static/kitty.js` | The `/kitty` page: a line editor and the guided session, written for restty. It uses the same commands and story as the client, but not its code. |
 
@@ -157,8 +170,12 @@ xterm with Sixel on dark and light backgrounds, xterm without Sixel (Braille), t
 
 `molterm demo` was run the same way, against the dev server: in Kitty through `curl | sh`, with Enter, typed commands, `clear` and
 `q`; in xterm with Sixel; and in xterm without it, where it fell back to Braille. `molterm play` has only run under the fake terminal.
-`molterm edit` was run in real Kitty with a real pointer: clicks, a drag with its preview, toolbar buttons, a fused ring, right-click,
-the wheel, keys, help, a typed SMILES, tidy and quitting with stdout redirected. It has not been run in Ghostty.
+`molterm edit` was run in real Kitty with a real pointer: palette tips and choices, ring previews, fusing, hotkeys on the atom under the
+pointer, the label box, a marquee, moving a selection, undo, menus and a right-click menu covering the drawing, help, Clean Up, and quitting
+with stdout redirected. 
+It was then run in real Ghostty 1.4 on Linux, on a virtual display: the pointer landing on atoms and bonds, the hotspot, ring previews replacing
+each other, ring keys doing nothing over nothing, six fast presses of `6` giving one ring, sprouting a chain, labels, a key over nothing changing
+nothing, help covering the drawing, and quitting.
 `tests/test_editor.py` drives it with raw input, including random input, tampered states, and checks that atoms are drawn where clicks find them.
 
 `/kitty` was checked in Chrome: a full automated run at normal speed, typing with Backspace, Tab, Up and a mistake, the scrollback,
@@ -178,11 +195,19 @@ Open issues:
 - restty (0.3.0, which calls itself early-release) keeps about 10 MB of decoded images. A larger image never shows, so `/kitty`
   draws at 10 pixels per column instead of 20, and each new image pushes out the oldest: in a long session, drawings far back in
   the scrollback become blank. A real terminal has much more room.
-- `molterm edit` hasn't been seen in Ghostty, so its image replacement and pixel mouse reports there are unconfirmed.
+- `molterm edit` hasn't been seen in Ghostty on macOS, where a Retina display could change how pixel mouse reports line up with cells.
+- `molterm edit` takes its keys from ChemDraw 17.1's guide, and versions differ: Shift+F for CF3 comes from a later ChemDraw guide. ChemDraw itself
+  wasn't available to compare with, so where the guide is unclear these are readings of it: `0` curling round, what a "primary" carbon's sprout
+  replaces, and the wedge on a tertiary carbon, which goes into the widest gap rather than vertically. `9` on an aromatic carbon gives an isopropyl
+  group, which the table doesn't cover. Beyond the table, Delete on a plain carbon or a bond removes it.
+- Keys in ChemDraw's tables for what `molterm edit` lacks say so and change nothing: R, X and D labels, attachment points, atom numbers, dashed, bold
+  and wavy bonds, double bond position, chair rings, and the chain, bracket, arrow, symbol, pen and query tools. `/` and `?` on an atom or bond open
+  its menu rather than a properties dialog. It has no captions, rotation handles or copy and paste, and terminals can't report Shift+Ctrl+Z, so
+  redo is Ctrl-Y, and Clean Up is Ctrl-K.
 - Each action in `molterm edit` is a request to the server, so a slow connection makes it lag. Inside tmux it stops with a message,
   since tmux doesn't pass Kitty graphics on. With the mouse in use, selecting text needs the terminal's own override, usually Shift.
 - `molterm edit` keeps elements, charges, Kekulé bonds, wedges and 2D positions. A loaded SMILES with isotopes or unusual bonds loses
-  them, and says so. Dashed and wavy bonds and R groups aren't available, and it holds at most 200 atoms and 30 undo steps.
+  them, and says so. It holds at most 200 atoms and 30 undo steps.
 - xterm cuts a Sixel image off at 1000 x 1000 pixels by default, so `grid` is clipped in `molterm demo` there.
 - Below 40 columns, as on a small phone, the commands still draw for 40, so a wide drawing can run past the edge of `/kitty`.
   Typing on a phone's on-screen keyboard has not been tried on a real device.

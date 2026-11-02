@@ -101,10 +101,11 @@ def _png(image):
     return buffer.getvalue()
 
 
-def kitty_sequence(png, cols, rows=None, image_id=None, move_cursor=True):
+def kitty_sequence(png, cols, rows=None, image_id=None, move_cursor=True, z=None):
     """Wrap a PNG in Kitty escape sequences that place it at the cursor, then move the cursor to the next line.
 
-    The editor gives `rows` as well, to fill an exact area, an `image_id` so it can replace the image, and keeps the cursor still.
+    The editor gives `rows` as well, to fill an exact area, an `image_id` so it can replace the image, a `z` for stacking, and keeps
+    the cursor still.
     """
     payload = base64.b64encode(png).decode("ascii")
     chunks = [payload[i:i + CHUNK_SIZE] for i in range(0, len(payload), CHUNK_SIZE)]
@@ -114,6 +115,7 @@ def kitty_sequence(png, cols, rows=None, image_id=None, move_cursor=True):
         keys = "q=2,"
         if index == 0:
             extra = (f"r={rows}," if rows else "") + (f"i={image_id}," if image_id else "") + ("" if move_cursor else "C=1,")
+            extra += f"z={z}," if z is not None else ""
             keys = f"a=T,f=100,c={cols},{extra}q=2,"
         more = int(index < len(chunks) - 1)
         sequences.append(f"\x1b_G{keys}m={more};{chunk}\x1b\\")
