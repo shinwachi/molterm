@@ -21,7 +21,7 @@ usage: molterm [-m mode] [-t theme] [-c cols] [-r rows] [-v] <SMILES>
        molterm [-m mode] [-t theme] [-c cols] [-v] demo|play
        molterm [-t theme] [-v] [-b row,col,rows,cols] [-T title] edit [SMILES]
        molterm [-t theme] [-v] tui ['SMILES name' | 'ro:SMILES name' ...]
-  -m  auto, kitty, iterm, sixel, octant or braille (default auto, or \$MOLTERM_MODE)
+  -m  auto, kitty, iterm, sixel, octant, braille or ascii (default auto, or \$MOLTERM_MODE)
   -t  dark or light, to suit the background (default: ask the terminal)
   -c  most columns to use   -r  most rows to use
   -v  say which mode was chosen, on stderr
@@ -159,7 +159,7 @@ columns() {
 say() { printf '%s\n' "$1" | fold -s -w "$(($(columns) - 1))"; }
 
 run_line() {
-    case $mode in braille|octant) display=text ;; *) display=$mode ;; esac
+    case $mode in braille|octant|ascii) display=text ;; *) display=$mode ;; esac
     set -- -sS -G --data-urlencode "line=$1" --data-urlencode "display=$display" --data-urlencode "cols=$(columns)"
     [ $have_selection = 1 ] && set -- "$@" --data-urlencode "selection=$selection"
     [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
@@ -357,7 +357,7 @@ if [ "$mode" = sixel ]; then
     [ -n "$cell_width" ] && set -- "$@" --data-urlencode "cell_width=$cell_width"
 fi
 case $mode in
-    braille|octant) [ -t 1 ] && set -- "$@" --data-urlencode "color=1" ;;
+    braille|octant|ascii) [ -t 1 ] && set -- "$@" --data-urlencode "color=1" ;;
 esac
 
 body=$(curl "$@" -w '\n%{http_code}' "$url/api/v1/render.txt") || exit 1

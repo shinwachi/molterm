@@ -169,9 +169,8 @@ def test_endpoint_returns_an_image(client):
 
 
 def test_endpoint_themes_differ(client):
-    dark, light = (client.get("/api/v1/render.txt", query_string={"input": "CCO", "mode": "kitty", "theme": t}).data
-                   for t in graphics.THEMES)
-    assert dark != light
+    drawn = [client.get("/api/v1/render.txt", query_string={"input": "CCO", "mode": "kitty", "theme": t}).data for t in graphics.THEMES]
+    assert len(set(drawn)) == len(graphics.THEMES)
 
 
 def test_endpoint_rejects_an_unknown_theme(client):

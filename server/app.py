@@ -12,6 +12,7 @@ import medchem
 import molecule
 import render as renderer
 import samples
+import showcase as showcase_script
 import story
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +59,11 @@ def kitty():
     completions = sorted({*medchem.COMMANDS, *medchem.ALL_NAMES, *medchem.PROPERTY_NAMES})
     return render_template("kitty.html", page="kitty", steps=story.STEPS, completions=completions, host=request.host_url.rstrip("/"),
                            **SERVICE)
+
+
+@app.route("/showcase")
+def showcase():
+    return render_template("showcase.html", page="showcase", **SERVICE)
 
 
 @app.route("/vendor/<path:name>")
@@ -251,6 +257,21 @@ def tui():
     except (molecule.ParseError, editor.StateError) as e:
         return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
     return f"{status} {state}\n{output}", 200, plain
+
+
+@app.route("/api/v1/showcase")
+def showcase_frames():
+    """The automated demo, for a window of ?cols=&rows=&cell_width=&cell_height=. Each frame has `caption`, `output` (what to print), `pointer`
+    ([col, row] in cells, or null), `click`, `key` and `pause` (milliseconds to wait afterwards)."""
+    try:
+        cols, rows, _, cell_width, cell_height, _, _ = terminal_form(request.args)
+        if not cell_width or not cell_height:
+            raise molecule.ParseError("bad_request", "Give cell_width and cell_height.")
+        return jsonify(frames=showcase_script.frames(cols, rows, cell_width, cell_height))
+    except molecule.ParseError as e:
+        return jsonify(error={"code": e.code, "message": e.message}), 400
+    except showcase_script.ShowcaseError as e:
+        return jsonify(error={"code": "bad_request", "message": str(e)}), 400
 
 
 @app.route("/api/v1/render", methods=["POST"])

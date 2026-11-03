@@ -7,8 +7,10 @@ import numpy as np
 from PIL import Image
 from rdkit.Chem import GetPeriodicTable, Mol
 from rdkit.Chem.Draw import rdMolDraw2D
+from rdkit.Chem.Draw.rdMolDraw2D import PrepareMolForDrawing
 
 import braille
+import asciiart
 import octant
 
 DEFAULT_COLS = 80
@@ -16,9 +18,9 @@ DEFAULT_ROWS = 30
 COLS_RANGE = (10, 240)
 ROWS_RANGE = (5, 120)
 
-MODES = ("braille", "octant")
+MODES = ("braille", "octant", "ascii")
 DEFAULT_MODE = "braille"
-_GLYPHS = {"braille": braille, "octant": octant}
+_GLYPHS = {"braille": braille, "octant": octant, "ascii": asciiart}
 
 SUPERSAMPLE = 4  # RDKit pixels per dot, per axis
 INK_LEVEL = 128  # a pixel is ink when its darkest channel is below this, so pure colours count as well as black
@@ -28,6 +30,7 @@ CRAMPED_BOND_DOTS = 6  # a canvas that forces bonds below this loses detail
 
 SUPERSCRIPTS = str.maketrans("0123456789+-", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻")
 SUBSCRIPTS = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
+_PLAIN = str.maketrans("₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "01234567890123456789+-")  # for ASCII, whose H2N is plain
 
 # Terminal colours rather than fixed RGB, so they follow the terminal's theme, light or dark.
 ANSI_COLORS = {"O": 31, "N": 34, "S": 33, "P": 35, "F": 32, "Cl": 32, "Br": 32, "I": 32}
@@ -101,7 +104,7 @@ def mean_bond_length(mol):
     ) / mol.GetNumBonds()
 
 
-def _rasterize(mol, cols, rows):
+def _rasterize(mol, cols, rows, bond_dots=MAX_BOND_DOTS):
     """Draw the bonds without labels; return the dot bitmap, cell colours and each atom's (col, row) in cells."""
     dot_w, dot_h = braille.CELL_WIDTH * SUPERSAMPLE, braille.CELL_HEIGHT * SUPERSAMPLE
     drawer = rdMolDraw2D.MolDraw2DCairo(cols * dot_w, rows * dot_h)
@@ -112,7 +115,7 @@ def _rasterize(mol, cols, rows):
     options.bondLineWidth = SUPERSAMPLE
     mean_bond = mean_bond_length(mol)
     if mean_bond > 0:
-        options.fixedBondLength = MAX_BOND_DOTS * SUPERSAMPLE / mean_bond
+        options.fixedBondLength = bond_dots * SUPERSAMPLE / mean_bond
     options.padding = 0.08
     # RDKit's default preparation adds a hydrogen at stereocentres, which would draw as an unlabelled stub.
     # Wedges are off because at this size a hashed wedge's thin strokes fall below DOT_COVERAGE and the bond vanishes.
@@ -222,6 +225,8 @@ def _render_unbonded(mol, cols, rows, mode):
     lines, tints, labels, col = [[]], [[]], [], 0
     for atom in mol.GetAtoms():
         text = _label_text(atom)[0]
+        if mode == "ascii":
+            text = text.translate(_PLAIN)
         if col and col + len(text) > cols:
             if len(lines) == rows:
                 break
@@ -238,14 +243,41 @@ def _render_unbonded(mol, cols, rows, mode):
                      [(tint + [None] * width)[:width] for tint in tints], labels, mode)
 
 
+def _ascii_bond_dots(mol, cols, rows):
+    """The largest bond in the list that fits the canvas, since larger is far easier to read in ASCII."""
+    conformer, mean_bond = mol.GetConformer(), mean_bond_length(mol)
+    points = [conformer.GetAtomPosition(index) for index in range(mol.GetNumAtoms())]
+    wide = (max(p.x for p in points) - min(p.x for p in points)) / mean_bond
+    tall = (max(p.y for p in points) - min(p.y for p in points)) / mean_bond
+    margin = 0.84  # RDKit's padding, and room for labels
+    return next((dots for dots in asciiart.BOND_DOTS
+                 if wide * dots / braille.CELL_WIDTH <= cols * margin and tall * dots / braille.CELL_HEIGHT <= rows * margin), asciiart.BOND_DOTS[-1])
+
+
+def _ascii(mol, cols, rows):
+    """As _rasterize, for ASCII: return the grid, cell colours and each atom's (col, row) in cells. Bonds come out in kekulized form."""
+    _, colors, positions = _rasterize(mol, cols, rows, _ascii_bond_dots(mol, cols, rows))
+    drawn = PrepareMolForDrawing(mol, kekulize=True, addChiralHs=False, wedgeBonds=False)
+    bonds = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx(), round(b.GetBondTypeAsDouble())) for b in drawn.GetBonds()]
+    # a dot's position is its middle, while a character's row and column are counted to its middle in the drawing below
+    centred = [(x - 0.5, y - 0.5) for x, y in positions]
+    colors = [[None] * cols for _ in range(rows)]
+    return asciiart.draw(bonds, centred, rows, cols), colors, positions
+
+
 def render(mol: Mol, cols=DEFAULT_COLS, rows=DEFAULT_ROWS, mode=DEFAULT_MODE, highlight=frozenset()):
     """Render a molecule with a 2D conformer into at most cols x rows characters; `highlight` holds atom indices to mark."""
     if not mol.GetNumBonds():
         return _render_unbonded(mol, cols, rows, mode)
     glyphs = _GLYPHS[mode]
-    bitmap, colors, positions = _rasterize(mol, cols, rows)
-    grid = glyphs.bitmap_to_grid(bitmap)
+    if mode == "ascii":
+        grid, colors, positions = _ascii(mol, cols, rows)
+    else:
+        bitmap, colors, positions = _rasterize(mol, cols, rows)
+        grid = glyphs.bitmap_to_grid(bitmap)
     colors = [[code if char != glyphs.BLANK_CHAR else None for char, code in zip(g, c)] for g, c in zip(grid, colors)]
     _highlight_bonds(grid, colors, mol, positions, highlight, glyphs.BLANK_CHAR)
     labels = _place_labels(grid, colors, mol, positions, highlight)
+    if mode == "ascii":
+        grid = [[char.translate(_PLAIN) for char in row] for row in grid]
     return Rendering(*_crop(grid, colors, labels, glyphs.BLANK_CHAR), mode, _mean_bond_dots(mol, positions))

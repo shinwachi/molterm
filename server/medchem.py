@@ -27,7 +27,7 @@ RED, GREEN, YELLOW, CYAN, BOLD, DIM = 31, 32, 33, renderer.ANSI_HIGHLIGHT, 1, 90
 TEXT = "text"
 DISPLAYS = (TEXT, graphics.KITTY, graphics.ITERM, graphics.SIXEL)
 IMAGE_BACKGROUND = (0x11, 0x11, 0x13)  # what Sixel's edges blend into: the .term background, unless the client reports its own
-_IMAGE_INK = {"dark": {BOLD: "#eeeeee", CYAN: graphics.HIGHLIGHT}, "light": {BOLD: "#1a1a1a", CYAN: "#00737a"}}
+_IMAGE_INK = {"dark": {BOLD: "#eeeeee", CYAN: graphics.HIGHLIGHT}, "light": {BOLD: "#1a1a1a", CYAN: "#00737a"}, "mono": {BOLD: "#000000", CYAN: "#000000"}}
 
 # name: (SMILES, what it is known for). Each structure's InChIKey was matched to this name on PubChem.
 COMPOUNDS = {

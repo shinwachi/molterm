@@ -365,3 +365,11 @@ def test_a_box_reports_cancel_to_any_host():
 def test_ctrl_c_without_a_box_still_prints_the_smiles():
     status, text, _ = editor.step("", "CCO", "", COLS, ROWS, CW, CH)
     assert editor.step(text, "", "\x03", COLS, ROWS, CW, CH)[::2] == (editor.QUIT, "CCO")
+
+
+def test_moving_to_another_tile_clears_the_message():
+    b = board.new_state(board.parse_items("CCO one\nCCC two"))
+    b["message"], b["cursor"] = "Something happened.", 0
+    grid = board.Grid(120, 38)
+    assert board._handle_list(b, grid, ("mouse", 35, 45.5, 5.5, False), 120, 38, (10, 20, False), False) is False
+    assert b["cursor"] == 1 and b["message"] == ""

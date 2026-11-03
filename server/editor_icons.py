@@ -7,7 +7,8 @@ from PIL import Image, ImageDraw
 
 _OVERSAMPLE = 4
 _COLOURS = {"dark": {"ink": (240, 239, 236, 255), "hover": (58, 58, 55, 255), "active": (57, 135, 229, 255), "on_active": (255, 255, 255, 255)},
-            "light": {"ink": (29, 29, 27, 255), "hover": (220, 218, 211, 255), "active": (42, 120, 214, 255), "on_active": (255, 255, 255, 255)}}
+            "light": {"ink": (29, 29, 27, 255), "hover": (220, 218, 211, 255), "active": (42, 120, 214, 255), "on_active": (255, 255, 255, 255)},
+            "mono": {"ink": (0, 0, 0, 255), "hover": (225, 225, 225, 255), "active": (0, 0, 0, 255), "on_active": (255, 255, 255, 255)}}
 
 
 def _polygon(sides, radius=0.4, centre=(0.5, 0.5)):

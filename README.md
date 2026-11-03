@@ -40,6 +40,12 @@ terminal built on Ghostty's parser, with drawings sent as real Kitty graphics. Y
 has no image drawing. restty and a font are fetched and checksummed when the image is built, because restty's default fonts come
 from a CDN. Its page downloads 4.2 MB of script.
 
+http://molterm-dev.localhost/showcase is an automated demo in the same web terminal, black on white. It sets molecules as Kitty
+graphics beside plain ASCII, with Braille for a larger drug, then works through a real edit: it clicks a structure in a list,
+edits it in the windowed editor, chooses Done and gets the list back. The server makes every frame with the same code as
+`molterm tui`, and the page only prints them and moves a pointer to show where the input went. It plays by itself, with **Stop**
+and **Start again**, and doesn't take input.
+
 Or use a real terminal:
 
 ```sh
@@ -83,6 +89,9 @@ It chooses the first of these that the terminal supports. `-m` or `$MOLTERM_MODE
 | `iterm` | iTerm2, WezTerm, mintty | reports that name to an XTVERSION query, or `$TERM_PROGRAM` names it |
 | `sixel` | xterm `-ti vt340`, others | device attributes include 4; inside tmux, `#{client_termfeatures}` includes `sixel` |
 | `braille` | everything else | the fallback, and always used when output is piped |
+
+`-m octant` and `-m ascii` are only used if you ask for them. ASCII draws each bond as characters, at a larger size, so it survives
+anything that carries text, but it's coarse: it suits small and mid-sized molecules.
 
 ### Drawing a molecule
 
@@ -166,6 +175,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/molecule.py` | SMILES or molblock to a sanitized molecule with 2D coordinates. A molblock's own 2D layout is kept; 3D or all-zero coordinates are replaced. From an SDF, only the first record is read. |
 | `server/braille.py` | Boolean bitmap to Braille characters, 2 dots wide and 4 tall per character. |
 | `server/octant.py` | The same bitmap to Unicode octants. The table was checked entry by entry against the Unicode 16 names. |
+| `server/asciiart.py` | Bonds as plain ASCII lines, from the atoms' positions rather than from a bitmap. |
 | `server/render.py` | RDKit draws the bonds at 4x, which are reduced to dots and mapped to characters. Each cell takes the colour of the element covering most of it. Atom labels are real letters placed over them. |
 | `server/samples.py` | The demo page's samples. Each one's formula, legibility and PubChem identity by InChIKey were checked. |
 | `server/medchem.py` | The web terminal's commands and its 15 compounds, each matched to its name on PubChem by InChIKey. |
@@ -176,6 +186,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/editor.py` | The molecular editor: all of its input handling, geometry and drawing. The drawing is kept as plain atoms and bonds, since it often isn't valid chemistry while it's being made, and RDKit reads it as a molblock for each frame. |
 | `server/board.py` | `molterm tui`: the grid of structures, which hosts the editor in a box and carries its state inside its own. |
 | `server/static/kitty.js` | The `/kitty` page: a line editor and the guided session, written for restty. It uses the same commands and story as the client, but not its code. |
+| `server/showcase.py`, `server/static/showcase.js` | The `/showcase` demo: the script, which drives the list and editor as the client would, and the page that plays its frames. |
 
 | endpoint | input | result |
 |---|---|---|
@@ -184,7 +195,8 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `kitty`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
 | `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, and for Sixel `cell_width`, `background` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |
-| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (`dark`, `light`); for Sixel `cell_width` (pixels, 4-40), `background` (`RRGGBB`) | plain text, with ANSI colours when asked, or image escape sequences |
+| `GET /api/v1/showcase` | query `cols`, `rows`, `cell_width`, `cell_height` | `frames`, each with `caption`, `output`, `pointer` (`[col, row]` or null), `click`, `key` and `pause` (ms) |
+| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (`braille`, `octant`, `ascii`, also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (`dark`, `light`, `mono` for all black); for Sixel `cell_width` (pixels, 4-40), `background` (`RRGGBB`) | plain text, with ANSI colours when asked, or image escape sequences |
 | `POST /api/v1/edit` | form fields `cols`, `rows`, `events` (raw input, as hex), `state` (from the last answer) or `smiles` to begin, optional `cell_width`, `cell_height`, `pixels=1`, `theme` | a first line of `<0 to go on, 1 finished, 2 failed> <state>`, then what to print |
 | `GET /molterm` | | the terminal client, set to call back to this server |
 
@@ -224,7 +236,15 @@ from the box lands outside it, and refuses tampered states.
 `/kitty` was checked in Chrome: a full automated run at normal speed, typing with Backspace, Tab, Up and a mistake, the scrollback,
 no console errors, and no page overflow at 320, 375 and 640 px.
 
+`/showcase` was watched in Chrome: a full run with no console errors, the side-by-side screens, the window opening over the list, the
+palette and hotspot in it, Done, the redrawn tile and the printed list. The edit's result, `CCOc1ccc(NC(C)=O)cc1F`, is checked by tests.
+
 Open issues:
+
+- `/showcase` needs at least 90 columns by 30 rows at the smallest font, so it says it can't start on a phone. It sizes itself once, so
+  resizing the window needs a reload. The hotspot stays light blue in its black-on-white theme, as it's what shows where the keys act.
+- restty keeps about 10 MB of decoded images and drops the oldest, so `/showcase` asks for images at 7 pixels per column, and the editor's are a
+  little soft there. In a real terminal they're sharp.
 
 - gunicorn logs `Control server error: [Errno 13] Permission denied: '/.gunicorn'` at startup because the container user
   has no home directory; requests are still served. `make prod` itself has not been run yet.

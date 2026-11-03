@@ -645,9 +645,9 @@ def _attach_group(s, atom, smiles, x, y):
     Chem.Kekulize(fragment, clearAromaticFlags=True)
     AllChem.Compute2DCoords(fragment)
     conformer = fragment.GetConformer()
-    points = [conformer.GetAtomPosition(i) for i in range(fragment.GetNumAtoms())]
     dummy = next(a for a in fragment.GetAtoms() if a.GetAtomicNum() == 0)
     first = dummy.GetNeighbors()[0]
+    points = [conformer.GetAtomPosition(i) for i in range(fragment.GetNumAtoms())]
     if len(s["atoms"]) + fragment.GetNumAtoms() > MAX_ATOMS:
         s["message"] = f"The editor holds at most {MAX_ATOMS} atoms."
         return
@@ -662,13 +662,30 @@ def _attach_group(s, atom, smiles, x, y):
     length = math.hypot(end.x - start.x, end.y - start.y) or 1
     turn = outward - math.atan2(end.y - start.y, end.x - start.x)
     cos, sin = math.cos(turn) / length, math.sin(turn) / length
+
+    def placed(index, mirror=False):
+        dx, dy = points[index].x - end.x, points[index].y - end.y
+        along_x, along_y = dx * cos - dy * sin, dx * sin + dy * cos
+        if mirror:  # across the line the group leaves along
+            axis_x, axis_y = math.cos(outward), math.sin(outward)
+            dot = along_x * axis_x + along_y * axis_y
+            along_x, along_y = 2 * dot * axis_x - along_x, 2 * dot * axis_y - along_y
+        return anchor_x + along_x, anchor_y + along_y
+
+    # A chain should zigzag, and RDKit labels a carbon drawn straight through. A group can land that way depending on which way it was laid out.
+    before = parent or (_atom(s, _neighbours(s, atom[0])[0]) if atom and _neighbours(s, atom[0]) else None)
+    others = [n for n in first.GetNeighbors() if n.GetIdx() != dummy.GetIdx()]
+    mirror = False
+    if before and len(others) == 1 and fragment.GetBondBetweenAtoms(first.GetIdx(), others[0].GetIdx()).GetBondType() == Chem.BondType.SINGLE:
+        next_x, next_y = placed(others[0].GetIdx())
+        bend = math.atan2(next_y - anchor_y, next_x - anchor_x) - math.atan2(anchor_y - before[3], anchor_x - before[2])
+        mirror = abs(math.remainder(bend, math.tau)) < 0.2
     ids = {}
     for fragment_atom in fragment.GetAtoms():
         index = fragment_atom.GetIdx()
         if index == dummy.GetIdx():
             continue
-        dx, dy = points[index].x - end.x, points[index].y - end.y
-        place_x, place_y = anchor_x + dx * cos - dy * sin, anchor_y + dx * sin + dy * cos
+        place_x, place_y = placed(index, mirror)
         if index == first.GetIdx() and atom:
             ids[index] = atom[0]
             atom[1], atom[4] = fragment_atom.GetSymbol(), fragment_atom.GetFormalCharge()
@@ -979,11 +996,13 @@ _BELOW_CELLS = -1_073_741_824
 _Z = {"palette": _BELOW_CELLS - 1, "structure": _BELOW_CELLS - 2, "overlay": _BELOW_CELLS - 1, "backing": _BELOW_CELLS - 3}
 _IDS = {"palette": 7010, "structure": 7001, "overlay": 7005, "backing": 7020}  # each also uses the id after it
 HOST_Z = _BELOW_CELLS - 10  # a host's images at or below this are hidden by the box
-_BACKING = {"dark": (32, 32, 30, 255), "light": (250, 249, 245, 255)}
+_BACKING = {"dark": (32, 32, 30, 255), "light": (250, 249, 245, 255), "mono": (255, 255, 255, 255)}
 _CHROME = {"dark": {"bar": "48;2;42;42;40", "ink": "38;2;240;239;236", "dim": "38;2;143;142;134", "pick": "48;2;57;135;229", "on_pick": "38;2;255;255;255",
                     "err": "38;2;239;83;80", "warn": "38;2;240;165;0", "pick_ink": "38;2;57;135;229"},
            "light": {"bar": "48;2;238;237;232", "ink": "38;2;29;29;27", "dim": "38;2;92;91;85", "pick": "48;2;42;120;214", "on_pick": "38;2;255;255;255",
-                     "err": "38;2;198;40;40", "warn": "38;2;180;83;9", "pick_ink": "38;2;42;120;214"}}
+                     "err": "38;2;198;40;40", "warn": "38;2;180;83;9", "pick_ink": "38;2;42;120;214"},
+           "mono": {"bar": "48;2;235;235;235", "ink": "38;2;0;0;0", "dim": "38;2;70;70;70", "pick": "48;2;0;0;0", "on_pick": "38;2;255;255;255",
+                    "err": "38;2;198;40;40", "warn": "38;2;0;0;0", "pick_ink": "38;2;0;0;0"}}
 
 
 def _ansi(row, col, text=""):

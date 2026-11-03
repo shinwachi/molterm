@@ -20,7 +20,7 @@ import render as renderer
 
 KITTY, ITERM, SIXEL = "kitty", "iterm", "sixel"
 MODES = (KITTY, ITERM, SIXEL)
-THEMES = ("dark", "light")
+THEMES = ("dark", "light", "mono")
 DEFAULT_THEME = "dark"
 
 CELL_PIXELS = 20  # image pixels per column for a PNG, which stays sharp on a high-density screen with cells about 20 px wide
@@ -33,13 +33,14 @@ CHUNK_SIZE = 4096  # the Kitty protocol's limit for one escape sequence's payloa
 
 SIXEL_COLORS = 64  # plenty for bonds, six element colours and their antialiased edges, and most terminals allow 256
 SIXEL_MIN_ALPHA = 24  # fainter pixels are left unpainted, so the terminal's own background shows through them
-_ASSUMED_BACKGROUND = {"dark": (0, 0, 0), "light": (255, 255, 255)}
+_ASSUMED_BACKGROUND = {"dark": (0, 0, 0), "light": (255, 255, 255), "mono": (255, 255, 255)}
 
 # The image is transparent, so its ink must suit the terminal's background. The server cannot detect that.
-_INK = {"dark": "#eeeeee", "light": "#1a1a1a"}
+_INK = {"dark": "#eeeeee", "light": "#1a1a1a", "mono": "#000000"}
 _ELEMENTS = {  # by ANSI code, like the text modes, with the same hues; the dark ones match the page's
     "dark": {31: "#ff8a80", 32: "#7ddc7d", 33: "#f0d060", 34: "#86b6ef", 35: "#e0a0f0"},
     "light": {31: "#c62828", 32: "#2e7d32", 33: "#8a6d00", 34: "#1565c0", 35: "#8e24aa"},
+    "mono": dict.fromkeys((31, 32, 33, 34, 35), "#000000"),  # black on white, like a printed page
 }
 
 

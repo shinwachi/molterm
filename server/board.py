@@ -320,6 +320,8 @@ def _handle_list(b, grid, event, cols, rows, ui_args, pixels):
         b["top"] = max(min(b["top"] + (1 if code & 3 else -1), grid.last_top(len(b["items"]))), 0)
         b["cursor"], b["message"] = grid.tile_at(col, row, b["top"], len(b["items"])), ""
     elif code & 32:
+        if hit != b["cursor"]:
+            b["message"] = ""
         b["cursor"] = hit
     elif release:
         pressed, b["press"] = b["press"], None
