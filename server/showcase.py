@@ -9,6 +9,7 @@ import editor
 import graphics
 import molecule
 import render as renderer
+import themes
 
 THEME = "mono"
 MIN_COLS, MIN_ROWS = 90, 30
@@ -22,7 +23,17 @@ _IMAGE_CELL = 30  # pixels per column before enlarging: stays sharp, and fits th
 _MAX_ENLARGE = 2.6  # about the size of ASCII's largest bonds
 _FOG_CELL = 20  # fog has no fine detail, and two to a screen take up more of that store
 PASTED_FOG = 50
-_HOME = "\x1b_Ga=d,q=2\x1b\\\x1b[2J\x1b[H\x1b[0m"
+_HOME = "\x1b_Ga=d,q=2\x1b\\\x1b[2J\x1b[3J\x1b[H\x1b[0m"  # no images, nothing on screen and nothing to scroll back to
+THEMES_SHOWN = ("solarized-dark", "nord", "gruvbox-light", "dracula")
+_THEME_CELL = 12
+_SCROLL_CELL = 10  # four pictures stay in the web terminal's store at once, so that scrolling back finds them all
+SCROLL_ROWS = 12  # each command's -r, so that a few of them fill the screen
+SCROLLED = (("Cn1cnc2c1c(=O)n(C)c(=O)n2C", "kitty", "Outside the list, molterm is a command like any other. Its picture prints into the shell, below the command."),
+            ("NCCc1c[nH]c2ccc(O)cc12", "kitty", "Each command adds its picture to the shell's history, the way a command adds its text."),
+            ("CC(=O)Nc1ccc(O)cc1", "braille", "Text modes go into the same history, between the pictures."),
+            ("CC(C)Cc1ccc(C(C)C(=O)O)cc1", "kitty", "When the screen fills, the shell scrolls, and the pictures scroll with their lines..."),
+            ("CC1(C)SC2C(NC(=O)Cc3ccccc3)C(=O)N2C1C(=O)O", "kitty", "...as many as are printed..."),
+            ("Cc1ccc(NC(=O)c2ccc(CN3CCN(C)CC3)cc2)cc1Nc1nccc(-c2cccnc2)n1", "kitty", "...into the terminal's own scrollback."))
 _BOLD = "\x1b[1m"
 
 
@@ -30,8 +41,9 @@ class ShowcaseError(ValueError):
     """The window can't hold the demo."""
 
 
-def _frame(caption, output, pointer=None, click=False, key=None, pause=2200):
-    return {"caption": caption, "output": output, "pointer": pointer, "click": click, "key": key, "pause": pause}
+def _frame(caption, output, pointer=None, click=False, key=None, pause=2200, scroll=0):
+    """`scroll` moves the terminal's view through its history by that many lines, up if negative, as a mouse wheel would."""
+    return {"caption": caption, "output": output, "pointer": pointer, "click": click, "key": key, "pause": pause, "scroll": scroll}
 
 
 def _side_by_side(name, smiles, mode, cols, rows, cell_width, cell_height):
@@ -60,6 +72,44 @@ def _settings(name, smiles, left, right, cols, rows):
         out.append(editor._ansi(1, col, f"-t {theme}" + (f" -f {fog}" if fog else "")))
         out.append(editor._ansi(3, col) + graphics.kitty_sequence(graphics._png(image), max(round(used * enlarge), 1), move_cursor=False).rstrip("\n"))
     return "".join(out)
+
+
+def _themes(name, smiles, cols, rows):
+    """The same molecule in four themes, each on its own background, as a terminal with that theme would show it."""
+    mol = molecule.parse(smiles, "smiles").mol
+    width, height = cols // 2 - 1, (rows - 3) // 2
+    out = [_HOME, editor._ansi(0, 0, f"{_BOLD}{name} in other themes\x1b[0m")]
+    for index, theme_name in enumerate(THEMES_SHOWN):
+        top, left = 2 + index // 2 * (height + 1), index % 2 * (width + 2)
+        ground = "\x1b[48;2;{};{};{}m".format(*themes.get(theme_name).background)
+        out.extend(editor._ansi(top + line, left, ground + " " * width) for line in range(height))
+        out.append(editor._ansi(top, left + 1, f"{ground}\x1b[{themes.chrome(theme_name)['ink']}m-t {theme_name}"))
+        image, used = graphics.draw_image(mol, width - 4, height - 2, theme_name, _THEME_CELL)
+        out.append(editor._ansi(top + 1, left + max((width - used) // 2, 0)) + graphics.kitty_sequence(graphics._png(image), used, move_cursor=False).rstrip("\n"))
+    return "".join(out) + "\x1b[0m\x1b[?25l"  # the cursor would show as a block on a dark panel
+
+
+def _scrolled(cols):
+    """Commands typed into a shell one after another, each printing its picture below it, until the screen scrolls, and then the
+    view scrolled back through them, as a mouse wheel would."""
+    shown = []
+    for index, (smiles, mode, caption) in enumerate(SCROLLED):
+        mol = molecule.parse(smiles, "smiles").mol
+        option = "-t mono" if mode == "kitty" else "-m braille"
+        command = f"$ molterm {option} -r {SCROLL_ROWS} '{smiles}'"[:cols - 1]
+        if mode == "kitty":
+            image, used = graphics.styled_image(mol, min(cols, renderer.DEFAULT_COLS), SCROLL_ROWS, THEME, _SCROLL_CELL)
+            picture = graphics.kitty_sequence(graphics._png(image), used).rstrip("\n")
+        else:
+            picture = "\r\n".join(line.rstrip() for line in renderer.render(mol, min(cols, renderer.DEFAULT_COLS), SCROLL_ROWS, mode).text.split("\n"))
+        start = _HOME + "\x1b[?25h" if index == 0 else ""
+        shown.append(_frame(caption, f"{start}{command}\r\n{picture}\r\n\r\n", pause=3600 if index < 4 else 2200))
+    shown.append(_frame("The prompt waits below the last one.", "$ ", pause=2400))
+    shown.append(_frame("Scrolling back up...", "", pause=1400, scroll=-15))
+    shown.append(_frame("...the earlier pictures come back, still beside their commands, as the terminal keeps them in its history...", "", pause=2400, scroll=-15))
+    shown.append(_frame("...all the way to the first.", "", pause=2800, scroll=-100))
+    shown.append(_frame("And down again to the prompt. Nothing is redrawn: the terminal itself holds the pictures.", "", pause=3200, scroll=150))
+    return shown
 
 
 def _pasted(smiles, cols):
@@ -266,6 +316,9 @@ def frames(cols, rows, cell_width, cell_height):
              _frame("ASCII is coarse, but rings, double bonds and labels still read at this size.", _side_by_side(*COMPOUNDS[2], "ascii", cols, rows, cell_width, cell_height), pause=4500),
              _frame("A larger drug, imatinib, is too much for ASCII. Braille packs eight dots into each character, and the image stays sharp.", _side_by_side(*COMPOUNDS[3], "braille", cols, rows, cell_width, cell_height), pause=4500),
              _frame("A renderer setting: fog diffuses the lines a little, as if the drawing were seen through fogged glass.", _settings(*COMPOUNDS[0], (THEME, 0), (THEME, 50), cols, rows), pause=5000),
-             _frame("Fog goes from 0 to 100. Even at 100 the lines stay sharp enough to read.", _settings(*COMPOUNDS[2], (THEME, 25), (THEME, 100), cols, rows), pause=5000)]
+             _frame("Fog goes from 0 to 100. Even at 100 the lines stay sharp enough to read.", _settings(*COMPOUNDS[2], (THEME, 25), (THEME, 100), cols, rows), pause=5000),
+             _frame("Colour themes: -t picks one of thirteen, for the drawings and the editor alike. Without it, molterm asks the terminal "
+                    "for its own colours and draws in those.", _themes(*COMPOUNDS[3], cols, rows), pause=5500),
+             *_scrolled(cols)]
     edit, _ = _edit(cols, rows, cell_width, cell_height)
     return shown + edit

@@ -14,7 +14,7 @@ import annotate  # noqa: E402
 import asciiart  # noqa: E402
 import board  # noqa: E402
 import editor  # noqa: E402
-import editor_icons  # noqa: E402
+import themes  # noqa: E402
 import graphics  # noqa: E402
 import molecule  # noqa: E402
 import render  # noqa: E402
@@ -174,9 +174,8 @@ def test_mono_is_accepted_where_themes_are(client):
 
 
 def test_mono_chrome_is_black_on_white():
-    assert editor._BACKING["mono"] == (255, 255, 255, 255) and editor._CHROME["mono"]["ink"] == "38;2;0;0;0"
-    assert editor_icons._COLOURS["mono"]["ink"] == (0, 0, 0, 255)
-    assert set(editor._CHROME["mono"]) == set(editor._CHROME["light"])
+    assert themes.panel("mono") == (255, 255, 255, 255) and themes.chrome("mono")["ink"] == "38;2;0;0;0"
+    assert themes.icons("mono")["ink"] == (0, 0, 0, 255)
 
 
 def _straight_carbons(s):
@@ -233,9 +232,29 @@ def test_showcase_copies_from_the_list_and_the_window():
 
 
 def test_showcase_pastes_what_it_copied_into_a_foggy_drawing():
-    pasted = next(frame["output"] for frame in showcase.frames(120, 38, 7, 14) if "$ molterm" in frame["output"])
+    pasted = next(frame["output"] for frame in showcase.frames(120, 38, 7, 14) if f"$ molterm -t mono -f {showcase.PASTED_FOG}" in frame["output"])
     assert f"-f {showcase.PASTED_FOG} '{showcase.EDITED}'" in pasted
     assert "\x1b_G" in pasted
+
+
+def test_showcase_shows_themes_on_their_own_backgrounds():
+    shown = next(frame["output"] for frame in showcase.frames(120, 38, 7, 14) if "in other themes" in frame["output"])
+    for name in showcase.THEMES_SHOWN:
+        assert f"-t {name}" in shown and "48;2;{};{};{}m".format(*themes.get(name).background) in shown
+    assert shown.count("\x1b_Ga=T") == len(showcase.THEMES_SHOWN)
+
+
+def test_showcase_prints_into_a_shell_and_scrolls_back():
+    frames = showcase.frames(120, 38, 7, 14)
+    start = next(i for i, frame in enumerate(frames) if "-r 12" in frame["output"])
+    printed = frames[start:start + len(showcase.SCROLLED)]
+    # only the first clears the screen and the history; the rest add to them, so the pictures stay in the scrollback
+    assert printed[0]["output"].startswith(showcase._HOME)
+    assert not any("\x1b[2J" in frame["output"] or "a=d" in frame["output"] for frame in printed[1:])
+    assert sum("\x1b_Ga=T" in frame["output"] for frame in printed) == 5 and "⠀" in printed[2]["output"]
+    scrolls = [frame["scroll"] for frame in frames if frame["scroll"]]
+    assert min(scrolls) < 0 < max(scrolls) and sum(scrolls) >= 0  # back up, and down again to the prompt
+    assert all(frame["output"] == "" for frame in frames if frame["scroll"])
 
 
 def test_showcase_shows_fog_settings():

@@ -17,11 +17,12 @@ from rdkit.Chem.Draw import rdMolDraw2D
 
 import braille
 import render as renderer
+import themes
 
 KITTY, ITERM, SIXEL = "kitty", "iterm", "sixel"
 MODES = (KITTY, ITERM, SIXEL)
-THEMES = ("dark", "light", "mono")
-DEFAULT_THEME = "dark"
+THEMES = themes.NAMES
+DEFAULT_THEME = themes.DEFAULT
 FOG_RANGE = (0, 100)
 
 CELL_PIXELS = 20  # image pixels per column for a PNG, which stays sharp on a high-density screen with cells about 20 px wide
@@ -35,28 +36,25 @@ CHUNK_SIZE = 4096  # the Kitty protocol's limit for one escape sequence's payloa
 SIXEL_COLORS = 64  # plenty for bonds, six element colours and their antialiased edges, and most terminals allow 256
 SIXEL_MIN_ALPHA = 24  # fainter pixels are left unpainted, so the terminal's own background shows through them
 SIXEL_FOG_MIN_ALPHA = 3  # but fog is all faint pixels, and cutting them off would give it an edge
-_ASSUMED_BACKGROUND = {"dark": (0, 0, 0), "light": (255, 255, 255), "mono": (255, 255, 255)}
 
-# The image is transparent, so its ink must suit the terminal's background. The server cannot detect that.
-_INK = {"dark": "#eeeeee", "light": "#1a1a1a", "mono": "#000000"}
-_ELEMENTS = {  # by ANSI code, like the text modes, with the same hues; the dark ones match the page's
-    "dark": {31: "#ff8a80", 32: "#7ddc7d", 33: "#f0d060", 34: "#86b6ef", 35: "#e0a0f0"},
-    "light": {31: "#c62828", 32: "#2e7d32", 33: "#8a6d00", 34: "#1565c0", 35: "#8e24aa"},
-    "mono": dict.fromkeys((31, 32, 33, 34, 35), "#000000"),  # black on white, like a printed page
-}
-
-
-HIGHLIGHT = "#5fe3e3"
+# The image is transparent, so its ink must suit the terminal's background, which the theme names (see themes.py).
+_ANSI_ORDER = (31, 32, 33, 34, 35)
 
 
 def _rgb(color):
     return tuple(int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
 
 
+def element_colours(theme):
+    """By ANSI code, like the text modes, with the same hues."""
+    return dict(zip(_ANSI_ORDER, themes.get(theme).elements))
+
+
 def palette(theme):
-    palette = {-1: _rgb(_INK[theme])}
+    colours = element_colours(theme)
+    palette = {-1: tuple(c / 255 for c in themes.get(theme).ink)}
     for symbol, code in renderer.ANSI_COLORS.items():
-        palette[GetPeriodicTable().GetAtomicNumber(symbol)] = _rgb(_ELEMENTS[theme][code])
+        palette[GetPeriodicTable().GetAtomicNumber(symbol)] = tuple(c / 255 for c in colours[code])
     return palette
 
 
@@ -76,7 +74,7 @@ def draw_image(mol: Mol, cols, rows, theme=DEFAULT_THEME, cell_pixels=CELL_PIXEL
     options.padding = 0.02
     # Unlike the text modes, wedges survive at this resolution. Chiral hydrogens would still draw as unlabelled stubs.
     options.prepareMolsBeforeDrawing = False
-    options.setHighlightColour((*_rgb(HIGHLIGHT), 0.45))
+    options.setHighlightColour((*(c / 255 for c in themes.get(theme).highlight), 0.45))
     bonds = [b.GetIdx() for b in mol.GetBonds() if b.GetBeginAtomIdx() in highlight and b.GetEndAtomIdx() in highlight]
     prepared = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=True, addChiralHs=False, wedgeBonds=True)
     drawer.DrawMolecule(prepared, highlightAtoms=sorted(highlight), highlightBonds=bonds)
@@ -289,7 +287,7 @@ def gallery(items, cols, cell_pixels, theme=DEFAULT_THEME):
 def sequence(image, cols, mode, background=None, theme=DEFAULT_THEME):
     """Wrap an image in the escape sequence of a mode, without a line ending."""
     if mode == SIXEL:
-        text = sixel_sequence(image, background or _ASSUMED_BACKGROUND[theme])
+        text = sixel_sequence(image, background or themes.get(theme).background)
     else:
         text = (iterm_sequence if mode == ITERM else kitty_sequence)(_png(image), cols)
     return text.rstrip("\n")
@@ -302,6 +300,6 @@ def render(mol: Mol, mode=KITTY, cols=renderer.DEFAULT_COLS, rows=renderer.DEFAU
         return renderer.render(mol, cols, rows).ansi + "\n"
     if mode == SIXEL:
         image, _ = styled_image(mol, cols, rows, theme, cell_pixels or SIXEL_CELL_PIXELS, fog)
-        return sixel_sequence(image, background or _ASSUMED_BACKGROUND[theme], SIXEL_FOG_MIN_ALPHA if fog else SIXEL_MIN_ALPHA)
+        return sixel_sequence(image, background or themes.get(theme).background, SIXEL_FOG_MIN_ALPHA if fog else SIXEL_MIN_ALPHA)
     image, used = styled_image(mol, cols, rows, theme, CELL_PIXELS, fog)
     return (iterm_sequence if mode == ITERM else kitty_sequence)(_png(image), used)

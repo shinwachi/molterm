@@ -5,7 +5,7 @@ import { Restty, parseGhosttyTheme } from "/vendor/restty.esm.js";
 const WANTED_COLS = 120, MAX_ROWS = 38, ADVANCE = 0.602;  // DejaVu Sans Mono's width of a cell, in ems
 // restty keeps about 10 MB of decoded images and drops the oldest beyond that, so the server draws for cells of this width, and the terminal scales up.
 const IMAGE_CELL = 7;
-const MOVE = 650, PRESS = 180, KEY_SHOWN = 900, RESTART_AFTER = 6000;
+const MOVE = 650, PRESS = 180, KEY_SHOWN = 900, RESTART_AFTER = 6000, SCROLL_STEP = 60;
 const element = document.getElementById("terminal");
 const caption = document.getElementById("caption"), progress = document.getElementById("progress");
 const pointer = document.getElementById("pointer"), keycap = document.getElementById("keycap");
@@ -130,6 +130,18 @@ function showCopies(output) {
     }
 }
 
+// The view moves through the terminal's history as a mouse wheel moves it, a few lines at a time, so that the scrolling is seen.
+async function scrollView(lines, mine) {
+    const steps = Math.ceil(Math.abs(lines) / 3);
+    const { left, top, width, height } = pane.canvas.getBoundingClientRect();
+    for (let step = 0; step < steps && mine === generation; step++) {
+        const delta = Math.sign(lines) * Math.min(3, Math.abs(lines) - step * 3);
+        pane.canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: delta * grid.cssHeight, deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+            clientX: left + width / 2, clientY: top + height / 2, bubbles: true, cancelable: true }));
+        await sleep(SCROLL_STEP);
+    }
+}
+
 async function show(frame, mine) {
     caption.textContent = frame.caption;
     progress.textContent = `${position + 1} of ${frames.length}`;
@@ -151,6 +163,13 @@ async function show(frame, mine) {
     if (frame.output) {
         showCopies(frame.output);
         write(frame.output.replace(COPIED, "").replace(KITTY_COPY, ""));
+    }
+    if (frame.scroll) {
+        keycap.textContent = frame.scroll < 0 ? "Wheel ↑" : "Wheel ↓";
+        keycap.style.display = "block";
+        keycap.style.transform = point(grid.cols - 12, 1);
+        await scrollView(frame.scroll, mine);
+        keycap.style.display = "none";
     }
     await sleep(frame.pause);
 }

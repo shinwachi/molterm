@@ -17,6 +17,7 @@ import braille
 import graphics
 import molecule
 import render as renderer
+import themes
 
 MAX_LINE = 500
 COLS_RANGE = (40, 240)
@@ -27,7 +28,13 @@ RED, GREEN, YELLOW, CYAN, BOLD, DIM = 31, 32, 33, renderer.ANSI_HIGHLIGHT, 1, 90
 TEXT = "text"
 DISPLAYS = (TEXT, graphics.KITTY, graphics.ITERM, graphics.SIXEL)
 IMAGE_BACKGROUND = (0x11, 0x11, 0x13)  # what Sixel's edges blend into: the .term background, unless the client reports its own
-_IMAGE_INK = {"dark": {BOLD: "#eeeeee", CYAN: graphics.HIGHLIGHT}, "light": {BOLD: "#1a1a1a", CYAN: "#00737a"}, "mono": {BOLD: "#000000", CYAN: "#000000"}}
+
+
+def _image_ink(theme):
+    """A picture's captions, by the code their text would have: the theme's ink, highlight and element colours."""
+    t = themes.get(theme)
+    return {code: themes.hex_colour(colour) for code, colour in
+            {**graphics.element_colours(theme), BOLD: t.ink, CYAN: t.highlight, DIM: t.dim}.items()}
 
 # name: (SMILES, what it is known for). Each structure's InChIKey was matched to this name on PubChem.
 COMPOUNDS = {
@@ -199,7 +206,7 @@ class Session:
         if self.display == TEXT:
             return tiles([_labelled(name, atoms, code) + [text(line, CYAN) for line in extra]
                           for name, atoms, code, extra in entries], self.cols)
-        ink = _IMAGE_INK[self.theme]
+        ink = _image_ink(self.theme)
         return self.picture([(mol(name), atoms, [(name, ink[code])] + [(line, ink[CYAN]) for line in extra])
                              for name, atoms, code, extra in entries])
 

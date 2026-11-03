@@ -14,6 +14,7 @@ from rdkit.Chem.Draw import rdMolDraw2D
 import annotate
 import editor
 import graphics
+import themes
 import molecule
 import samples
 
@@ -267,7 +268,7 @@ def _status_lines(b, grid, colours):
 def _list_frame(b, grid, theme, ui_cells):
     """The list, sending only the pictures that changed."""
     cell_width, cell_height = ui_cells
-    colours = editor._CHROME.get(theme, editor._CHROME["dark"])
+    colours = themes.chrome(theme)
     out = []
     wanted = {}
     picture_cols, picture_rows = grid.tile_cols - 2, grid.tile_rows - 3

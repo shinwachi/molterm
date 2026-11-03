@@ -8,6 +8,7 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 import board
 import editor
 import graphics
+import themes
 import medchem
 import molecule
 import render as renderer
@@ -152,6 +153,20 @@ def sixel_options(values):
     return cell_pixels, background
 
 
+def theme_option(values):
+    """The theme, fitted to the terminal's colours if `background` or `foreground` (RRGGBB) are given, or raise ParseError."""
+    colours = []
+    for name in ("background", "foreground"):
+        value = values.get(name)
+        if value is not None and not re.fullmatch(r"[0-9a-fA-F]{6}", value):
+            raise molecule.ParseError("bad_request", f"{name} must be a colour as RRGGBB.")
+        colours.append(value)
+    try:
+        return themes.check(themes.spec(values.get("theme", themes.DEFAULT), *colours))
+    except themes.ThemeError as error:
+        raise molecule.ParseError("bad_request", str(error)) from error
+
+
 @app.route("/molterm")
 def client_script():
     """The terminal client, set to call back to this server."""
@@ -162,18 +177,18 @@ def client_script():
 
 @app.route("/api/v1/term.txt")
 def term_text():
-    """The same commands for the client, which can't read JSON: ?line=<command>[&selection=a,b][&cols=][&display=][&theme=], and
+    """The same commands for the client, which can't read JSON: ?line=<command>[&selection=a,b][&cols=][&display=][&theme=]
+    [&background=RRGGBB][&foreground=RRGGBB] (the terminal's, to fit the theme to), and
     for Sixel [&cell_width=][&background=]. The first line is "<1 to clear the screen, or 0> <selection>", then the output."""
     plain = {"Content-Type": "text/plain; charset=utf-8"}
-    line, display, theme = request.args.get("line"), request.args.get("display", medchem.TEXT), request.args.get("theme", graphics.DEFAULT_THEME)
+    line, display = request.args.get("line"), request.args.get("display", medchem.TEXT)
     selection = request.args.get("selection")
     try:
         if line is None:
             raise molecule.ParseError("bad_request", "Give a command as line.")
         if display not in medchem.DISPLAYS:
             raise molecule.ParseError("bad_request", f"display must be one of {', '.join(medchem.DISPLAYS)}.")
-        if theme not in graphics.THEMES:
-            raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
+        theme = theme_option(request.args)
         cols = request.args.get("cols", str(medchem.DEFAULT_COLS))
         if not cols.isascii() or not cols.isdigit() or len(cols) > 6:
             raise molecule.ParseError("bad_request", "cols must be a whole number.")
@@ -206,9 +221,7 @@ def terminal_form(form):
     cols, rows = whole("cols", editor.COLS_RANGE), whole("rows", editor.ROWS_RANGE)
     cell_width = whole("cell_width", editor.CELL_WIDTH_RANGE, required=False)
     cell_height = whole("cell_height", editor.CELL_HEIGHT_RANGE, required=False)
-    theme = form.get("theme", graphics.DEFAULT_THEME)
-    if theme not in graphics.THEMES:
-        raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
+    theme = theme_option(form)
     events = form.get("events", "")
     if len(events) > editor.MAX_EVENTS * 2 or not re.fullmatch(r"(?:[0-9a-fA-F]{2})*", events):
         raise molecule.ParseError("bad_request", "events must be hexadecimal bytes, and not too many.")
@@ -227,7 +240,8 @@ def editor_box(text):
 @app.route("/api/v1/edit", methods=["POST"])
 def edit():
     """One step of the molecular editor, for the client. Form fields: `cols` and `rows`, `events` (raw input, as hex), `state` (from
-    the last answer) or `smiles` to begin, and optional `cell_width`, `cell_height`, `pixels=1` (mouse reports are in pixels), `theme`.
+    the last answer) or `smiles` to begin, and optional `cell_width`, `cell_height`, `pixels=1` (mouse reports are in pixels), `theme`, and the
+    terminal's `background` and `foreground` as RRGGBB, to fit the theme to.
     To stay inside part of a window that a host program owns, `box` (row,col,rows,cols, from 0 and counting the border) and `title`.
 
     The first line of the answer is "<0 to go on, 1 finished, 2 failed, 3 cancelled> <state>". After it comes what to print: on finishing,
@@ -290,14 +304,12 @@ def render_json():
 
 @app.route("/api/v1/render.txt")
 def render_text():
-    """For terminals: ?input=<SMILES or molblock>[&format=][&cols=][&rows=][&mode=][&color=1][&theme=light], and for Sixel
+    """For terminals: ?input=<SMILES or molblock>[&format=][&cols=][&rows=][&mode=][&color=1][&theme=light][&foreground=RRGGBB], and for Sixel
     [&cell_width=<the cell's pixels>][&background=<RRGGBB>]. Graphics modes also take [&fog=<0 to 100>], which text modes ignore."""
     plain = {"Content-Type": "text/plain; charset=utf-8"}
-    theme = request.args.get("theme", graphics.DEFAULT_THEME)
     try:
         cols, rows, mode = render_options(request.args, (*renderer.MODES, *graphics.MODES))
-        if theme not in graphics.THEMES:
-            raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
+        theme = theme_option(request.args)
         cell_pixels, background = sixel_options(request.args)
         fog = request.args.get("fog", "0")
         low, high = graphics.FOG_RANGE

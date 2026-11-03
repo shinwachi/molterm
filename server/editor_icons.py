@@ -5,10 +5,9 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw
 
+import themes
+
 _OVERSAMPLE = 4
-_COLOURS = {"dark": {"ink": (240, 239, 236, 255), "hover": (58, 58, 55, 255), "active": (57, 135, 229, 255), "on_active": (255, 255, 255, 255)},
-            "light": {"ink": (29, 29, 27, 255), "hover": (220, 218, 211, 255), "active": (42, 120, 214, 255), "on_active": (255, 255, 255, 255)},
-            "mono": {"ink": (0, 0, 0, 255), "hover": (225, 225, 225, 255), "active": (0, 0, 0, 255), "on_active": (255, 255, 255, 255)}}
 
 
 def _polygon(sides, radius=0.4, centre=(0.5, 0.5)):
@@ -129,7 +128,7 @@ class _Pen:
 @lru_cache(maxsize=64)
 def palette_image(names, per_row, button_width, button_height, active, hover, theme):
     """A PNG of the buttons, in rows of `per_row`. `active` and `hover` are indices or None. The rest of the image is transparent."""
-    colours = _COLOURS.get(theme, _COLOURS["dark"])
+    colours = themes.icons(theme)
     rows = math.ceil(len(names) / per_row)
     width, height = button_width * _OVERSAMPLE, button_height * _OVERSAMPLE
     image = Image.new("RGBA", (per_row * width, rows * height), (0, 0, 0, 0))

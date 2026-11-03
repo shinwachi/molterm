@@ -25,7 +25,9 @@ usage: molterm [-m mode] [-t theme] [-f fog] [-c cols] [-r rows] [-v] <SMILES>
        molterm [-t theme] [-v] [-b row,col,rows,cols] [-T title] edit [SMILES]
        molterm [-t theme] [-v] tui ['SMILES name' | 'ro:SMILES name' ...]   (a SMILES may be CXSMILES with annotations)
   -m  auto, kitty, iterm, sixel, octant, braille or ascii (default auto, or \$MOLTERM_MODE)
-  -t  dark, light or mono (all black), to suit the background (default: ask the terminal)
+  -t  a colour theme: dark, light, mono (black on white), mono-dark, solarized-dark, solarized-light, gruvbox-dark,
+      gruvbox-light, nord, dracula, catppuccin-mocha, catppuccin-latte or tokyo-night
+      (default: dark or light, fitted to the colours the terminal reports)
   -f  fog: how far the lines diffuse, from 0 (none) to 100, for one structure in a graphics mode
   -c  most columns to use   -r  most rows to use
   -v  say which mode was chosen, on stderr
@@ -76,7 +78,7 @@ in_multiplexer() {
 }
 
 # Ask the terminal four things, ending with the one every terminal answers, so that we know when to stop reading:
-# a Kitty graphics query, its name and version, its background colour and cell size, and its device attributes.
+# a Kitty graphics query, its name and version, its background and text colours and cell size, and its device attributes.
 ask_terminal() {
     # the editor draws on the terminal itself, so its output can go elsewhere: s=$(molterm edit)
     [ -t 1 ] || [ "$smiles" = edit ] || [ "$smiles" = tui ] || return 0
@@ -88,7 +90,7 @@ ask_terminal() {
     stty -echo -icanon min 0 time 5 </dev/tty 2>/dev/null || { saved=""; return 0; }
     # tmux would take the Kitty query for a window title
     in_multiplexer || printf '\033_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\033\\' >/dev/tty
-    printf '\033[>q\033]11;?\033\\\033[16t\033[?1016$p\033[c' >/dev/tty
+    printf '\033[>q\033]11;?\033\\\033]10;?\033\\\033[16t\033[?1016$p\033[c' >/dev/tty
     tries=0
     while [ $tries -lt 20 ]; do
         tries=$((tries + 1))
@@ -123,17 +125,34 @@ choose_mode() {
     echo braille
 }
 
-# Replies carry the background as rgb:RRRR/GGGG/BBBB, with one to four hex digits per channel.
-background=""
-read_background() {
-    color=$(printf '%s' "$reply" | sed -n 's/.*\]11;rgb:\([0-9a-fA-F]*\)\/\([0-9a-fA-F]*\)\/\([0-9a-fA-F]*\).*/\1 \2 \3/p')
+# Replies carry a colour as rgb:RRRR/GGGG/BBBB, with one to four hex digits per channel: 11 for the background, 10 for text.
+background=""; foreground=""; fitted=0
+read_colour() {
+    color=$(printf '%s' "$reply" | sed -n "s/.*\\]$1;rgb:\\([0-9a-fA-F]*\\)\\/\\([0-9a-fA-F]*\\)\\/\\([0-9a-fA-F]*\\).*/\\1 \\2 \\3/p")
     [ -n "$color" ] || return 0
     set -- $color
     r=$(printf '%.2s' "$1$1"); g=$(printf '%.2s' "$2$2"); b=$(printf '%.2s' "$3$3")
-    background=$r$g$b
+    echo "$r$g$b"
+}
+read_background() {
+    background=$(read_colour 11)
+    foreground=$(read_colour 10)
+    [ -n "$background" ] || return 0
     if [ -z "$theme" ]; then
+        # the pictures and the editor take the terminal's own colours, over the base that suits them
+        fitted=1
+        r=${background%????}; g=${background#??}; g=${g%??}; b=${background#????}
         if [ $(( 299 * 0x$r + 587 * 0x$g + 114 * 0x$b )) -gt 127500 ]; then theme=light; else theme=dark; fi
     fi
+}
+
+# Sixel needs the background to blend into whatever the theme, and the rest only when the theme is fitted to the terminal.
+colour_options() {
+    if [ $fitted = 1 ] || [ "$mode" = sixel ]; then
+        [ -n "$background" ] && printf '%s\n' "background=$background"
+    fi
+    [ $fitted = 1 ] && [ -n "$foreground" ] && printf '%s\n' "foreground=$foreground"
+    return 0
 }
 
 cell_width=""; cell_height=""
@@ -168,8 +187,8 @@ run_line() {
     set -- -sS -G --data-urlencode "line=$1" --data-urlencode "display=$display" --data-urlencode "cols=$(columns)"
     [ $have_selection = 1 ] && set -- "$@" --data-urlencode "selection=$selection"
     [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
+    for option in $(colour_options); do set -- "$@" --data-urlencode "$option"; done
     if [ "$mode" = sixel ]; then
-        [ -n "$background" ] && set -- "$@" --data-urlencode "background=$background"
         [ -n "$cell_width" ] && set -- "$@" --data-urlencode "cell_width=$cell_width"
     fi
     answer=$(curl "$@" -w '\n%{http_code}' "$url/api/v1/term.txt") || return 1
@@ -270,6 +289,7 @@ edit_request() {
     [ -n "$box" ] && set -- "$@" --data-urlencode "box=$box"
     [ -n "$title" ] && set -- "$@" --data-urlencode "title=$title"
     [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
+    for option in $(colour_options); do set -- "$@" --data-urlencode "$option"; done
     if [ -n "$cell_width" ] && [ -n "$cell_height" ]; then
         set -- "$@" --data-urlencode "cell_width=$cell_width" --data-urlencode "cell_height=$cell_height"
         [ "$pixels" = 1 ] && set -- "$@" --data-urlencode "pixels=1"
@@ -358,8 +378,8 @@ set -- -sS -G --data-urlencode "input=$smiles" --data-urlencode "mode=$mode"
 [ -n "$cols" ] && set -- "$@" --data-urlencode "cols=$cols"
 [ -n "$rows" ] && set -- "$@" --data-urlencode "rows=$rows"
 [ -n "$fog" ] && set -- "$@" --data-urlencode "fog=$fog"
+for option in $(colour_options); do set -- "$@" --data-urlencode "$option"; done
 if [ "$mode" = sixel ]; then
-    [ -n "$background" ] && set -- "$@" --data-urlencode "background=$background"
     [ -n "$cell_width" ] && set -- "$@" --data-urlencode "cell_width=$cell_width"
 fi
 case $mode in

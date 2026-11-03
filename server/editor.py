@@ -23,6 +23,7 @@ from rdkit.Geometry import Point2D
 import annotate
 import editor_icons
 import graphics
+import themes
 import molecule
 
 MAX_ATOMS = 200
@@ -1101,15 +1102,6 @@ _BELOW_CELLS = -1_073_741_824
 _Z = {"palette": _BELOW_CELLS - 1, "structure": _BELOW_CELLS - 2, "overlay": _BELOW_CELLS - 1, "backing": _BELOW_CELLS - 3}
 _IDS = {"palette": 7010, "structure": 7001, "overlay": 7005, "backing": 7020}  # each also uses the id after it
 HOST_Z = _BELOW_CELLS - 10  # a host's images at or below this are hidden by the box
-_BACKING = {"dark": (32, 32, 30, 255), "light": (250, 249, 245, 255), "mono": (255, 255, 255, 255)}
-_CHROME = {"dark": {"bar": "48;2;42;42;40", "ink": "38;2;240;239;236", "dim": "38;2;143;142;134", "pick": "48;2;57;135;229", "on_pick": "38;2;255;255;255",
-                    "err": "38;2;239;83;80", "warn": "38;2;240;165;0", "pick_ink": "38;2;57;135;229"},
-           "light": {"bar": "48;2;238;237;232", "ink": "38;2;29;29;27", "dim": "38;2;92;91;85", "pick": "48;2;42;120;214", "on_pick": "38;2;255;255;255",
-                     "err": "38;2;198;40;40", "warn": "38;2;180;83;9", "pick_ink": "38;2;42;120;214"},
-           "mono": {"bar": "48;2;235;235;235", "ink": "38;2;0;0;0", "dim": "38;2;70;70;70", "pick": "48;2;205;205;205", "on_pick": "38;2;0;0;0;4",
-                    "err": "38;2;198;40;40", "warn": "38;2;0;0;0", "pick_ink": "38;2;0;0;0"}}
-
-
 def _ansi(row, col, text=""):
     return f"\x1b[{row + 1};{col + 1}H\x1b[0m{text}"
 
@@ -1255,7 +1247,7 @@ def _border(s, ui, colours):
 def _backing(theme):
     """One pixel, stretched over the box, so that whatever a host has drawn below doesn't show through the drawing."""
     buffer = BytesIO()
-    Image.new("RGBA", (1, 1), _BACKING.get(theme, _BACKING["dark"])).save(buffer, "PNG")
+    Image.new("RGBA", (1, 1), themes.panel(theme)).save(buffer, "PNG")
     return buffer.getvalue()
 
 
@@ -1267,7 +1259,7 @@ def images_gone():
 def frame(s, ui, theme):
     """What to print for the current state: only the layers that changed, or nothing if the screen already shows it."""
     smiles, problem, wrong = analyse(s)
-    colours = _CHROME.get(theme, _CHROME["dark"])
+    colours = themes.chrome(theme)
     screen = [ui.cols, ui.rows, ui.cell_width, ui.cell_height, theme, ui.box, ui.window]
 
     def digest(*parts):

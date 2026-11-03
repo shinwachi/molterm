@@ -129,7 +129,8 @@ def opaque_pixels(picture):
     return pixels[pixels[:, :, 3] == 255][:, :3]
 
 
-@pytest.mark.parametrize("theme, ink", [("dark", (0xee, 0xee, 0xee)), ("light", (0x1a, 0x1a, 0x1a))])
+@pytest.mark.parametrize("theme, ink", [("dark", (0xf0, 0xef, 0xec)), ("light", (0x1d, 0x1d, 0x1b)), ("nord", (0xec, 0xef, 0xf4)),
+                                        ("dark:1e1e2e:cdd6f4", (0xcd, 0xd6, 0xf4))])
 def test_bonds_use_the_theme_ink(theme, ink):
     # within 1, because storing the image with alpha can round a channel down
     assert (abs(opaque_pixels(image("CCCC", theme=theme)[0]).astype(int) - ink) <= 1).all()
@@ -137,13 +138,13 @@ def test_bonds_use_the_theme_ink(theme, ink):
 
 @pytest.mark.parametrize("theme", graphics.THEMES)
 def test_elements_keep_their_colours(theme):
-    expected = tuple(round(c * 255) for c in graphics._rgb(graphics._ELEMENTS[theme][31]))
+    expected = graphics.element_colours(theme)[31]
     assert (opaque_pixels(image("CCO", theme=theme)[0]) == expected).all(axis=1).any()
 
 
 def test_every_coloured_element_has_a_colour_in_each_theme():
     for theme in graphics.THEMES:
-        assert set(render.ANSI_COLORS.values()) <= set(graphics._ELEMENTS[theme])
+        assert set(render.ANSI_COLORS.values()) <= set(graphics.element_colours(theme))
 
 
 @pytest.mark.parametrize("smiles", ["[Na+].[Cl-]", "O", "[He]"])

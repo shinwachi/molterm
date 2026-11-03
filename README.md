@@ -41,7 +41,9 @@ has no image drawing. restty and a font are fetched and checksummed when the ima
 from a CDN. Its page downloads 4.2 MB of script.
 
 http://molterm-dev.localhost/showcase is an automated demo in the same web terminal, black on white. It sets molecules as Kitty
-graphics beside plain ASCII, with Braille for a larger drug, and shows the fog setting. Then it works through a real
+graphics beside plain ASCII, with Braille for a larger drug, and shows the fog setting and four colour themes. It types six `molterm`
+commands into a shell, whose pictures print inline and scroll with the text, and scrolls the view back up through them and down again,
+as a mouse wheel would. Then it works through a real
 edit: it copies a SMILES, copies a structure as SMILES, SVG and PNG from its right-click menu, clicks a structure in a list, edits it in
 the windowed editor, highlights an atom and adds a note to another, resizes, moves and minimizes that window, chooses Done, copies the result, pastes it
 into a command and gets the list back. The server makes every frame with the same code as `molterm tui`, and the page only prints
@@ -106,6 +108,24 @@ so a fallback to Braille still works.
 
 Fog takes the theme's ink, so on `dark` and `light` the halo keeps the element colours. The drawing stays within `-c` and `-r`, with the
 molecule a little smaller to leave room for the haze. Fog isn't available in `molterm demo`, `edit` or `tui`.
+
+### Colour themes
+
+Text modes use the terminal's 16 colours and follow its theme by themselves. Pictures, the editor's bars, menus and palette, and the list's
+labels carry their own colours, which `-t` picks: `dark`, `light`, `mono` (black on white), `mono-dark`, `solarized-dark`,
+`solarized-light`, `gruvbox-dark`, `gruvbox-light`, `nord`, `dracula`, `catppuccin-mocha`, `catppuccin-latte` or `tokyo-night`. Each
+names an ink, element colours in the order of ANSI red, green, yellow, blue and magenta, a highlight, and the editor's bars and accent;
+they are kept in `server/themes.py`.
+
+Without `-t`, the client asks the terminal for its background and text colours (OSC 11 and 10), picks `dark` or `light` by the
+background's brightness, and sends both colours with it. The server then draws in the terminal's own ink, gives the boxed editor the
+terminal's background, and shades the bars between the two, so the editor fits whatever theme the terminal has. Element colours stay the
+base theme's. Over HTTP the same is `theme=dark&background=1e1e2e&foreground=cdd6f4`.
+
+```sh
+./molterm -t nord 'CN1C=NC2=C1C(=O)N(C(=O)N2C)C'
+./molterm -t gruvbox-light tui
+```
 
 ### Drawing a molecule
 
@@ -214,7 +234,7 @@ The box stays inside that area and doesn't change screens, but the host has work
 A host that talks HTTP can skip the client: `POST /api/v1/edit` takes `box` and `title`, and answers `3` in its first line on Cancel.
 `server/board.py`, behind `/api/v1/tui`, shows one way to use the editor from Python.
 
-The client also reads the terminal's background, to pick `theme` and blend Sixel's edges, and its cell size, because Sixel's
+The client also reads the terminal's background and text colours, to fit `theme` to them and blend Sixel's edges, and its cell size, because Sixel's
 pixels are the screen's and can't be scaled. It needs only `sh`, `curl`, `stty` and `dd` (the editor also `od`).
 
 The same modes work on `render.txt` directly, with `theme=light` on a light terminal, since `curl` alone can't ask. Molecules
@@ -237,6 +257,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/annotate.py` | Annotations: highlights, notes, atom numbers and stereo labels, as CXSMILES, drawn by RDKit, and copied as SMILES, SVG and PNG. |
 | `server/board.py` | `molterm tui`: the grid of structures, which hosts the editor in a box and carries its state inside its own. |
 | `server/static/kitty.js` | The `/kitty` page: a line editor and the guided session, written for restty. It uses the same commands and story as the client, but not its code. |
+| `server/themes.py` | The colour themes: named ones, and ones fitted to the terminal's own background and text colours. |
 | `server/showcase.py`, `server/static/showcase.js` | The `/showcase` demo: the script, which drives the list and editor as the client would, and the page that plays its frames. |
 
 | endpoint | input | result |
@@ -244,11 +265,11 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `POST /api/v1/parse` | JSON `input`, optional `format` (`auto`, `smiles`, `molblock`) | `format`, `coords`, `name`, `smiles`, `formula`, `atoms`, `bonds` |
 | `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`) | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
 | `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `kitty`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
-| `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, and for Sixel `cell_width`, `background` | a first line of `<1 to clear, or 0> <selection>`, then the output |
+| `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, `background` and `foreground` (`RRGGBB`, the terminal's, to fit the theme to), and for Sixel `cell_width` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |
-| `GET /api/v1/showcase` | query `cols`, `rows`, `cell_width`, `cell_height` | `frames`, each with `caption`, `output`, `pointer` (`[col, row]` or null), `click`, `key` and `pause` (ms) |
-| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (`braille`, `octant`, `ascii`, also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (`dark`, `light`, `mono` for all black) and `fog` (0-100); for Sixel `cell_width` (pixels, 4-40), `background` (`RRGGBB`) | plain text, with ANSI colours when asked, or image escape sequences |
-| `POST /api/v1/edit` | form fields `cols`, `rows`, `events` (raw input, as hex), `state` (from the last answer) or `smiles` to begin, optional `cell_width`, `cell_height`, `pixels=1`, `theme` | a first line of `<0 to go on, 1 finished, 2 failed> <state>`, then what to print |
+| `GET /api/v1/showcase` | query `cols`, `rows`, `cell_width`, `cell_height` | `frames`, each with `caption`, `output`, `pointer` (`[col, row]` or null), `click`, `key`, `pause` (ms) and `scroll` (lines to move the view, up if negative) |
+| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (`braille`, `octant`, `ascii`, also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (see Colour themes), `background` and `foreground` (`RRGGBB`) and `fog` (0-100); for Sixel `cell_width` (pixels, 4-40) | plain text, with ANSI colours when asked, or image escape sequences |
+| `POST /api/v1/edit` | form fields `cols`, `rows`, `events` (raw input, as hex), `state` (from the last answer) or `smiles` to begin, optional `cell_width`, `cell_height`, `pixels=1`, `theme`, `background`, `foreground` | a first line of `<0 to go on, 1 finished, 2 failed> <state>`, then what to print |
 | `GET /molterm` | | the terminal client, set to call back to this server |
 
 Failures return HTTP 400. The JSON endpoints give `{"error": {"code", "message"}}`, where `code` is one of `bad_request`,
@@ -299,9 +320,17 @@ palette and hotspot in it, Done, the redrawn tile and the printed list. The edit
 Its fog frames, all three ways of copying and the pasted drawing were watched there too, with the page's Copy button checked for selecting the right text.
 The window being resized, moved, minimized into the top bar with every thumbnail of the list still showing, and brought back, was watched there as well,
 and so were the copy in all three formats with its PNG preview, the highlight and note in the editor and on the tile, and the printed CXSMILES.
+The themes frame, and the shell scene with its pictures kept in the scrollback while scrolling up to the first command and down to the prompt,
+were watched there too, with no console errors. `tests/test_themes.py` checks every theme for legible ink, the original three for their old colours,
+fitted themes, the endpoints, and the editor, list and session captions drawing in a theme; `tests/test_client.py` checks the client
+sends the terminal's colours only when no `-t` is given.
 Actual clipboard writes haven't been tested: not OSC 52 or Kitty's OSC 5522 in a real terminal, nor the page's browser copy. Fog has not been run in a real terminal; its images were checked by eye and by tests.
 
 Open issues:
+
+- The named themes haven't been seen in a real terminal with that theme, only on their own backgrounds in `/showcase` and by tests. A fitted
+  theme keeps the base theme's element colours, which may sit poorly on an unusual background (for example dark red on a deep red one).
+- `/showcase` scrolls restty's view by sending its canvas wheel events, which relies on restty treating them like a real wheel.
 
 - `/showcase` needs at least 90 columns by 30 rows at the smallest font, so it says it can't start on a phone. It sizes itself once, so
   resizing the window needs a reload. The hotspot stays light blue in its black-on-white theme, as it's what shows where the keys act.

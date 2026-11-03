@@ -126,7 +126,18 @@ def test_short_colour_replies_are_scaled(stub):
 
 def test_other_modes_do_not_send_sixel_options(stub):
     run_in_terminal(stub, KITTY_OK + DARK + CELL + DA1_PLAIN)
-    assert not [a for a in sent(stub) if a.startswith(("cell_width=", "background="))]
+    assert not [a for a in sent(stub) if a.startswith("cell_width=")]
+
+
+def test_the_theme_is_fitted_to_the_terminals_colours(stub):
+    run_in_terminal(stub, KITTY_OK + DARK + b"\x1b]10;rgb:dddd/eeee/ffff\x1b\\" + CELL + DA1_PLAIN)
+    assert {"theme=dark", "background=202830", "foreground=ddeeff"} <= set(sent(stub))
+
+
+def test_a_chosen_theme_is_not_fitted_to_the_terminal(stub):
+    run_in_terminal(stub, KITTY_OK + DARK + CELL + DA1_PLAIN, args=["-t", "nord", "CCO"])
+    assert "theme=nord" in sent(stub)
+    assert not [a for a in sent(stub) if a.startswith(("background=", "foreground="))]
 
 
 def fake_tmux(stub, features):
