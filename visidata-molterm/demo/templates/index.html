@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>molterm for VisiData</title>
+    <link rel="stylesheet" href="/vendor/house.css">
+    <style>
+        #controls { margin-bottom: var(--sp-2); align-items: center; }
+        #caption { margin: 0 0 var(--sp-2); min-height: 3em; max-width: 90ch; }
+        #progress, .note { color: var(--text-2); font-size: var(--fs-sm); }
+        /* VisiData's own colours, light text on dark, whatever the page's theme */
+        #screen { background: #161615; border-radius: var(--radius, 4px); padding: var(--sp-2); overflow: hidden; }
+        #frame { position: relative; }
+        #terminal { position: absolute; left: 0; top: 0; }
+        #keycap { position: absolute; right: var(--sp-2); top: var(--sp-2); display: none; z-index: 2; padding: 2px 9px;
+                  background: #ffffff; color: #000000; border-radius: 4px; font: bold 15px monospace; }
+        .about { max-width: 90ch; margin-top: var(--sp-4); }
+        .about code { font-family: monospace; }
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <span class="brand">molterm for VisiData</span>
+    <span class="spacer"></span>
+    <nav>
+        <a class="btn quiet" href="/live">Live</a>
+        <a class="btn quiet" href="{{ molterm_url }}">molterm</a>
+        <a class="btn quiet" href="/health">Health</a>
+    </nav>
+</header>
+<main>
+    <div class="toolbar" id="controls">
+        <button class="btn primary" id="play" type="button">Stop</button>
+        <button class="btn" id="restart" type="button">Start again</button>
+        <span id="progress"></span>
+    </div>
+    <p id="caption" aria-live="polite">Loading the terminal…</p>
+    <div id="screen"><div id="frame">
+        <div id="terminal"></div>
+        <div id="keycap"></div>
+    </div></div>
+    <p class="note" id="recorded"></p>
+    <section class="about">
+        <p>A plugin for <a href="https://www.visidata.org/">VisiData</a>, the terminal spreadsheet, that draws molecules in its cells:
+        pictures in Kitty and Ghostty, coloured Braille anywhere else. Everything above is a real session, recorded in a terminal of this
+        size, with the drawings from a molterm server; this page only prints it back.</p>
+        <p>To use it, put <code>molterm_visidata.py</code> on Python's path and add <code>import molterm_visidata</code> to
+        <code>~/.visidatarc</code>. Then, on a column of SMILES: <code>Alt+m</code> adds structures, <code>Alt+y</code> properties,
+        <code>Alt+o</code> opens a molecule, <code>Alt+t</code> switches between pictures and Braille, and <code>Alt+g</code> charts cLogP
+        against MW, with <code>Alt+n</code> and <code>Alt+b</code> stepping from dot to dot while a card shows which molecule each is.</p>
+    </section>
+</main>
+<script type="module" src="/static/vd.js"></script>
+</body>
+</html>

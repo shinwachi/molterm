@@ -13,6 +13,11 @@ Created 2026-10-31 from a Flask project template.
 | other | `make up ENV=staging` | from `env/staging.env` | `molterm:staging` |
 
 Each environment is its own compose project (`molterm-dev`, `molterm-prod`), so they can run side by side.
+
+`visidata-molterm/` is a separate sub-project: a [VisiData](https://www.visidata.org/) plugin that draws molecules in a spreadsheet's
+cells, as Kitty pictures or coloured Braille, with a recorded demo at http://molterm-vd-dev.localhost and a live one, where anyone
+can use VisiData on 1000 compounds in a locked-down session, at http://molterm-vd-dev.localhost/live. It has its own Makefile,
+containers and README, and uses this server's `/api/v1/render` (with `properties`), `/api/v1/properties` and `/api/v1/render.png`.
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
 
 ## Status
@@ -90,10 +95,27 @@ It chooses the first of these that the terminal supports. `-m` or `$MOLTERM_MODE
 
 | mode | terminals | how it's chosen |
 |---|---|---|
-| `kitty` | Kitty, Ghostty | answers a Kitty graphics query, or `$TERM_PROGRAM`/`$TERM` names it |
+| `kitty` | Kitty, Ghostty | answers a Kitty graphics query, or `$TERM_PROGRAM`/`$TERM` names it; inside tmux, tmux's `#{client_termname}` names Kitty or Ghostty and `allow-passthrough` is on |
 | `iterm` | iTerm2, WezTerm, mintty | reports that name to an XTVERSION query, or `$TERM_PROGRAM` names it |
 | `sixel` | xterm `-ti vt340`, others | device attributes include 4; inside tmux, `#{client_termfeatures}` includes `sixel` |
 | `braille` | everything else | the fallback, and always used when output is piped |
+
+### Kitty graphics in tmux
+
+tmux passes Kitty graphics on only when they're wrapped for passthrough and `allow-passthrough` is on, and even then it doesn't know
+a picture is there, so it would land wherever the outer cursor happened to be. So inside tmux, in Kitty or Ghostty, molterm uses Kitty's
+Unicode placeholders (`server/placeholders.py`): each picture is sent once, wrapped, as a virtual placement, and the cells it covers
+are printed as U+10EEEE with marks for their row and column, in a colour that names the picture. tmux keeps those as text, so pictures
+stay in place through redraws, scrolling, its history and switching panes. This works for a drawing, the guided session, `molterm
+edit` and `molterm tui`; the client asks for it with `placeholders=1`. Turn passthrough on once:
+
+```sh
+tmux set -g allow-passthrough on      # and add `set -g allow-passthrough on` to ~/.tmux.conf to keep it
+```
+
+Without it, the client says so and falls back to Braille (and `edit` and `tui` stop with that message). In the editor a cell can show
+only one picture, so through tmux the selection marks are drawn into the structure rather than over it, and the boxed editor has no
+backing picture: its cells cover the list below anyway.
 
 `-m octant` and `-m ascii` are only used if you ask for them. ASCII draws each bond as characters, at a larger size, so it survives
 anything that carries text, but it's coarse: it suits small and mid-sized molecules.
@@ -257,13 +279,16 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/annotate.py` | Annotations: highlights, notes, atom numbers and stereo labels, as CXSMILES, drawn by RDKit, and copied as SMILES, SVG and PNG. |
 | `server/board.py` | `molterm tui`: the grid of structures, which hosts the editor in a box and carries its state inside its own. |
 | `server/static/kitty.js` | The `/kitty` page: a line editor and the guided session, written for restty. It uses the same commands and story as the client, but not its code. |
+| `server/placeholders.py` | Kitty graphics through tmux: pictures as Unicode placeholder cells, which tmux keeps as text. |
 | `server/themes.py` | The colour themes: named ones, and ones fitted to the terminal's own background and text colours. |
 | `server/showcase.py`, `server/static/showcase.js` | The `/showcase` demo: the script, which drives the list and editor as the client would, and the page that plays its frames. |
 
 | endpoint | input | result |
 |---|---|---|
 | `POST /api/v1/parse` | JSON `input`, optional `format` (`auto`, `smiles`, `molblock`) | `format`, `coords`, `name`, `smiles`, `formula`, `atoms`, `bonds` |
-| `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`) | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`) |
+| `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`), and `properties: true` | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`), and if asked `properties` (`mw`, `logp`, `tpsa`, `hbd`, `hba`, `rotb`, `qed`, `ro5`, `pains`, `brenk`) |
+| `POST /api/v1/properties` | JSON `{"inputs": [...]}`, at most 1000 SMILES or molblocks | `{"results": [...]}` in the same order, each `formula` and `properties` as above, or `error` |
+| `GET /api/v1/render.png` | query `input`, `format`, `cols`, `rows`, `theme`, `background`, `foreground`, `cell_width` (pixels per column) | a transparent PNG within cols by rows cells (a cell taken as twice as tall as wide), cropped to its drawing; `X-Molterm-Cols` gives the columns it takes. For programs that place pictures themselves |
 | `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `kitty`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
 | `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, `background` and `foreground` (`RRGGBB`, the terminal's, to fit the theme to), and for Sixel `cell_width` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |
@@ -288,7 +313,10 @@ Verified with `make dev` and `make test`, through Traefik with `curl`, and in Ch
 warning states, and phone width. Hard inputs at the atom cap parse in about 1 s or less.
 
 The client and image modes were run in real terminals under a virtual display, and the screenshots checked by eye: Kitty,
-xterm with Sixel on dark and light backgrounds, xterm without Sixel (Braille), tmux in xterm (Sixel) and tmux in Kitty (Braille).
+xterm with Sixel on dark and light backgrounds, xterm without Sixel (Braille), tmux in xterm (Sixel) and tmux in Kitty (Braille,
+before placeholders). Placeholders were checked with a real tmux 3.5a: it passed the wrapped commands on unwrapped and drew the
+placeholder cells, colour and all; `tests/test_placeholders.py` checks the sequences, cells and order (pictures before menus) for
+drawings, the editor and the list. They haven't been seen drawn in a real Ghostty or Kitty under tmux.
 `tests/test_client.py` runs the client under a fake terminal for the rest.
 
 `molterm demo` was run the same way, against the dev server: in Kitty through `curl | sh`, with Enter, typed commands, `clear` and
@@ -361,8 +389,9 @@ Open issues:
   and wavy bonds, double bond position, chair rings, and the chain, bracket, arrow, symbol, pen and query tools. `/` and `?` on an atom or bond open
   its menu rather than a properties dialog. It has no captions, rotation handles or copy and paste, and terminals can't report Shift+Ctrl+Z, so
   redo is Ctrl-Y, and Clean Up is Ctrl-K.
-- Each action in `molterm edit` is a request to the server, so a slow connection makes it lag. Inside tmux it stops with a message,
-  since tmux doesn't pass Kitty graphics on. With the mouse in use, selecting text needs the terminal's own override, usually Shift.
+- Each action in `molterm edit` is a request to the server, so a slow connection makes it lag. Inside tmux it needs Kitty or Ghostty
+  outside and `allow-passthrough` on; through tmux every change reprints the picture cells, a few tens of KB a frame for a large
+  window. With the mouse in use, selecting text needs the terminal's own override, usually Shift.
 - `molterm tui` and `-b` have only been seen in Ghostty 1.4 on Linux, not in Kitty or on macOS, and `-b` only from that shell script, not from a
   real TUI framework. A framework may need suspending around the call so that it stops reading the terminal, and Kitty images it places at z 0
   would show over the box.

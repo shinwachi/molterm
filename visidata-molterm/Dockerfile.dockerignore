@@ -1,0 +1,8 @@
+# the build context is the repository root; keep the recording, caches and the main app out of this image
+visidata-molterm/data
+**/__pycache__
+**/*.pyc
+data
+tests
+server/*
+!server/static/house.css

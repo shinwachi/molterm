@@ -380,3 +380,41 @@ def test_api_octant_mode():
 def test_text_endpoint_octant_mode():
     assert any(0x1CD00 <= ord(c) <= 0x1CDE5 for c in text_get(input="c1ccccc1O", mode="octant").get_data(as_text=True))
     assert text_get(input="CCO", mode="fancy").status_code == 400
+
+
+# for programs that draw molecules themselves, such as the VisiData plugin
+
+
+def test_render_json_adds_properties_when_asked():
+    plain = app.test_client().post("/api/v1/render", json={"input": "CC(=O)Oc1ccccc1C(=O)O"}).get_json()
+    assert "properties" not in plain
+    asked = app.test_client().post("/api/v1/render", json={"input": "CC(=O)Oc1ccccc1C(=O)O", "properties": True}).get_json()
+    props = asked["properties"]
+    assert round(props["mw"], 1) == 180.2 and props["hbd"] == 1 and props["ro5"] == 0
+    assert {"logp", "tpsa", "hba", "rotb", "qed", "pains", "brenk"} <= set(props)
+
+
+def test_render_png_is_a_transparent_picture_within_the_cells():
+    from io import BytesIO
+    from PIL import Image
+    response = app.test_client().get("/api/v1/render.png", query_string={"input": "c1ccccc1O", "cols": 20, "rows": 6, "cell_width": 10})
+    assert response.status_code == 200 and response.mimetype == "image/png"
+    image = Image.open(BytesIO(response.data))
+    used = int(response.headers["X-Molterm-Cols"])
+    assert image.mode == "RGBA" and image.width == used * 10 <= 200 and 0 < image.height <= 6 * 2 * 10
+    assert image.getpixel((0, 0))[3] == 0
+    bad = app.test_client().get("/api/v1/render.png", query_string={"input": "C1CC", "cols": 20, "rows": 6})
+    assert bad.status_code == 400
+    assert app.test_client().get("/api/v1/render.png", query_string={"input": "CCO", "theme": "neon"}).status_code == 400
+
+
+def test_properties_for_many_structures_at_once_keep_their_order():
+    client = app.test_client()
+    response = client.post("/api/v1/properties", json={"inputs": ["CCO", "C1CC", "c1ccccc1"]})
+    results = response.get_json()["results"]
+    assert response.status_code == 200 and len(results) == 3
+    assert results[0]["formula"] == "C2H6O" and results[0]["properties"]["hbd"] == 1
+    assert results[1]["error"]["code"] and "properties" not in results[1]
+    assert results[2]["formula"] == "C6H6"
+    assert client.post("/api/v1/properties", json={"inputs": "CCO"}).status_code == 400
+    assert client.post("/api/v1/properties", json={"inputs": ["C"] * 1001}).status_code == 400

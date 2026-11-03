@@ -1,0 +1,9 @@
+# pinned: the plugin draws inside VisiData's multiline rows, which are internal to it
+visidata==3.5
+flask>=3.0
+gunicorn>=22.0
+# the live demo: a WebSocket per visitor, bridged to VisiData in a pseudo-terminal
+aiohttp>=3.9
+pytest
+# a terminal emulator, for tests to read the screens VisiData draws
+pyte

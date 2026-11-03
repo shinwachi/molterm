@@ -14,6 +14,7 @@ from rdkit.Chem.Draw import rdMolDraw2D
 import annotate
 import editor
 import graphics
+import placeholders
 import themes
 import molecule
 import samples
@@ -279,16 +280,19 @@ def _list_frame(b, grid, theme, ui_cells):
             wanted[str(index)] = editor.hashlib.sha256(f"{b['items'][index][1]}|{notes}|{place}|{picture_cols}x{picture_rows}|{cell_width}x{cell_height}|{theme}".encode()).hexdigest()[:24]
     for key in list(b["shown"]):
         if key not in wanted:
-            out.append(f"\x1b_Ga=d,d=I,i={_FIRST_ID + int(key)},q=2\x1b\\")
+            out.append(placeholders.delete_sequence(_FIRST_ID + int(key)))
             del b["shown"][key]
     for key, digest in wanted.items():
         if b["shown"].get(key) != digest:
             index = int(key)
             row, col = grid.tile(index, b["top"])
             png = _thumbnail(b["items"][index][1], json.dumps(b["items"][index][4], sort_keys=True), picture_cols, picture_rows, cell_width, cell_height, theme)
-            # below the editor's backing, so that the box hides it without its having to be taken away and sent again
-            sequence = graphics.kitty_sequence(png, picture_cols, rows=picture_rows, image_id=_FIRST_ID + index, move_cursor=False, z=editor.HOST_Z).rstrip("\n")
-            out.append(f"\x1b_Ga=d,d=I,i={_FIRST_ID + index},q=2\x1b\\" + editor._ansi(row + 1, col + 1) + sequence)
+            if placeholders.active.get():  # its cells are printed with the text, below
+                out.append(placeholders.delete(_FIRST_ID + index) + placeholders.transmit(png, _FIRST_ID + index, picture_cols, picture_rows))
+            else:
+                # below the editor's backing, so that the box hides it without its having to be taken away and sent again
+                sequence = graphics.kitty_sequence(png, picture_cols, rows=picture_rows, image_id=_FIRST_ID + index, move_cursor=False, z=editor.HOST_Z).rstrip("\n")
+                out.append(f"\x1b_Ga=d,d=I,i={_FIRST_ID + index},q=2\x1b\\" + editor._ansi(row + 1, col + 1) + sequence)
             b["shown"][key] = digest
     count, editable = len(b["items"]), sum(1 for item in b["items"] if item[2])
     edited = sum(1 for item in b["items"] if item[3])
@@ -296,7 +300,15 @@ def _list_frame(b, grid, theme, ui_cells):
     heading = f" Molterm   {count} structures, {editable} editable" + (f", {edited} edited" if edited else "")
     first, second = _status_lines(b, grid, colours)
     tiles = "".join(_tile_text(b, grid, index, colours) for index in range(count) if grid.tile(index, b["top"]))
-    text = _list_text(b, grid) + editor._ansi(0, 0, f"{bar}\x1b[K{editor._fit_text(heading, grid.cols)}") + tiles
+    grids = ""
+    if placeholders.active.get():
+        # through tmux the pictures are cells: printed after the rows are cleared and before the labels and menus, which cover them,
+        # as a box drawn after this does
+        for key in wanted:
+            row, col = grid.tile(int(key), b["top"])
+            grids += placeholders.cells(_FIRST_ID + int(key), picture_cols, picture_rows,
+                                        lambda r, c, row=row, col=col: editor._ansi(row + 1 + r, col + 1 + c))
+    text = _list_text(b, grid) + grids + editor._ansi(0, 0, f"{bar}\x1b[K{editor._fit_text(heading, grid.cols)}") + tiles
     chip = _chip(b, grid)
     if chip:
         text += editor._ansi(0, chip[0], _style(colours, "pick", "on_pick") + chip[1])

@@ -551,3 +551,31 @@ def test_the_editor_still_uses_its_endpoint(stub):
     editor_stub(stub)
     run_editor(stub, [b"a", b"b"])
     assert "http://test/api/v1/edit" in sent(stub)
+
+
+def fake_tmux_in(stub, outer, passthrough):
+    """A tmux inside the given outer terminal, with allow-passthrough set as given."""
+    tmux = stub / "tmux"
+    tmux.write_text('#!/bin/sh\ncase "$1" in\n'
+                    f'    display) case "$*" in *client_termname*) echo "{outer}" ;; *) echo "256,RGB,title" ;; esac ;;\n'
+                    f'    show) echo "{passthrough}" ;;\nesac\n')
+    tmux.chmod(tmux.stat().st_mode | stat.S_IEXEC)
+
+
+def test_ghostty_outside_tmux_gets_kitty_graphics_as_placeholders(stub):
+    fake_tmux_in(stub, "xterm-ghostty ghostty", "on")
+    run_in_terminal(stub, DA1_PLAIN, TMUX="/tmp/tmux,1,0", TERM="tmux-256color")
+    assert "mode=kitty" in sent(stub) and "placeholders=1" in sent(stub)
+
+
+def test_without_passthrough_tmux_says_how_to_turn_it_on(stub):
+    fake_tmux_in(stub, "xterm-ghostty ghostty", "off")
+    output = run_in_terminal(stub, DA1_PLAIN, TMUX="/tmp/tmux,1,0", TERM="tmux-256color")[0]
+    assert "mode=braille" in sent(stub) and "placeholders=1" not in sent(stub)
+    assert b"allow-passthrough on" in output
+
+
+def test_other_terminals_outside_tmux_get_no_placeholders(stub):
+    fake_tmux_in(stub, "xterm-256color", "on")
+    run_in_terminal(stub, DA1_PLAIN, TMUX="/tmp/tmux,1,0", TERM="tmux-256color")
+    assert "mode=braille" in sent(stub) and "placeholders=1" not in sent(stub)

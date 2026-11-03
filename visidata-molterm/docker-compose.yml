@@ -1,0 +1,63 @@
+# The VisiData plugin's demo, beside the main app. Built from the repository's root to share its stylesheet.
+# Dev (the default via the Makefile) bind-mounts the source; the demo records a session against the molterm server at start.
+networks:
+    traefik:
+        external: true
+
+services:
+    molterm-vd:
+        image: molterm-vd:${APP_TAG:-latest}
+        build:
+            context: ..
+            dockerfile: visidata-molterm/Dockerfile
+        restart: unless-stopped
+        user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+        environment:
+            - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
+        volumes:
+            - ./data:/app/data
+        labels:
+            - traefik.enable=true
+            - traefik.docker.network=traefik
+            - traefik.http.routers.${ROUTER:-molterm-vd}.rule=Host(`${APP_HOST:-molterm-vd.localhost}`)
+            - traefik.http.routers.${ROUTER:-molterm-vd}.service=${ROUTER:-molterm-vd}
+            - traefik.http.routers.${ROUTER:-molterm-vd}.entrypoints=web
+            - traefik.http.services.${ROUTER:-molterm-vd}.loadbalancer.server.port=8920
+        networks:
+            - traefik
+
+    # The live demo: a VisiData per visitor. Its own container, locked down, since strangers type into it: nothing on disk is
+    # writable but a small /tmp, no Linux capabilities, no way to gain privileges, and caps on memory, CPU and processes.
+    molterm-vd-live:
+        image: molterm-vd:${APP_TAG:-latest}
+        restart: unless-stopped
+        user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+        command: ["python", "demo/live.py"]
+        environment:
+            - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
+            - LIVE_MAX_SESSIONS=${LIVE_MAX_SESSIONS:-4}
+        read_only: true
+        tmpfs:
+            - /tmp:size=256m,mode=1777
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        pids_limit: 400
+        mem_limit: 3g
+        cpus: 2
+        healthcheck:
+            test: ["CMD", "curl", "-fs", "http://localhost:8940/live/health"]
+            interval: 30s
+            timeout: 5s
+            start_period: 10s
+            retries: 3
+        labels:
+            - traefik.enable=true
+            - traefik.docker.network=traefik
+            - traefik.http.routers.${ROUTER:-molterm-vd}-live.rule=Host(`${APP_HOST:-molterm-vd.localhost}`) && PathPrefix(`/live`)
+            - traefik.http.routers.${ROUTER:-molterm-vd}-live.service=${ROUTER:-molterm-vd}-live
+            - traefik.http.routers.${ROUTER:-molterm-vd}-live.entrypoints=web
+            - traefik.http.services.${ROUTER:-molterm-vd}-live.loadbalancer.server.port=8940
+        networks:
+            - traefik

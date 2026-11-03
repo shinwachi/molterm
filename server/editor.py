@@ -23,6 +23,7 @@ from rdkit.Geometry import Point2D
 import annotate
 import editor_icons
 import graphics
+import placeholders
 import themes
 import molecule
 
@@ -1222,8 +1223,32 @@ def _place(layer, s, ui, png, cols, rows, row, col):
     old = _IDS[layer] + s["flips"].get(layer, 0)
     s["flips"][layer] = 1 - s["flips"].get(layer, 0)
     new = _IDS[layer] + s["flips"][layer]
+    if placeholders.active.get():  # sent only: its cells are printed with the text, see _grids
+        return placeholders.transmit(png, new, cols, rows) + placeholders.delete(old)
     sequence = graphics.kitty_sequence(png, cols, rows=rows, image_id=new, move_cursor=False, z=_Z[layer]).rstrip("\n")
     return ui.at(row, col) + sequence + f"\x1b_Ga=d,d=I,i={old},q=2\x1b\\"
+
+
+def _grids(s, ui):
+    """Through tmux, the cells that show the palette and the drawing: printed before the menus, which then cover them."""
+    out = []
+    for layer, cols, rows, left in (("palette", ui.per_row * ui.button_cols, ui.palette_rows, 0),
+                                    ("structure", ui.canvas_cols, ui.canvas_rows, ui.left)):
+        if layer in s["flips"]:
+            image = _IDS[layer] + s["flips"][layer]
+            out.append(placeholders.cells(image, cols, rows, lambda r, c, left=left: ui.at(ui.top + r, left + c)))
+    return "".join(out)
+
+
+def _composite(*pngs):
+    """Pictures laid one over another, for tmux, where a cell can show only one."""
+    layers = [Image.open(BytesIO(png)).convert("RGBA") for png in pngs]
+    combined = layers[0]
+    for layer in layers[1:]:
+        combined = Image.alpha_composite(combined, layer.resize(combined.size))
+    buffer = BytesIO()
+    combined.save(buffer, "PNG")
+    return buffer.getvalue()
 
 
 def _border(s, ui, colours):
@@ -1253,7 +1278,7 @@ def _backing(theme):
 
 def images_gone():
     """Remove all of the editor's images, for a host closing the box."""
-    return "".join(f"\x1b_Ga=d,d=I,i={base + flip},q=2\x1b\\" for base in _IDS.values() for flip in (0, 1))
+    return "".join(placeholders.delete_sequence(base + flip) for base in _IDS.values() for flip in (0, 1))
 
 
 def frame(s, ui, theme):
@@ -1274,11 +1299,19 @@ def frame(s, ui, theme):
             "overlay": digest(marks, s["view"]), "text": digest(popups, menu_bar, status, ui.title, s["button"])}
     if ui.boxed:
         keys["backing"] = digest()
+    tmux = placeholders.active.get()
+    if tmux:
+        # one picture a cell: the marks go into the drawing, and the box's backing isn't needed, as its cells cover what's below
+        keys["structure"] = digest(s["atoms"], s["bonds"], s["view"], s["notes"], marks)
+        del keys["overlay"]
+        keys.pop("backing", None)
     size = f"{ui.cols}x{ui.rows}+{ui.origin[0]}+{ui.origin[1]}"
     resized = s["size"] != size
     if not resized and all(s["shown"].get(name) == keys[name] for name in keys):
         return ""
     out = ["\x1b[?2026h"]  # terminals that know this show the whole frame at once
+    if tmux and any(s["shown"].get(name) != keys[name] for name in keys if name != "text"):
+        s["shown"]["text"] = None  # the grids are printed with the text, and the menus over them
     if resized:
         if ui.boxed:  # what is beside the box is the host's
             out.append(images_gone())
@@ -1287,14 +1320,17 @@ def frame(s, ui, theme):
             out.append("\x1b[2J")  # which also removes the images, so all of them are sent again
         s["size"] = size
         s["shown"] = {}
-    if ui.boxed and s["shown"].get("backing") != keys["backing"]:
+    if not tmux and ui.boxed and s["shown"].get("backing") != keys["backing"]:
         out.append(_place("backing", s, ui, _backing(theme), ui.cols + 2, ui.rows + 2, -1, -1))
     if s["shown"].get("palette") != keys["palette"]:
         png = editor_icons.palette_image(_ICON_NAMES, ui.per_row, ui.button_cols * ui.cell_width, 2 * ui.cell_height, active, s["tip"], theme)
         out.append(_place("palette", s, ui, png, ui.per_row * ui.button_cols, ui.palette_rows, ui.top, 0))
     if s["shown"].get("structure") != keys["structure"]:
-        out.append(_place("structure", s, ui, draw_structure(s, ui, theme), ui.canvas_cols, ui.canvas_rows, ui.top, ui.left))
-    if s["shown"].get("overlay") != keys["overlay"]:
+        drawn = draw_structure(s, ui, theme)
+        if tmux and marks:
+            drawn = _composite(drawn, draw_overlay(s, ui, marks))
+        out.append(_place("structure", s, ui, drawn, ui.canvas_cols, ui.canvas_rows, ui.top, ui.left))
+    if not tmux and s["shown"].get("overlay") != keys["overlay"]:
         if marks:
             out.append(_place("overlay", s, ui, draw_overlay(s, ui, marks), ui.canvas_cols, ui.canvas_rows, ui.top, ui.left))
         else:
@@ -1304,6 +1340,8 @@ def frame(s, ui, theme):
             for row in range(ui.top, ui.top + ui.canvas_rows):
                 out.append(ui.blank(row))
         s["cover"] = bool(popups)
+        if tmux:
+            out.append(_grids(s, ui))
         if ui.boxed:
             out.append(_border(s, ui, colours))
         out.append(menu_bar)

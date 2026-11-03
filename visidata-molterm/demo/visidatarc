@@ -1,0 +1,13 @@
+# VisiData's settings for the demo, and for `make vd`: the plugin, and a plain screen without the help sidebar.
+import sys
+sys.path.insert(0, "/app")
+import molterm_visidata  # noqa: E402,F401
+
+options.disp_help_flags = ""
+# the web terminal's font has no ⁝, VisiData's separator inside tall rows
+options.disp_rowmid_sep = "│"
+options.disp_rowbot_sep = "│"
+# a dark grey cursor row rather than reversed colours, under which light pictures would fade
+options.color_current_row = "bold on 238"
+# every row at full height on every sheet, as on the rows a chart's cursor opens
+options.disp_multiline_focus = False

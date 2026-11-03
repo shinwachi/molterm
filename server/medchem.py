@@ -99,13 +99,22 @@ def alerts(name, catalog):
     return found
 
 
-@lru_cache(maxsize=None)
-def properties(name):
-    m = mol(name)
+def descriptors(m):
+    """The properties computed from structure alone, for any molecule: all of PROPERTIES but the alerts."""
     values = {"mw": Descriptors.MolWt(m), "logp": Crippen.MolLogP(m), "tpsa": Descriptors.TPSA(m),
               "hbd": Lipinski.NumHDonors(m), "hba": Lipinski.NumHAcceptors(m), "rotb": Lipinski.NumRotatableBonds(m),
               "qed": QED.qed(m)}
     values["ro5"] = sum((values["mw"] > 500, values["logp"] > 5, values["hbd"] > 5, values["hba"] > 10))
+    return values
+
+
+def alert_counts(m):
+    return {catalog: len(_CATALOGS[catalog].GetMatches(m)) for catalog in ("pains", "brenk")}
+
+
+@lru_cache(maxsize=None)
+def properties(name):
+    values = descriptors(mol(name))
     values["pains"] = len(alerts(name, "pains"))
     values["brenk"] = len(alerts(name, "brenk"))
     return values

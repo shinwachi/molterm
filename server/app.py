@@ -8,6 +8,7 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 import board
 import editor
 import graphics
+import placeholders
 import themes
 import medchem
 import molecule
@@ -196,7 +197,8 @@ def term_text():
     except molecule.ParseError as e:
         return e.message + "\n", 400, plain
     names = None if selection is None else [name for name in selection.split(",") if name]
-    result = medchem.run(line, names, int(cols), display, cell_pixels, theme, background, line_editing=False)
+    with placeholders.using(request.args.get("placeholders") == "1"):
+        result = medchem.run(line, names, int(cols), display, cell_pixels, theme, background, line_editing=False)
     return f"{int(result['clear'])} {','.join(result['selection'])}\n{result['output']}", 200, plain
 
 
@@ -251,8 +253,9 @@ def edit():
     form = request.form
     try:
         cols, rows, raw, cell_width, cell_height, pixels, theme = terminal_form(form)
-        status, state, output = editor.step(form.get("state", ""), form.get("smiles", ""), raw, cols, rows, cell_width, cell_height, pixels, theme,
-                                            editor_box(form.get("box", "")), form.get("title", "")[:200])
+        with placeholders.using(form.get("placeholders") == "1"):
+            status, state, output = editor.step(form.get("state", ""), form.get("smiles", ""), raw, cols, rows, cell_width, cell_height, pixels, theme,
+                                                editor_box(form.get("box", "")), form.get("title", "")[:200])
     except (molecule.ParseError, editor.StateError) as e:
         return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
     return f"{status} {state}\n{output}", 200, plain
@@ -267,7 +270,8 @@ def tui():
     form = request.form
     try:
         cols, rows, raw, cell_width, cell_height, pixels, theme = terminal_form(form)
-        status, state, output = board.step(form.get("state", ""), form.get("items", ""), raw, cols, rows, cell_width, cell_height, pixels, theme)
+        with placeholders.using(form.get("placeholders") == "1"):
+            status, state, output = board.step(form.get("state", ""), form.get("items", ""), raw, cols, rows, cell_width, cell_height, pixels, theme)
     except (molecule.ParseError, editor.StateError) as e:
         return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
     return f"{status} {state}\n{output}", 200, plain
@@ -290,7 +294,8 @@ def showcase_frames():
 
 @app.route("/api/v1/render", methods=["POST"])
 def render_json():
-    """Like /api/v1/parse, with optional `cols`, `rows` and `mode`; the result adds `render` (text, ansi, labels, ...)."""
+    """Like /api/v1/parse, with optional `cols`, `rows` and `mode`; the result adds `render` (text, ansi, labels, ...), and with
+    `"properties": true` also `properties`: MW, cLogP, TPSA, HBD, HBA, rotatable bonds, QED, Ro5 violations and PAINS and Brenk alerts."""
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify(error={"code": "bad_request", "message": "Send a JSON object with an \"input\" field."}), 400
@@ -299,7 +304,51 @@ def render_json():
         parsed = molecule.parse(body.get("input"), body.get("format", "auto"))
     except molecule.ParseError as e:
         return jsonify(error={"code": e.code, "message": e.message}), 400
-    return jsonify(**parsed.to_dict(), render=renderer.render(parsed.mol, cols, rows, mode).to_dict())
+    extra = {}
+    if body.get("properties") is True:
+        extra["properties"] = {**medchem.descriptors(parsed.mol), **medchem.alert_counts(parsed.mol)}
+    return jsonify(**parsed.to_dict(), render=renderer.render(parsed.mol, cols, rows, mode).to_dict(), **extra)
+
+
+MAX_BATCH = 1000
+
+
+@app.route("/api/v1/properties", methods=["POST"])
+def properties_batch():
+    """Properties for many structures at once: {"inputs": [SMILES or molblock, ...]} (at most MAX_BATCH) gives {"results": [...]} in
+    the same order, each {"formula", "properties"} as /api/v1/render gives them, or {"error": {"code", "message"}}."""
+    body = request.get_json(silent=True)
+    inputs = body.get("inputs") if isinstance(body, dict) else None
+    if not isinstance(inputs, list) or not all(isinstance(text, str) for text in inputs):
+        return jsonify(error={"code": "bad_request", "message": "Send a JSON object with \"inputs\", a list of strings."}), 400
+    if len(inputs) > MAX_BATCH:
+        return jsonify(error={"code": "bad_request", "message": f"Send at most {MAX_BATCH} inputs at a time."}), 400
+    results = []
+    for text in inputs:
+        try:
+            parsed = molecule.parse(text)
+        except molecule.ParseError as e:
+            results.append({"error": {"code": e.code, "message": e.message}})
+            continue
+        results.append({"formula": parsed.to_dict()["formula"],
+                        "properties": {**medchem.descriptors(parsed.mol), **medchem.alert_counts(parsed.mol)}})
+    return jsonify(results=results)
+
+
+@app.route("/api/v1/render.png")
+def render_png():
+    """The drawing as a transparent PNG, for programs that place pictures themselves: ?input=[&format=][&cols=][&rows=][&theme=]
+    [&background=][&foreground=][&cell_width=<pixels per column>]. It fits within cols by rows cells, taking a cell as twice as tall as
+    wide, and is cropped to its drawing. It then takes `X-Molterm-Cols` columns, and its height / (2 × cell_width) rows."""
+    try:
+        cols, rows, _ = render_options(request.args)
+        theme = theme_option(request.args)
+        cell_pixels, _ = sixel_options(request.args)
+        parsed = molecule.parse(request.args.get("input"), request.args.get("format", "auto"))
+    except molecule.ParseError as e:
+        return e.message + "\n", 400, {"Content-Type": "text/plain; charset=utf-8"}
+    image, used = graphics.draw_image(parsed.mol, cols, rows, theme, cell_pixels or graphics.CELL_PIXELS)
+    return graphics._png(image), 200, {"Content-Type": "image/png", "X-Molterm-Cols": str(used), "Cache-Control": "max-age=3600"}
 
 
 @app.route("/api/v1/render.txt")
@@ -319,7 +368,8 @@ def render_text():
     except molecule.ParseError as e:
         return e.message + "\n", 400, plain
     if mode in graphics.MODES:
-        return graphics.render(parsed.mol, mode, cols, rows, theme, cell_pixels, background, int(fog)), 200, plain
+        with placeholders.using(request.args.get("placeholders") == "1"):
+            return graphics.render(parsed.mol, mode, cols, rows, theme, cell_pixels, background, int(fog)), 200, plain
     result = renderer.render(parsed.mol, cols, rows, mode)
     return (result.ansi if request.args.get("color") == "1" else result.text) + "\n", 200, plain
 

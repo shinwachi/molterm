@@ -1,0 +1,16 @@
+# Layered on docker-compose.yml for ENV=dev: the sub-project's folder bind-mounted over /app, drawn by the dev molterm server.
+services:
+    molterm-vd:
+        restart: "no"
+        environment:
+            - MOLTERM_URL=http://molterm-dev-molterm-1:8910
+        volumes:
+            - .:/app
+        command: ["flask", "--app", "demo/app.py", "run", "--host", "0.0.0.0", "--port", "8920"]
+
+    molterm-vd-live:
+        restart: "no"
+        environment:
+            - MOLTERM_URL=http://molterm-dev-molterm-1:8910
+        volumes:
+            - .:/app:ro

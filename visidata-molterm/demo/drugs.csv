@@ -1,0 +1,13 @@
+name,smiles,class,approved
+aspirin,CC(=O)Oc1ccccc1C(=O)O,NSAID,1899
+caffeine,Cn1cnc2c1c(=O)n(C)c(=O)n2C,stimulant,
+paracetamol,CC(=O)Nc1ccc(O)cc1,analgesic,1955
+ibuprofen,CC(C)Cc1ccc(C(C)C(=O)O)cc1,NSAID,1969
+serotonin,NCCc1c[nH]c2ccc(O)cc12,neurotransmitter,
+penicillin G,CC1(C)SC2C(NC(=O)Cc3ccccc3)C(=O)N2C1C(=O)O,antibiotic,1942
+nicotine,CN1CCCC1c1cccnc1,stimulant,
+imatinib,Cc1ccc(NC(=O)c2ccc(CN3CCN(C)CC3)cc2)cc1Nc1nccc(-c2cccnc2)n1,kinase inhibitor,2001
+gefitinib,COc1cc2ncnc(Nc3ccc(F)c(Cl)c3)c2cc1OCCCN1CCOCC1,kinase inhibitor,2003
+metformin,CN(C)C(=N)NC(=N)N,antidiabetic,1957
+diazepam,CN1C(=O)CN=C(c2ccccc2)c2cc(Cl)ccc21,benzodiazepine,1963
+fluoxetine,CNCCC(Oc1ccc(C(F)(F)F)cc1)c1ccccc1,SSRI,1987

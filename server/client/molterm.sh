@@ -77,6 +77,25 @@ in_multiplexer() {
     return 1
 }
 
+# Inside tmux, Kitty graphics go through as Unicode placeholders, which tmux keeps as text (see server/placeholders.py), when the
+# terminal outside it is Kitty or Ghostty and tmux lets them through. placeholders=1 asks the server for them.
+placeholders=0
+outer_kitty() {
+    [ -n "${TMUX:-}" ] || return 1
+    outer=$(tmux display -p '#{client_termname} #{client_termtype}' 2>/dev/null)
+    case $outer in *kitty*|*ghostty*|*Ghostty*) return 0 ;; esac
+    return 1
+}
+passthrough_on() {
+    case $(tmux show -Apv allow-passthrough 2>/dev/null) in *on*|*all*) return 0 ;; esac
+    return 1
+}
+
+# A Kitty graphics command, wrapped for tmux to pass on when that's where it goes
+kitty_command() {
+    if [ $placeholders = 1 ]; then printf '\033Ptmux;\033\033_G%s\033\033\\\033\\' "$1"; else printf '\033_G%s\033\\' "$1"; fi
+}
+
 # Ask the terminal four things, ending with the one every terminal answers, so that we know when to stop reading:
 # a Kitty graphics query, its name and version, its background and text colours and cell size, and its device attributes.
 ask_terminal() {
@@ -107,6 +126,11 @@ choose_mode() {
     # A multiplexer answers for itself: tmux claims Sixel even inside a terminal without it, and passes on no other images.
     # Only tmux's own list of the outer terminal's features can be trusted.
     if in_multiplexer; then
+        if outer_kitty; then
+            if passthrough_on; then echo kitty; return; fi
+            echo "molterm: this tmux is in $outer, which shows Kitty graphics, but tmux passes them on only with" \
+                 "allow-passthrough. To use them: tmux set -g allow-passthrough on (and add that to ~/.tmux.conf to keep it)." >&2
+        fi
         features=""
         [ -n "${TMUX:-}" ] && features=$(tmux display -p '#{client_termfeatures}' 2>/dev/null)
         case ,$features, in *,sixel,*) echo sixel ;; *) echo braille ;; esac
@@ -165,6 +189,10 @@ case $mode in
     auto|kitty|iterm|sixel) ask_terminal ;;
 esac
 [ "$mode" = auto ] && mode=$(choose_mode)
+if [ "$mode" = kitty ] && [ -n "${TMUX:-}" ]; then
+    placeholders=1
+    passthrough_on || echo "molterm: tmux passes Kitty graphics on only with allow-passthrough: tmux set -g allow-passthrough on" >&2
+fi
 read_background
 read_cell_size
 [ $verbose = 1 ] && echo "molterm: using $mode" >&2
@@ -187,6 +215,7 @@ run_line() {
     set -- -sS -G --data-urlencode "line=$1" --data-urlencode "display=$display" --data-urlencode "cols=$(columns)"
     [ $have_selection = 1 ] && set -- "$@" --data-urlencode "selection=$selection"
     [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
+    [ $placeholders = 1 ] && set -- "$@" --data-urlencode "placeholders=1"
     for option in $(colour_options); do set -- "$@" --data-urlencode "$option"; done
     if [ "$mode" = sixel ]; then
         [ -n "$cell_width" ] && set -- "$@" --data-urlencode "cell_width=$cell_width"
@@ -208,7 +237,7 @@ run_line() {
     selection=${first#* }
     have_selection=1
     if [ "${first%% *}" = 1 ]; then
-        [ "$mode" = kitty ] && printf '\033_Ga=d,q=2\033\\'
+        [ "$mode" = kitty ] && kitty_command 'a=d,q=2'
         printf '\033[2J\033[H'
     fi
     [ -z "$output" ] || printf '%s\n' "$output"
@@ -269,10 +298,11 @@ leave_editor() {
     [ $editing = 1 ] || return 0
     editing=0
     if [ -n "$box" ]; then  # the screen is the host's, so only the editor's own images go
-        for id in 7001 7002 7005 7006 7010 7011 7020 7021; do printf '\033_Ga=d,d=I,i=%s,q=2\033\\' "$id" >/dev/tty; done
+        for id in 7001 7002 7005 7006 7010 7011 7020 7021; do kitty_command "a=d,d=I,i=$id,q=2" >/dev/tty; done
         printf '\033[?1016l\033[?1006l\033[?1003l\033[?25h' >/dev/tty
     else
-        printf '\033_Ga=d,q=2\033\\\033[?1016l\033[?1006l\033[?1003l\033[?25h\033[?1049l' >/dev/tty
+        kitty_command 'a=d,q=2' >/dev/tty
+        printf '\033[?1016l\033[?1006l\033[?1003l\033[?25h\033[?1049l' >/dev/tty
     fi
     restore
 }
@@ -289,6 +319,7 @@ edit_request() {
     [ -n "$box" ] && set -- "$@" --data-urlencode "box=$box"
     [ -n "$title" ] && set -- "$@" --data-urlencode "title=$title"
     [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
+    [ $placeholders = 1 ] && set -- "$@" --data-urlencode "placeholders=1"
     for option in $(colour_options); do set -- "$@" --data-urlencode "$option"; done
     if [ -n "$cell_width" ] && [ -n "$cell_height" ]; then
         set -- "$@" --data-urlencode "cell_width=$cell_width" --data-urlencode "cell_height=$cell_height"
@@ -375,6 +406,7 @@ fi
 
 set -- -sS -G --data-urlencode "input=$smiles" --data-urlencode "mode=$mode"
 [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
+[ $placeholders = 1 ] && set -- "$@" --data-urlencode "placeholders=1"
 [ -n "$cols" ] && set -- "$@" --data-urlencode "cols=$cols"
 [ -n "$rows" ] && set -- "$@" --data-urlencode "rows=$rows"
 [ -n "$fog" ] && set -- "$@" --data-urlencode "fog=$fog"

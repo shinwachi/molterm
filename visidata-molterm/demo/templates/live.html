@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>molterm for VisiData · live</title>
+    <link rel="stylesheet" href="/vendor/house.css">
+    <style>
+        main { max-width: none; }
+        #controls { margin-bottom: var(--sp-2); align-items: center; flex-wrap: wrap; }
+        #state { color: var(--text-2); font-size: var(--fs-sm); }
+        #state.ok::before, #state.off::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        #state.ok::before { background: var(--ok); }
+        #state.off::before { background: var(--text-3); }
+        /* VisiData's own colours, light text on dark, whatever the page's theme */
+        #screen { background: #161615; border-radius: var(--radius, 4px); padding: var(--sp-2); }
+        #terminal { width: 100%; height: calc(100vh - 230px); min-height: 360px; }
+        .keys { margin-top: var(--sp-3); max-width: 110ch; color: var(--text-2); font-size: var(--fs-sm); }
+        .keys code, .keys kbd { font-family: monospace; color: var(--text); }
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <span class="brand">molterm for VisiData</span>
+    <span class="spacer"></span>
+    <nav>
+        <a class="btn quiet" href="/">Recorded demo</a>
+        <a class="btn quiet" href="/live" aria-current="page">Live</a>
+    </nav>
+</header>
+<main>
+    <div class="toolbar" id="controls">
+        <button class="btn primary" id="connect" type="button">New session</button>
+        <!-- the plugin's keys, for keyboards whose Alt doesn't reach the terminal: Alt and the letter -->
+        <button class="btn" type="button" data-alt="g" title="Alt+g">Chart</button>
+        <button class="btn" type="button" data-alt="b" title="Alt+b">Previous dot</button>
+        <button class="btn" type="button" data-alt="n" title="Alt+n">Next dot</button>
+        <button class="btn" type="button" data-alt="o" title="Alt+o">Open molecule</button>
+        <button class="btn" type="button" data-alt="t" title="Alt+t">Pictures or Braille</button>
+        <span id="state" class="off">Starting…</span>
+    </div>
+    <div id="screen"><div id="terminal" aria-label="VisiData, running on the server"></div></div>
+    <p class="keys">
+        A real VisiData on the server with 1000 made-up amides (40 acids × 25 amines), each drawn beside its SMILES with its formula, MW,
+        cLogP, TPSA, H-bond donors and acceptors, rotatable bonds, QED and alerts. Click the screen to use it. <kbd>Alt+g</kbd> or Chart
+        plots cLogP against MW below the table, a dot for each compound coloured by its series, with a card showing the molecule under
+        the cursor: <kbd>Alt+n</kbd> and <kbd>Alt+b</kbd> step from dot to dot and the table's cursor follows, <kbd>Tab</kbd> goes to the
+        table, where moving the cursor moves the chart's to that row's dot, <kbd>Enter</kbd> on the chart opens the compounds under its
+        cursor, and <kbd>q</kbd> closes the chart. On the sheet, <kbd>Alt+o</kbd> opens a molecule, <kbd>Alt+t</kbd> switches to Braille. Move with the arrows or <kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd>, sort with <kbd>[</kbd> and <kbd>]</kbd>, search with
+        <kbd>/</kbd>, select with <kbd>s</kbd> or <kbd>|</kbd>, count with <kbd>Shift+F</kbd>, plot with <kbd>.</kbd>, and <kbd>q</kbd>
+        to go back. This demo keeps to the sheet in memory: there is no Python, shell or file access, and the session ends after
+        <span id="idle">10</span> minutes without a key, or <span id="longest">30</span> in all. <span id="capacity"></span>
+    </p>
+</main>
+<script type="module" src="/live/static/live.js?v=5"></script>
+</body>
+</html>

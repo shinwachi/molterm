@@ -8,6 +8,7 @@ size the client reports.
 """
 import base64
 import math
+import random
 from io import BytesIO
 
 import numpy as np
@@ -16,6 +17,7 @@ from rdkit.Chem import GetPeriodicTable, Mol
 from rdkit.Chem.Draw import rdMolDraw2D
 
 import braille
+import placeholders
 import render as renderer
 import themes
 
@@ -284,10 +286,18 @@ def gallery(items, cols, cell_pixels, theme=DEFAULT_THEME):
     return sheet, used_cols
 
 
+def _through_tmux(image, cols):
+    """A picture as lines of placeholders, for tmux, which keeps them as text: they scroll with the shell, in its history too."""
+    rows = max(math.ceil(cols * image.height / image.width / CELL_ASPECT), 1)
+    return placeholders.lines(_png(image), random.randint(1 << 20, (1 << 24) - 1), cols, rows)
+
+
 def sequence(image, cols, mode, background=None, theme=DEFAULT_THEME):
     """Wrap an image in the escape sequence of a mode, without a line ending."""
     if mode == SIXEL:
         text = sixel_sequence(image, background or themes.get(theme).background)
+    elif mode == KITTY and placeholders.active.get():
+        text = _through_tmux(image, cols)
     else:
         text = (iterm_sequence if mode == ITERM else kitty_sequence)(_png(image), cols)
     return text.rstrip("\n")
@@ -302,4 +312,6 @@ def render(mol: Mol, mode=KITTY, cols=renderer.DEFAULT_COLS, rows=renderer.DEFAU
         image, _ = styled_image(mol, cols, rows, theme, cell_pixels or SIXEL_CELL_PIXELS, fog)
         return sixel_sequence(image, background or themes.get(theme).background, SIXEL_FOG_MIN_ALPHA if fog else SIXEL_MIN_ALPHA)
     image, used = styled_image(mol, cols, rows, theme, CELL_PIXELS, fog)
+    if mode == KITTY and placeholders.active.get():
+        return _through_tmux(image, used)
     return (iterm_sequence if mode == ITERM else kitty_sequence)(_png(image), used)
