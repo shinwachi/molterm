@@ -71,14 +71,36 @@ def _drain(fd, decoder, longest, quiet=QUIET):
     return "".join(out)
 
 
-def record(steps=STEPS, cols=COLS, rows=ROWS, csv=os.path.join(HERE, "drugs.csv"), env=None):
+# A short scene for the main app's /showcase, black on white like the rest of it, recorded at the size of the visitor's terminal there:
+# the structures and properties are on the sheet from the start, and the chart opens below it with the two cursors following each other.
+SHOWCASE_STEPS = [
+    (None, None, "VisiData, the terminal spreadsheet, with the molterm plugin: each drug drawn beside its SMILES, with its properties.", 4500),
+    ("jj", "j j", "It's still a spreadsheet: the rows scroll, the drawings with them.", 3000),
+    ("\x1bg", "Alt+g", "Alt+g charts cLogP against MW below the table, a dot for each drug, coloured by its class.", 4500),
+    ("\x1bn", "Alt+n", "Alt+n steps from dot to dot: the card names the molecule, and the table's cursor goes to its row.", 4000),
+    ("\x1bn", "Alt+n", "The next dot, the next row.", 2600),
+    ("\t", "Tab", "Tab goes up to the table...", 2000),
+    ("j", "j", "...where moving the cursor moves the chart's to that row's dot.", 3500),
+    ("\tq", "Tab q", "q closes the chart, and the table has the screen again.", 2800),
+    ("gq", "g q", "That's molterm in VisiData: import molterm_visidata in ~/.visidatarc.", 3000),
+]
+SCRIPTS = {"demo": (STEPS, "visidatarc"), "showcase": (SHOWCASE_STEPS, "showcase.visidatarc")}
+
+
+def output_path(script, cols=COLS, rows=ROWS):
+    if script == "demo":
+        return OUT
+    return os.path.join(os.path.dirname(OUT), f"{script}-{cols}x{rows}.json")
+
+
+def record(steps=STEPS, cols=COLS, rows=ROWS, csv=os.path.join(HERE, "drugs.csv"), env=None, config="visidatarc"):
     """Run VisiData through the steps; return the frames."""
     pid, fd = pty.fork()
     if pid == 0:
         fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         environment = {**os.environ, "TERM": "xterm-kitty", "COLUMNS": str(cols), "LINES": str(rows), "ESCDELAY": "25", **(env or {})}
         environment.pop("TMUX", None)
-        os.execvpe("vd", ["vd", "--config", os.path.join(HERE, "visidatarc"), csv], environment)
+        os.execvpe("vd", ["vd", "--config", os.path.join(HERE, config), csv], environment)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     frames = []
     try:
@@ -97,17 +119,21 @@ def record(steps=STEPS, cols=COLS, rows=ROWS, csv=os.path.join(HERE, "drugs.csv"
     return frames
 
 
-def main():
+def main(script="demo", cols=COLS, rows=ROWS):
+    """python demo/record.py [demo|showcase] [cols rows]"""
     started = time.time()
-    frames = record()
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    temporary = OUT + ".part"
+    steps, config = SCRIPTS[script]
+    frames = record(steps, cols, rows, config=config)
+    out = output_path(script, cols, rows)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    temporary = out + ".part"
     with open(temporary, "w") as f:
-        json.dump({"cols": COLS, "rows": ROWS, "recorded": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), "frames": frames}, f)
-    os.replace(temporary, OUT)
+        json.dump({"cols": cols, "rows": rows, "recorded": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()), "frames": frames}, f)
+    os.replace(temporary, out)
     size = sum(len(frame["output"]) for frame in frames)
-    print(f"recorded {len(frames)} frames, {size // 1024} KB, in {time.time() - started:.0f} s -> {os.path.normpath(OUT)}", file=sys.stderr)
+    print(f"recorded {len(frames)} frames, {size // 1024} KB, in {time.time() - started:.0f} s -> {os.path.normpath(out)}", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    main()
+    arguments = sys.argv[1:]
+    main(arguments[0] if arguments else "demo", *(int(n) for n in arguments[1:3]))

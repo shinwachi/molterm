@@ -91,18 +91,18 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(record, "OUT", str(tmp_path / "recording.json"))
     monkeypatch.setenv("MOLTERM_VD_NO_RECORDING", "1")
     import app as demo
-    monkeypatch.setattr(demo, "ensure_recording", lambda: None)
+    monkeypatch.setattr(demo, "ensure_recording", lambda job=None: None)
     return demo, demo.app.test_client()
 
 
 def test_the_page_waits_while_recording(client):
     demo, http = client
-    demo._state["recording"] = True
+    demo._state["recording"] = ("demo", 116, 34)
     try:
         response = http.get("/api/v1/recording")
         assert response.status_code == 503 and response.get_json()["error"]["code"] == "recording"
     finally:
-        demo._state["recording"] = False
+        demo._state["recording"] = None
 
 
 def test_the_page_serves_the_recording(client):
@@ -123,3 +123,14 @@ def test_a_recording_older_than_the_plugin_is_made_again(client, tmp_path):
     assert demo.stale()
     os.utime(record.OUT, None)
     assert not demo.stale()
+
+
+def test_the_showcase_scene_is_recorded_per_size_within_limits(client):
+    demo, http = client
+    assert demo._job({"script": "showcase", "cols": "100", "rows": "38"}) == ("showcase", 100, 38)
+    for bad in ({"script": "showcase", "cols": "20", "rows": "38"}, {"script": "showcase", "cols": "x", "rows": "38"},
+                {"script": "other"}):
+        assert demo._job(bad) is None
+    assert http.get("/api/v1/recording?script=showcase&cols=5000&rows=38").status_code == 400
+    assert record.output_path("showcase", 100, 38).endswith("showcase-100x38.json")
+    assert record.SCRIPTS["showcase"][1] == "showcase.visidatarc" and record.SHOWCASE_STEPS[-1][0] == "gq"  # VisiData quits at the end

@@ -1,0 +1,18 @@
+# VisiData's settings for the scene in the main app's /showcase: black on white like the rest of it, with the structures and properties
+# there from the start. The theme goes first, since setting it resets the display options set after it.
+import sys
+sys.path.insert(0, "/app")
+import molterm_visidata  # noqa: E402,F401
+
+vd.set_theme("light")
+options.molterm_theme = "light"
+options.molterm_mode = "kitty"
+options.molterm_auto = True
+options.molterm_auto_props = True
+options.disp_help_flags = ""
+# the web terminal's font has no ⁝, VisiData's separator inside tall rows
+options.disp_rowmid_sep = "│"
+options.disp_rowbot_sep = "│"
+# a light grey cursor row rather than reversed colours, under which the pictures would vanish
+options.color_current_row = "bold on 253"
+options.disp_multiline_focus = False

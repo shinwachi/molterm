@@ -15,6 +15,8 @@ services:
         environment:
             - SERVICENAME=molterm
             - APP_ENV=${APP_ENV:-prod}
+            # the visidata-molterm service, for the showcase's VisiData scene; empty leaves the scene out
+            - MOLTERM_VD_URL=${MOLTERM_VD_URL:-}
         env_file:
             - credentials_norepo.env
         volumes:

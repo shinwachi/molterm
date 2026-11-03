@@ -83,6 +83,13 @@ The service records the session when it starts, and again whenever the plugin, t
 the recording (`data/recording.json`, git-ignored); the page waits meanwhile. `demo/visidatarc` turns off the help sidebar, uses `│`
 inside tall rows (the web terminal's font has no `⁝`), and a dark grey cursor row, since reversed colours would fade light pictures.
 
+### For the main showcase
+
+The main app's `/showcase` ends with a short VisiData scene (`SHOWCASE_STEPS` in `demo/record.py`, with `demo/showcase.visidatarc`:
+VisiData's light theme, structures and properties from the start, the split chart and its linked cursors, and quitting at the end).
+`GET /api/v1/recording?script=showcase&cols=&rows=` records it at that size, 80 to 240 by 24 to 80, in about ten seconds the first
+time, and keeps the 24 most recent sizes in `data/`; it answers 503 while recording, one recording at a time.
+
 ## The live demo
 
 http://molterm-vd-dev.localhost/live is VisiData itself, for anyone with a browser: each visitor gets their own VisiData with the

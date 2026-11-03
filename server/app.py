@@ -3,6 +3,7 @@ import os
 import re
 
 import rdkit
+import requests
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
 import board
@@ -290,6 +291,30 @@ def showcase_frames():
         return jsonify(error={"code": e.code, "message": e.message}), 400
     except showcase_script.ShowcaseError as e:
         return jsonify(error={"code": "bad_request", "message": str(e)}), 400
+
+
+@app.route("/api/v1/showcase/visidata")
+def showcase_visidata():
+    """The showcase's VisiData scene, for a terminal of ?cols=&rows=: frames recorded from real VisiData with the molterm plugin by the
+    visidata-molterm service at $MOLTERM_VD_URL, each {caption, key, output, pause}. While it's being recorded, or without the service,
+    the answer is 503, with `code` "recording" (ask again) or "unavailable" (play the showcase without it)."""
+    base = os.environ.get("MOLTERM_VD_URL", "").rstrip("/")
+    if not base:
+        return jsonify(error={"code": "unavailable", "message": "No VisiData service is set up for this server."}), 503
+    try:
+        answer = requests.get(f"{base}/api/v1/recording", timeout=10,
+                              params={"script": "showcase", "cols": request.args.get("cols", ""), "rows": request.args.get("rows", "")})
+    except requests.RequestException:
+        return jsonify(error={"code": "unavailable", "message": "The VisiData service can't be reached."}), 503
+    try:
+        body = answer.json()
+    except ValueError:
+        return jsonify(error={"code": "unavailable", "message": "The VisiData service answered oddly."}), 503
+    if answer.status_code == 200:
+        return jsonify(frames=body.get("frames", []), cols=body.get("cols"), rows=body.get("rows"))
+    code = body.get("error", {}).get("code")
+    return jsonify(error={"code": code if code in ("recording", "bad_request") else "unavailable",
+                          "message": body.get("error", {}).get("message", "")}), 400 if code == "bad_request" else 503
 
 
 @app.route("/api/v1/render", methods=["POST"])

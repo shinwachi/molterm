@@ -212,6 +212,37 @@ async function load() {
     return result.frames;
 }
 
+// The VisiData scene comes from another service, recorded at this terminal's size the first time it's asked for, which takes half a
+// minute or so: the demo plays meanwhile, and the scene joins the end once it's ready. Without the service, the demo plays without it.
+async function loadScene() {
+    const query = new URLSearchParams({ cols: grid.cols, rows: grid.rows });
+    for (let tries = 0; tries < 60; tries++) {
+        let response, result;
+        try {
+            response = await fetch(`/api/v1/showcase/visidata?${query}`);
+            result = await response.json();
+        } catch (error) {
+            return;
+        }
+        if (response.ok) {
+            appendScene(result.frames || []);
+            return;
+        }
+        if (result.error?.code !== "recording") return;
+        await sleep(5000);
+    }
+}
+
+function appendScene(scene) {
+    if (!scene.length) return;
+    // a clean screen and no pictures before VisiData starts, as a new terminal would have
+    const clean = "\x1b_Ga=d,d=A,q=2\x1b\\\x1b[0m\x1b[2J\x1b[3J\x1b[H";
+    frames.push(...scene.map((frame, index) => ({
+        caption: frame.caption, output: (index === 0 ? clean : "") + frame.output, pointer: null, click: false,
+        key: frame.key, pause: frame.pause, scroll: 0,
+    })));
+}
+
 // The site is plain HTTP, where browsers offer no navigator.clipboard, so this is the older way, which a click allows.
 document.getElementById("clipboard-copy").onclick = () => {
     // the whole text, which for an SVG is more than is shown
@@ -249,6 +280,7 @@ if (await ready()) {
         caption.textContent = "Preparing the demo…";
         frames = await load();
         play();
+        loadScene();
     } catch (error) {
         setPlaying(false);
         caption.textContent = `The demo could not start: ${error.message}`;

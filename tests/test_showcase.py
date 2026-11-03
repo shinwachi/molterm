@@ -260,3 +260,40 @@ def test_showcase_prints_into_a_shell_and_scrolls_back():
 def test_showcase_shows_fog_settings():
     outputs = [frame["output"] for frame in showcase.frames(120, 38, 7, 14)]
     assert any("-t mono -f 100" in output for output in outputs)
+
+
+# the VisiData scene, from the visidata-molterm service
+
+
+class Answer:
+    def __init__(self, status, body):
+        self.status_code, self.body = status, body
+
+    def json(self):
+        return self.body
+
+
+def test_the_visidata_scene_is_passed_on_from_its_service(monkeypatch):
+    import requests
+    asked = []
+    monkeypatch.setenv("MOLTERM_VD_URL", "http://vd:8920/")
+    monkeypatch.setattr(requests, "get", lambda url, params, timeout: asked.append((url, params)) or
+                        Answer(200, {"cols": 100, "rows": 38, "frames": [{"caption": "c", "key": None, "output": "x", "pause": 1}]}))
+    result = app.test_client().get("/api/v1/showcase/visidata", query_string={"cols": 100, "rows": 38})
+    assert result.status_code == 200 and result.get_json()["frames"][0]["output"] == "x"
+    assert asked == [("http://vd:8920/api/v1/recording", {"script": "showcase", "cols": "100", "rows": "38"})]
+
+
+def test_while_recording_or_without_the_service_the_showcase_is_told_so(monkeypatch):
+    import requests
+    monkeypatch.setenv("MOLTERM_VD_URL", "http://vd:8920")
+    monkeypatch.setattr(requests, "get", lambda *a, **k: Answer(503, {"error": {"code": "recording", "message": "wait"}}))
+    assert app.test_client().get("/api/v1/showcase/visidata?cols=100&rows=38").get_json()["error"]["code"] == "recording"
+
+    def down(*a, **k):
+        raise requests.ConnectionError("no")
+    monkeypatch.setattr(requests, "get", down)
+    result = app.test_client().get("/api/v1/showcase/visidata?cols=100&rows=38")
+    assert result.status_code == 503 and result.get_json()["error"]["code"] == "unavailable"
+    monkeypatch.delenv("MOLTERM_VD_URL")
+    assert app.test_client().get("/api/v1/showcase/visidata").get_json()["error"]["code"] == "unavailable"

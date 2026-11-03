@@ -56,6 +56,13 @@ them and moves a pointer to show where the input went. It plays by itself, with 
 input. It won't overwrite your clipboard on its own: it shows what the terminal was asked to copy below the screen, with a **Copy text**
 button, and for a copy with pictures a preview of the PNG and **Save PNG** and **Save SVG** links.
 
+It ends with a VisiData scene: the plugin from `visidata-molterm/`, with each drug's structure and properties in the spreadsheet,
+then the chart of cLogP against MW below it, stepping through the dots with the card naming each molecule and the table's cursor
+following, and `Tab` to the table with the chart following back. The scene is real VisiData output, recorded by the visidata-molterm
+service at the showcase terminal's own size the first time that size is asked for (about ten seconds) and kept for later visitors;
+`GET /api/v1/showcase/visidata?cols=&rows=` passes it on from `$MOLTERM_VD_URL` (set in `env/dev.env` and `env/prod.env`). The
+page asks for it while the rest plays and adds it to the end once it's ready; without the service the showcase plays without it.
+
 Or use a real terminal:
 
 ```sh
@@ -292,6 +299,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `kitty`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
 | `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, `background` and `foreground` (`RRGGBB`, the terminal's, to fit the theme to), and for Sixel `cell_width` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |
+| `GET /api/v1/showcase/visidata` | query `cols`, `rows` | `frames` of the VisiData scene (`caption`, `key`, `output`, `pause`), or 503 with `code` `recording` (ask again) or `unavailable` |
 | `GET /api/v1/showcase` | query `cols`, `rows`, `cell_width`, `cell_height` | `frames`, each with `caption`, `output`, `pointer` (`[col, row]` or null), `click`, `key`, `pause` (ms) and `scroll` (lines to move the view, up if negative) |
 | `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (`braille`, `octant`, `ascii`, also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (see Colour themes), `background` and `foreground` (`RRGGBB`) and `fog` (0-100); for Sixel `cell_width` (pixels, 4-40) | plain text, with ANSI colours when asked, or image escape sequences |
 | `POST /api/v1/edit` | form fields `cols`, `rows`, `events` (raw input, as hex), `state` (from the last answer) or `smiles` to begin, optional `cell_width`, `cell_height`, `pixels=1`, `theme`, `background`, `foreground` | a first line of `<0 to go on, 1 finished, 2 failed> <state>`, then what to print |
