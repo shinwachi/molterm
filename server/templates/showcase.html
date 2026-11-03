@@ -12,6 +12,9 @@
         #pointer { position: absolute; left: 0; top: 0; width: 18px; height: 24px; pointer-events: none; display: none; transition: transform 600ms ease-in-out; z-index: 2; }
         #pointer svg { display: block; }
         #pointer.clicking svg { transform: scale(0.8); transform-origin: 0 0; }
+        #clipboard { margin-top: var(--sp-2); align-items: center; }
+        #clipboard[hidden] { display: flex; visibility: hidden; }  /* keeps its room, so the page doesn't shift when it appears */
+        #clipboard-text { font-family: monospace; overflow-wrap: anywhere; }
         #keycap { position: absolute; left: 0; top: 0; display: none; z-index: 2; padding: 2px 9px; background: #000000; color: #ffffff; border-radius: 4px; font: bold 15px monospace; }
     </style>
 {% endblock %}
@@ -27,6 +30,11 @@
         <div id="pointer"><svg width="18" height="24" viewBox="0 0 18 24" aria-hidden="true"><path d="M1 1 L1 19 L6 15 L9.5 23 L13 21.5 L9.5 14 L16 14 Z" fill="#000000" stroke="#ffffff" stroke-width="1.5"/></svg></div>
         <div id="keycap"></div>
     </div></div>
+    <div class="toolbar" id="clipboard" hidden>
+        <span>Clipboard</span>
+        <span id="clipboard-text"></span>
+        <button class="btn" id="clipboard-copy" type="button">Copy</button>
+    </div>
 {% endblock %}
 {% block script %}
 <script type="module" src="/static/showcase.js"></script>

@@ -22,6 +22,7 @@ KITTY, ITERM, SIXEL = "kitty", "iterm", "sixel"
 MODES = (KITTY, ITERM, SIXEL)
 THEMES = ("dark", "light", "mono")
 DEFAULT_THEME = "dark"
+FOG_RANGE = (0, 100)
 
 CELL_PIXELS = 20  # image pixels per column for a PNG, which stays sharp on a high-density screen with cells about 20 px wide
 SIXEL_CELL_PIXELS = 10  # a typical cell's real width, when the client could not find out
@@ -33,6 +34,7 @@ CHUNK_SIZE = 4096  # the Kitty protocol's limit for one escape sequence's payloa
 
 SIXEL_COLORS = 64  # plenty for bonds, six element colours and their antialiased edges, and most terminals allow 256
 SIXEL_MIN_ALPHA = 24  # fainter pixels are left unpainted, so the terminal's own background shows through them
+SIXEL_FOG_MIN_ALPHA = 3  # but fog is all faint pixels, and cutting them off would give it an edge
 _ASSUMED_BACKGROUND = {"dark": (0, 0, 0), "light": (255, 255, 255), "mono": (255, 255, 255)}
 
 # The image is transparent, so its ink must suit the terminal's background. The server cannot detect that.
@@ -96,6 +98,73 @@ def _crop(image, cell_pixels):
     return padded, cols
 
 
+def _gaussian(layers, sigma):
+    """Blur an array of height x width x channels. The image's margin keeps what wraps around at its edges too faint to matter."""
+    height, width = layers.shape[:2]
+    across, down = np.fft.rfftfreq(width)[None, :], np.fft.fftfreq(height)[:, None]
+    kernel = np.exp(-2 * (np.pi * sigma) ** 2 * (across ** 2 + down ** 2))[:, :, None]
+    return np.fft.irfft2(np.fft.rfft2(layers, axes=(0, 1)) * kernel, s=(height, width), axes=(0, 1))
+
+
+def _peak(layer, level):
+    """Scale a blurred layer so that its strongest pixel has this opacity: blurring a thin line would otherwise leave almost nothing."""
+    return layer * (level / max(layer[:, :, 3].max(), 1e-6))
+
+
+def _over(top, below):
+    return top + below * (1 - top[:, :, 3:])
+
+
+def _mottle(height, width, cell_pixels):
+    """Slow, uneven patches from 0 to 1, as condensation has. Always the same, so that a drawing always comes out the same."""
+    noise = np.random.default_rng(7).standard_normal((height, width, 1))
+    smooth = _gaussian(noise, 2.5 * cell_pixels)
+    return (smooth - smooth.min()) / max(float(smooth.max() - smooth.min()), 1e-6)
+
+
+# Fog's strength at 100: how far each layer spreads, in columns, and how dark its darkest pixel is. Kept faint, so the drawing stays crisp.
+_LINE_SPREAD, _GLOW_SPREAD, _HAZE_SPREAD = (0.02, 0.04), (0.12, 0.2), (0.4, 0.6)  # (at 0, added by 100)
+_GLOW_LEVEL, _HAZE_LEVEL = (0.1, 0.25), (0.04, 0.12)
+
+
+def _fog_margin(fog):
+    """Columns kept clear on each side for what spreads from the lines."""
+    return math.ceil(2.5 * (_HAZE_SPREAD[0] + _HAZE_SPREAD[1] * fog / 100))
+
+
+def _scaled(pair, amount):
+    return pair[0] + pair[1] * amount
+
+
+def _diffuse(image, fog, cell_pixels):
+    """Spread the ink a little, as through fogged glass: slightly softened lines, a close glow and a wide, faintly patchy haze."""
+    margin = _fog_margin(fog) * cell_pixels
+    canvas = Image.new("RGBA", (image.width + 2 * margin, image.height + 2 * margin), (0, 0, 0, 0))
+    canvas.paste(image, (margin, margin))
+    pixels = np.asarray(canvas, dtype=float) / 255
+    ink = np.concatenate((pixels[:, :, :3] * pixels[:, :, 3:], pixels[:, :, 3:]), axis=2)  # colours scaled by opacity, so that they blur correctly
+    amount = fog / 100
+    patches = _mottle(*ink.shape[:2], cell_pixels)
+    lines = np.clip(_peak(_gaussian(ink, _scaled(_LINE_SPREAD, amount) * cell_pixels), 1), 0, 1)
+    glow = _peak(_gaussian(ink, _scaled(_GLOW_SPREAD, amount) * cell_pixels), _scaled(_GLOW_LEVEL, amount))
+    haze = _peak(_gaussian(ink, _scaled(_HAZE_SPREAD, amount) * cell_pixels), _scaled(_HAZE_LEVEL, amount)) * (0.75 + 0.5 * patches)
+    ink = np.clip(_over(lines, _over(glow, haze)), 0, 1)
+    opacity = ink[:, :, 3:]
+    # where the haze all but vanishes, rounding in the blur can leave colour without opacity, so only divide where there's some, and clamp
+    colours = np.clip(np.divide(ink[:, :, :3], opacity, out=np.zeros_like(ink[:, :, :3]), where=opacity > 1e-4), 0, 1)
+    return Image.fromarray((np.concatenate((colours, opacity), axis=2) * 255).round().astype(np.uint8), "RGBA")
+
+
+def styled_image(mol: Mol, cols, rows, theme=DEFAULT_THEME, cell_pixels=CELL_PIXELS, fog=0):
+    """As draw_image, with `fog` from 0, none, to 100, still within cols and rows. The image stays transparent, in the theme's ink."""
+    if not fog:
+        return draw_image(mol, cols, rows, theme, cell_pixels)
+    margin = _fog_margin(fog)
+    image, _ = draw_image(mol, max(cols - 2 * margin, 8), max(rows - math.ceil(margin / CELL_ASPECT) * 2, 4), theme, cell_pixels)
+    styled = _diffuse(image, fog, cell_pixels)
+    return styled, styled.width // cell_pixels
+
+
 def _png(image):
     buffer = BytesIO()
     image.save(buffer, "PNG")
@@ -142,7 +211,7 @@ def _sixel_row(values):
     return "".join(parts)
 
 
-def sixel_sequence(image, background=(0, 0, 0)):
+def sixel_sequence(image, background=(0, 0, 0), min_alpha=SIXEL_MIN_ALPHA):
     """Encode an RGBA image as Sixel. `background` is what antialiased edges blend into; empty pixels stay unpainted."""
     pixels = np.asarray(image, dtype=float)
     alpha = pixels[:, :, 3:] / 255
@@ -150,7 +219,7 @@ def sixel_sequence(image, background=(0, 0, 0)):
     quantized = Image.fromarray(blended, "RGB").quantize(SIXEL_COLORS, method=Image.Quantize.MEDIANCUT,
                                                          dither=Image.Dither.NONE)
     indices = np.asarray(quantized, dtype=int).copy()
-    indices[pixels[:, :, 3] < SIXEL_MIN_ALPHA] = -1
+    indices[pixels[:, :, 3] < min_alpha] = -1
     palette = quantized.getpalette()
     height, width = indices.shape
 
@@ -227,12 +296,12 @@ def sequence(image, cols, mode, background=None, theme=DEFAULT_THEME):
 
 
 def render(mol: Mol, mode=KITTY, cols=renderer.DEFAULT_COLS, rows=renderer.DEFAULT_ROWS, theme=DEFAULT_THEME,
-           cell_pixels=None, background=None):
+           cell_pixels=None, background=None, fog=0):
     """Return what to print in the terminal. Atoms without bonds gain nothing from pixels, so they stay as text."""
     if not mol.GetNumBonds():
         return renderer.render(mol, cols, rows).ansi + "\n"
     if mode == SIXEL:
-        image, _ = draw_image(mol, cols, rows, theme, cell_pixels or SIXEL_CELL_PIXELS)
-        return sixel_sequence(image, background or _ASSUMED_BACKGROUND[theme])
-    image, used = draw_image(mol, cols, rows, theme)
+        image, _ = styled_image(mol, cols, rows, theme, cell_pixels or SIXEL_CELL_PIXELS, fog)
+        return sixel_sequence(image, background or _ASSUMED_BACKGROUND[theme], SIXEL_FOG_MIN_ALPHA if fog else SIXEL_MIN_ALPHA)
+    image, used = styled_image(mol, cols, rows, theme, CELL_PIXELS, fog)
     return (iterm_sequence if mode == ITERM else kitty_sequence)(_png(image), used)

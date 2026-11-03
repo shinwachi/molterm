@@ -1,7 +1,9 @@
 """The editor in a box, and the list of structures that hosts it, driven with the raw bytes a terminal would send."""
+import base64
 import os
 import re
 import sys
+import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 import board  # noqa: E402
@@ -371,5 +373,66 @@ def test_moving_to_another_tile_clears_the_message():
     b = board.new_state(board.parse_items("CCO one\nCCC two"))
     b["message"], b["cursor"] = "Something happened.", 0
     grid = board.Grid(120, 38)
-    assert board._handle_list(b, grid, ("mouse", 35, 45.5, 5.5, False), 120, 38, (10, 20, False), False) is False
+    assert board._handle_list(b, grid, ("mouse", 35, 45.5, 5.5, False), 120, 38, (10, 20, False), False, []) is False
     assert b["cursor"] == 1 and b["message"] == ""
+
+
+def _copies(output):
+    return [base64.b64decode(text).decode() for text in re.findall(r"\x1b\]52;c;([A-Za-z0-9+/=]*)\x1b\\", output)]
+
+
+def _hover_report(col, row):
+    return f"\x1b[<35;{col + 1};{row + 1}M"
+
+
+def test_c_copies_the_structure_under_the_pointer_even_read_only():
+    _, state, _ = board.step("", "ro:CCO ethanol\nCCN", "", 100, 30)
+    _, state, _ = board.step(state, "", _hover_report(5, 3), 100, 30)
+    _, state, output = board.step(state, "", "c", 100, 30)
+    assert _copies(output) == ["CCO"]
+    assert "ethanol went to the clipboard" in output
+    assert "]52;" not in zlib.decompress(base64.urlsafe_b64decode(state)).decode()
+
+
+def test_c_without_a_structure_asks_for_one():
+    _, state, _ = board.step("", "CCO", "", 100, 30)
+    _, state, output = board.step(state, "", "c", 100, 30)
+    assert _copies(output) == []
+    assert "Point at a structure" in output
+
+
+def test_clicking_the_copy_label_copies_and_does_not_open_the_editor():
+    grid = board.Grid(100, 30)
+    row, col = grid.copy_label(0, 0)
+    _, state, _ = board.step("", "CCO", "", 100, 30)
+    _, state, output = board.step(state, "", _hover_report(col + 2, row), 100, 30)
+    assert board.COPY_LABEL in output
+    _, state, output = board.step(state, "", f"\x1b[<0;{col + 3};{row + 1}M\x1b[<0;{col + 3};{row + 1}m", 100, 30)
+    assert _copies(output) == ["CCO"]
+    assert editor.decode(state, board._check_state)["editing"] is None
+
+
+def test_the_window_copy_button_copies_the_drawing_and_keeps_it_open():
+    _, state, _ = board.step("", "CCO", "", 100, 30)
+    _, state, _ = board.step(state, "", "\x1b[C\r", 100, 30)
+    b = editor.decode(state, board._check_state)
+    assert b["editing"]
+    ui = board._box_layout(b, 100, 30, (10, 20, False))
+    _, label, start = next(button for button in ui.buttons() if button[0] == "copy")
+    col, row = start + ui.origin[1] + 2, ui.rows + ui.origin[0]
+    _, state, output = board.step(state, "", f"\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m", 100, 30)
+    assert _copies(output) == ["CCO"]
+    assert "sent to the clipboard" in output
+    assert editor.decode(state, board._check_state)["editing"]
+
+
+def test_the_editor_cannot_copy_an_empty_drawing():
+    _, state, _ = editor.step("", "", "", 100, 30)
+    s = editor.decode(state)
+    editor._copy(s)
+    assert "Nothing to copy" in s["message"]
+    assert editor.take_clipboard(s) == ""
+
+
+def test_copy_is_in_the_file_menu():
+    assert ("Copy SMILES", "", ("command", "copy")) in editor.MENUS[0][1]

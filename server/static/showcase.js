@@ -10,6 +10,8 @@ const element = document.getElementById("terminal");
 const caption = document.getElementById("caption"), progress = document.getElementById("progress");
 const pointer = document.getElementById("pointer"), keycap = document.getElementById("keycap");
 const playButton = document.getElementById("play");
+const clipboard = document.getElementById("clipboard"), clipboardText = document.getElementById("clipboard-text");
+const COPIED = /\x1b\]52;c;([A-Za-z0-9+/=]*)\x1b\\/g;
 
 // a font that gives about the same grid on any screen, since the demo is laid out for it
 const FONT_SIZE = Math.min(Math.max(Math.floor(document.getElementById("frame").clientWidth / (WANTED_COLS * ADVANCE)), 10), 24);
@@ -31,10 +33,34 @@ const write = data => terminal.sendInput(data, "pty");
 const pane = terminal.getActivePane();
 let grid = null, frames = null, generation = 0, playing = false, position = 0;
 
+// restty applies a resize some time later, slower on a first visit. Its canvas is sized in whole cells, so a grid has taken hold when the
+// canvas divides evenly into it, and stays so.
+async function settled(cols, rows) {
+    let last = "";
+    for (let tries = 0; tries < 100; tries++) {
+        await sleep(50);
+        const { width, height } = pane.canvas;
+        const now = `${width}x${height}`;
+        if (width && width % cols === 0 && height % rows === 0 && now === last) return;
+        last = now;
+    }
+}
+
+// The canvas stretches to its parent, so the parent must always be the canvas's own size, or text and images come out distorted.
+function fitParent() {
+    const ratio = window.devicePixelRatio || 1;
+    const width = `${pane.canvas.width / ratio}px`, height = `${pane.canvas.height / ratio}px`;
+    if (element.style.width !== width || element.style.height !== height) {
+        element.style.width = width;
+        element.style.height = height;
+        document.getElementById("frame").style.height = height;
+    }
+}
+
 // restty doesn't report its grid, but holds whatever it is given, and sizes its canvas in whole cells of the device's pixels.
 async function measure() {
     pane.resize(100, 40);
-    await sleep(120);
+    await settled(100, 40);
     const cellWidth = pane.canvas.width / 100, cellHeight = pane.canvas.height / 40, ratio = window.devicePixelRatio || 1;
     const area = document.getElementById("frame");
     const cols = Math.floor(area.clientWidth * ratio / cellWidth), rows = Math.min(Math.floor(area.clientHeight * ratio / cellHeight), MAX_ROWS);
@@ -47,7 +73,9 @@ async function measure() {
     document.getElementById("screen").style.minHeight = "0";
     await sleep(120);
     pane.resize(cols, rows);
-    await sleep(120);
+    await settled(cols, rows);
+    fitParent();
+    setInterval(fitParent, 500);  // in case restty sizes its canvas again, as when its font arrives late
     return { cols, rows, cellWidth, cellHeight, cssWidth, cssHeight };
 }
 
@@ -79,7 +107,14 @@ async function show(frame, mine) {
         setTimeout(() => { keycap.style.display = "none"; }, KEY_SHOWN);
     }
     if (mine !== generation) return;
-    if (frame.output) write(frame.output);
+    if (frame.output) {
+        // a page that plays by itself shouldn't overwrite the viewer's clipboard, so this shows what the terminal was asked to copy instead
+        for (const [, text] of frame.output.matchAll(COPIED)) {
+            clipboardText.textContent = atob(text);
+            clipboard.hidden = false;
+        }
+        write(frame.output.replace(COPIED, ""));
+    }
     await sleep(frame.pause);
 }
 
@@ -92,7 +127,10 @@ async function play() {
     const mine = ++generation;
     setPlaying(true);
     while (mine === generation) {
-        if (position === 0) write("\x1bc");
+        if (position === 0) {
+            write("\x1bc");
+            clipboard.hidden = true;
+        }
         await show(frames[position], mine);
         if (mine !== generation) return;
         position++;
@@ -117,6 +155,15 @@ async function load() {
     if (!response.ok) throw new Error(result.error.message);
     return result.frames;
 }
+
+// The site is plain HTTP, where browsers offer no navigator.clipboard, so this is the older way, which a click allows.
+document.getElementById("clipboard-copy").onclick = () => {
+    const selection = getSelection(), range = document.createRange();
+    range.selectNodeContents(clipboardText);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.execCommand("copy");
+};
 
 playButton.onclick = () => {
     if (playing) { stop(); return; }

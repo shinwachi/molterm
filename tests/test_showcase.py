@@ -184,3 +184,24 @@ def test_the_ethyl_group_comes_out_right():
     cosine = (ax * bx + ay * by) / ((ax ** 2 + ay ** 2) ** 0.5 * (bx ** 2 + by ** 2) ** 0.5)
     assert cosine > -0.9
     assert editor.analyse(s)[0] == "CCO"
+
+
+def _clipboard(output):
+    return [base64.b64decode(text).decode() for text in re.findall(r"\x1b\]52;c;([A-Za-z0-9+/=]*)\x1b\\", output)]
+
+
+def test_showcase_copies_from_the_list_and_the_window():
+    copied = [text for frame in showcase.frames(120, 38, 7, 14) for text in _clipboard(frame["output"])]
+    aspirin = "CC(=O)Oc1ccccc1C(=O)O"
+    assert copied == [aspirin, showcase.EDITED, showcase.EDITED]
+
+
+def test_showcase_pastes_what_it_copied_into_a_foggy_drawing():
+    pasted = next(frame["output"] for frame in showcase.frames(120, 38, 7, 14) if "$ molterm" in frame["output"])
+    assert f"-f {showcase.PASTED_FOG} '{showcase.EDITED}'" in pasted
+    assert "\x1b_G" in pasted
+
+
+def test_showcase_shows_fog_settings():
+    outputs = [frame["output"] for frame in showcase.frames(120, 38, 7, 14)]
+    assert any("-t mono -f 100" in output for output in outputs)

@@ -310,3 +310,79 @@ def test_large_molecule_stays_practical_as_sixel():
     text = graphics.render(big, "sixel", 240, 120)
     assert time.monotonic() - started < 10
     assert len(text) < 5_000_000
+
+
+def _caffeine():
+    return molecule.parse("Cn1cnc2c1c(=O)n(C)c(=O)n2C", "smiles").mol
+
+
+def test_no_fog_leaves_the_image_alone():
+    plain, cols = graphics.draw_image(_caffeine(), 60, 20)
+    styled, styled_cols = graphics.styled_image(_caffeine(), 60, 20, fog=0)
+    assert cols == styled_cols and plain.tobytes() == styled.tobytes()
+
+
+def test_fog_spreads_ink_into_empty_pixels_and_stays_transparent():
+    plain, _ = graphics.draw_image(_caffeine(), 60, 20)
+    fogged, cols = graphics.styled_image(_caffeine(), 60, 20, fog=50)
+    def share(image):
+        return (np.asarray(image)[:, :, 3] > 8).mean()
+    assert share(fogged) > 2 * share(plain)
+    assert np.asarray(fogged)[0, 0, 3] < 8
+    assert fogged.width == cols * graphics.CELL_PIXELS
+
+
+def test_more_fog_spreads_further():
+    def spread(fog):
+        image, _ = graphics.styled_image(_caffeine(), 60, 20, fog=fog)
+        return (np.asarray(image)[:, :, 3] > 8).sum()
+    assert spread(20) < spread(80)
+
+
+def test_fog_comes_out_the_same_every_time():
+    assert graphics.styled_image(_caffeine(), 60, 20, fog=40)[0].tobytes() == graphics.styled_image(_caffeine(), 60, 20, fog=40)[0].tobytes()
+
+
+@pytest.mark.parametrize("fog", (1, 50, 100))
+def test_fog_stays_subtle_and_keeps_the_lines_solid(fog):
+    image, _ = graphics.styled_image(_caffeine(), 60, 20, "mono", fog=fog)
+    alpha = np.asarray(image)[:, :, 3]
+    assert alpha.max() == 255  # the lines themselves
+    haze = alpha[(alpha > 0) & (alpha < 200)]
+    assert np.median(haze) < 40  # most of the spread is faint
+
+
+def test_mono_fog_is_black_ink_on_transparency():
+    image, _ = graphics.styled_image(_caffeine(), 60, 20, "mono", fog=60)
+    pixels = np.asarray(image)
+    assert pixels[pixels[:, :, 3] > 0][:, :3].max() == 0
+    assert pixels[0, 0, 3] < 8
+
+
+@pytest.mark.parametrize("theme,fog", (("dark", 100), ("mono", 100), ("mono", 0)))
+def test_settings_stay_within_the_columns_asked_for(theme, fog):
+    _, cols = graphics.styled_image(_caffeine(), 40, 20, theme, fog=fog)
+    assert cols <= 40
+
+
+def test_sixel_keeps_fog_fainter_than_it_would_keep_antialiasing():
+    output = graphics.render(_caffeine(), graphics.SIXEL, 40, 20, "dark", 10, (0, 0, 0), 60)
+    assert output.startswith("\x1bP") and output.rstrip().endswith("\x1b\\")
+    assert len(output) > len(graphics.render(_caffeine(), graphics.SIXEL, 40, 20, "dark", 10, (0, 0, 0)))
+
+
+def test_render_endpoint_takes_fog(client):
+    query = {"input": "CCO", "mode": "kitty"}
+    assert client.get("/api/v1/render.txt", query_string=query).data != client.get("/api/v1/render.txt", query_string={**query, "fog": "40"}).data
+
+
+@pytest.mark.parametrize("fog", ("101", "-1", "a", ""))
+def test_render_endpoint_refuses_bad_fog(client, fog):
+    response = client.get("/api/v1/render.txt", query_string={"input": "CCO", "mode": "kitty", "fog": fog})
+    assert response.status_code == 400
+    assert b"fog must be" in response.data
+
+
+def test_text_modes_ignore_the_settings(client):
+    query = {"input": "CCO", "mode": "braille"}
+    assert client.get("/api/v1/render.txt", query_string=query).data == client.get("/api/v1/render.txt", query_string={**query, "fog": "40"}).data

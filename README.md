@@ -41,10 +41,12 @@ has no image drawing. restty and a font are fetched and checksummed when the ima
 from a CDN. Its page downloads 4.2 MB of script.
 
 http://molterm-dev.localhost/showcase is an automated demo in the same web terminal, black on white. It sets molecules as Kitty
-graphics beside plain ASCII, with Braille for a larger drug, then works through a real edit: it clicks a structure in a list,
-edits it in the windowed editor, chooses Done and gets the list back. The server makes every frame with the same code as
-`molterm tui`, and the page only prints them and moves a pointer to show where the input went. It plays by itself, with **Stop**
-and **Start again**, and doesn't take input.
+graphics beside plain ASCII, with Braille for a larger drug, and shows the fog setting. Then it works through a real
+edit: it copies a SMILES, clicks a structure in a list, edits it in the windowed editor, chooses Done, copies the result, pastes it
+into a command and gets the list back. The server makes every frame with the same code as `molterm tui`, and the page only prints
+them and moves a pointer to show where the input went. It plays by itself, with **Stop** and **Start again**, and doesn't take
+input. It won't overwrite your clipboard on its own: it shows what the terminal was asked to copy below the screen, with a **Copy**
+button.
 
 Or use a real terminal:
 
@@ -93,6 +95,17 @@ It chooses the first of these that the terminal supports. `-m` or `$MOLTERM_MODE
 `-m octant` and `-m ascii` are only used if you ask for them. ASCII draws each bond as characters, at a larger size, so it survives
 anything that carries text, but it's coarse: it suits small and mid-sized molecules.
 
+Fog diffuses the lines a little, as if the drawing were seen through fogged glass: a faint halo and a wider, slightly patchy haze, from
+0 (none) to 100. It's subtle even at 100, and the lines stay crisp. It works in the graphics modes for one structure; text modes ignore it,
+so a fallback to Braille still works.
+
+```sh
+./molterm -t mono -f 50 'CCO'   # black on white, softly diffused
+```
+
+Fog takes the theme's ink, so on `dark` and `light` the halo keeps the element colours. The drawing stays within `-c` and `-r`, with the
+molecule a little smaller to leave room for the haze. Fog isn't available in `molterm demo`, `edit` or `tui`.
+
 ### Drawing a molecule
 
 `molterm edit` is a molecular editor inside the terminal, for Kitty and Ghostty, laid out like a desktop drawing program such as
@@ -137,6 +150,11 @@ the editor in a box over the rest. Done (or Ctrl-Q) puts the edit back in the li
 ./molterm tui 'ro:CC(=O)Oc1ccccc1C(=O)O Aspirin' 'CCO Ethanol'  # "SMILES name"; ro: means read-only
 ./molterm tui 'CCO Ethanol' > edited.smi                        # q prints the list as it now stands
 ```
+
+To copy a structure's SMILES, point at it and press `c`, or click **copy** on the frame around it; read-only ones can be copied too.
+In the editor, use **Copy SMILES** on the box's bottom edge, or **File > Copy SMILES**, which also works in the full-screen `molterm edit`.
+Copying uses the terminal's clipboard sequence (OSC 52), so it reaches your clipboard even over SSH. A terminal can refuse it without saying
+so: Kitty and Ghostty allow it by default, while tmux needs `set -g set-clipboard on`. The SMILES is also on the status line.
 
 A drawing left as it was keeps its SMILES exactly, an empty drawing isn't saved, and an invalid one stays open with the reason.
 Clicks outside the box do nothing, so a stray one can't lose work.
@@ -196,7 +214,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, and for Sixel `cell_width`, `background` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |
 | `GET /api/v1/showcase` | query `cols`, `rows`, `cell_width`, `cell_height` | `frames`, each with `caption`, `output`, `pointer` (`[col, row]` or null), `click`, `key` and `pause` (ms) |
-| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (`braille`, `octant`, `ascii`, also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (`dark`, `light`, `mono` for all black); for Sixel `cell_width` (pixels, 4-40), `background` (`RRGGBB`) | plain text, with ANSI colours when asked, or image escape sequences |
+| `GET /api/v1/render.txt` | query `input`, `format`, `cols`, `rows`, `mode` (`braille`, `octant`, `ascii`, also `kitty`, `iterm`, `sixel`), `color=1`; for images `theme` (`dark`, `light`, `mono` for all black) and `fog` (0-100); for Sixel `cell_width` (pixels, 4-40), `background` (`RRGGBB`) | plain text, with ANSI colours when asked, or image escape sequences |
 | `POST /api/v1/edit` | form fields `cols`, `rows`, `events` (raw input, as hex), `state` (from the last answer) or `smiles` to begin, optional `cell_width`, `cell_height`, `pixels=1`, `theme` | a first line of `<0 to go on, 1 finished, 2 failed> <state>`, then what to print |
 | `GET /molterm` | | the terminal client, set to call back to this server |
 
@@ -238,11 +256,15 @@ no console errors, and no page overflow at 320, 375 and 640 px.
 
 `/showcase` was watched in Chrome: a full run with no console errors, the side-by-side screens, the window opening over the list, the
 palette and hotspot in it, Done, the redrawn tile and the printed list. The edit's result, `CCOc1ccc(NC(C)=O)cc1F`, is checked by tests.
+Its fog frames, all three ways of copying and the pasted drawing were watched there too, with the page's Copy button checked for selecting the right text.
+Actual clipboard writes haven't been tested: not OSC 52 in a real terminal, nor the Copy button's browser copy. Fog has not been run in a real terminal; its images were checked by eye and by tests.
 
 Open issues:
 
 - `/showcase` needs at least 90 columns by 30 rows at the smallest font, so it says it can't start on a phone. It sizes itself once, so
   resizing the window needs a reload. The hotspot stays light blue in its black-on-white theme, as it's what shows where the keys act.
+- restty paints cell backgrounds under the box's backing image, so grey bars and highlights inside the editor's box don't show there, only their text.
+  The black-on-white theme's highlight is underlined for that reason. Real terminals aren't expected to do this.
 - restty keeps about 10 MB of decoded images and drops the oldest, so `/showcase` asks for images at 7 pixels per column, and the editor's are a
   little soft there. In a real terminal they're sharp.
 

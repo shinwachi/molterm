@@ -22,6 +22,7 @@ BOTTOM_ROWS = 2
 _FIRST_ID = 7100
 _THUMB_PIXELS = 2  # image pixels per screen pixel, to stay sharp on a high-density screen
 _MAX_BOND = 0.2  # a small molecule's bonds as a share of the width, so that ethanol doesn't fill the tile
+COPY_LABEL = " copy "  # on the frame of the tile under the pointer
 
 
 class BoardError(ValueError):
@@ -126,6 +127,15 @@ class Grid:
         index = (int(row - 1) // self.tile_rows + top) * self.per_row + int(col) // self.tile_cols
         return index if index < count and int(col) // self.tile_cols < self.per_row else None
 
+    def copy_label(self, index, top):
+        """(row, col) of a tile's copy label, or None if it's scrolled out of sight."""
+        place = self.tile(index, top)
+        return place and (place[0], place[1] + self.tile_cols - 2 - len(COPY_LABEL))
+
+    def on_copy_label(self, col, row, index, top):
+        place = self.copy_label(index, top)
+        return bool(place) and int(row) == place[0] and place[1] <= col < place[1] + len(COPY_LABEL)
+
     def last_top(self, count):
         return max((count - 1) // self.per_row + 1 - self.visible_rows, 0)
 
@@ -175,6 +185,7 @@ def _tile_text(b, grid, index, colours):
         for along in range(row + 1, row + height - 1):
             out.append(editor._ansi(along, col, f"{edge}│") + editor._ansi(along, col + width - 1, f"{edge}│"))
         out.append(editor._ansi(row + height - 1, col, f"{edge}╰{'─' * (width - 2)}╯"))
+        out.append(editor._ansi(*grid.copy_label(index, b["top"]), f"{_style(colours, 'ink')}{COPY_LABEL}"))
     return "".join(out)
 
 
@@ -190,7 +201,7 @@ def _status_lines(b, grid, colours):
     if b["message"]:
         second = warn + editor._fit_text(b["message"], grid.cols)
     else:
-        second = dim + editor._fit_text("Click a structure to edit it, or use the arrows and Enter. The wheel scrolls. q quits and prints the list.", grid.cols)
+        second = dim + editor._fit_text("Click a structure to edit it, or use the arrows and Enter. c copies its SMILES. q quits and prints the list.", grid.cols)
     if b["cursor"] is None:
         return "", second
     _, smiles, editable, _ = b["items"][b["cursor"]]
@@ -296,8 +307,15 @@ def _move_cursor(b, grid, name):
     b["top"] = min(max(b["top"], along - grid.visible_rows + 1), along)
 
 
-def _handle_list(b, grid, event, cols, rows, ui_args, pixels):
-    """One event for the list; returns True to quit."""
+def _copy(b, index, copies):
+    """Copy a tile's SMILES, editable or not."""
+    name, smiles, _, _ = b["items"][index]
+    copies.append(smiles)
+    b["message"] = f"The SMILES of {name or smiles} went to the clipboard."
+
+
+def _handle_list(b, grid, event, cols, rows, ui_args, pixels, copies):
+    """One event for the list; returns True to quit. What to copy goes on `copies`, since it isn't kept in the state."""
     if event[0] == "key":
         name = event[1]
         b["message"] = ""
@@ -305,6 +323,11 @@ def _handle_list(b, grid, event, cols, rows, ui_args, pixels):
             return True
         if name in ("left", "right", "up", "down"):
             _move_cursor(b, grid, name)
+        elif name == "c":
+            if b["cursor"] is None:
+                b["message"] = "Point at a structure first, then press c to copy its SMILES."
+            else:
+                _copy(b, b["cursor"], copies)
         elif name == "enter" and b["cursor"] is not None:
             _open(b, b["cursor"], cols, rows, ui_args)
         elif name == "redraw":
@@ -326,7 +349,10 @@ def _handle_list(b, grid, event, cols, rows, ui_args, pixels):
     elif release:
         pressed, b["press"] = b["press"], None
         if hit is not None and hit == pressed and code & 3 == 0:  # on letting go, so that the release doesn't land in the editor
-            _open(b, hit, cols, rows, ui_args)
+            if grid.on_copy_label(col, row, hit, b["top"]):
+                _copy(b, hit, copies)
+            else:
+                _open(b, hit, cols, rows, ui_args)
     else:
         b["press"] = hit
         b["cursor"] = hit
@@ -357,6 +383,7 @@ def step(state_text, items_text, raw, cols, rows, cell_width=None, cell_height=N
     if len(b["partial"]) > 64:
         b["partial"] = ""
     out = ["\x1b[?2026h"]
+    copies = []
     size = f"{cols}x{rows}"
     if b["size"] != size:
         out.append("\x1b[2J")  # which also removes the images
@@ -371,13 +398,15 @@ def step(state_text, items_text, raw, cols, rows, cell_width=None, cell_height=N
             finished = editor.finish(b["editing"]["state"], ended) if ended else None
             if finished:
                 out.append(_close(b, *finished))
-        elif _handle_list(b, grid, event, cols, rows, ui_args, pixels):
+        elif _handle_list(b, grid, event, cols, rows, ui_args, pixels, copies):
             return editor.QUIT, "", _final_list(b)
     if not b["editing"] or b["text"] is None:
         painted = _list_frame(b, grid, theme, ui_args[:2])
         out.append(painted)
     if b["editing"]:
+        out.append(editor.take_clipboard(b["editing"]["state"]))
         out.append(editor.frame(b["editing"]["state"], _box_layout(b, cols, rows, ui_args), theme))
+    out.extend(editor.clipboard_sequence(text) for text in copies)
     out.append("\x1b[?2026l")
     text = "".join(out)
     return editor.CONTINUE, _encode(b), "" if text == "\x1b[?2026h\x1b[?2026l" else text

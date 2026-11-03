@@ -260,7 +260,7 @@ def check_state(s):
     for name in ("menu_hover", "tip"):
         if s[name] is not None:
             _integer(s[name], 1000)
-    if s["button"] not in (None, "done", "cancel"):
+    if s["button"] not in (None, "done", "cancel", "copy"):
         raise StateError("A choice in the drawing is not valid.")
     if not isinstance(s["shown"], dict) or not all(k in LAYERS and isinstance(v, str) and len(v) <= 64 for k, v in s["shown"].items()):
         raise StateError("A choice in the drawing is not valid.")
@@ -727,7 +727,7 @@ PALETTE = [("select", ("tool", "select"), "Selection [Space]: drag to move, or d
 _ICON_NAMES = tuple(entry[0] for entry in PALETTE)
 
 # (label, key, action), with None for a dividing line
-MENUS = [("File", [("Load SMILES...", "/", ("command", "entry")), ("Quit and print SMILES", "Ctrl-Q", ("command", "quit"))]),
+MENUS = [("File", [("Load SMILES...", "/", ("command", "entry")), ("Copy SMILES", "", ("command", "copy")), ("Quit and print SMILES", "Ctrl-Q", ("command", "quit"))]),
          ("Edit", [("Undo", "Ctrl-Z", ("command", "undo")), ("Redo", "Ctrl-Y", ("command", "redo")), None,
                    ("Select All", "Ctrl-A", ("command", "select_all")), ("Delete", "Del", ("command", "delete"))]),
          ("View", [("Actual Size", "F5", ("command", "actual")), ("Fit to Window", "F6", ("command", "fit")), ("Magnify", "F7", ("command", "zoom_in")), ("Reduce", "F8", ("command", "zoom_out"))]),
@@ -792,7 +792,7 @@ class Layout:
     def buttons(self):
         """On the bottom edge of the box: (name, label, column)."""
         col, found = self.cols, []
-        for name, label in (("done", " Done Ctrl-Q "), ("cancel", " Cancel Ctrl-C ")):
+        for name, label in (("done", " Done Ctrl-Q "), ("cancel", " Cancel Ctrl-C "), ("copy", " Copy SMILES ")):
             col -= len(label) + 1
             found.append((name, label, col))
         return found
@@ -1001,7 +1001,7 @@ _CHROME = {"dark": {"bar": "48;2;42;42;40", "ink": "38;2;240;239;236", "dim": "3
                     "err": "38;2;239;83;80", "warn": "38;2;240;165;0", "pick_ink": "38;2;57;135;229"},
            "light": {"bar": "48;2;238;237;232", "ink": "38;2;29;29;27", "dim": "38;2;92;91;85", "pick": "48;2;42;120;214", "on_pick": "38;2;255;255;255",
                      "err": "38;2;198;40;40", "warn": "38;2;180;83;9", "pick_ink": "38;2;42;120;214"},
-           "mono": {"bar": "48;2;235;235;235", "ink": "38;2;0;0;0", "dim": "38;2;70;70;70", "pick": "48;2;0;0;0", "on_pick": "38;2;255;255;255",
+           "mono": {"bar": "48;2;235;235;235", "ink": "38;2;0;0;0", "dim": "38;2;70;70;70", "pick": "48;2;205;205;205", "on_pick": "38;2;0;0;0;4",
                     "err": "38;2;198;40;40", "warn": "38;2;0;0;0", "pick_ink": "38;2;0;0;0"}}
 
 
@@ -1019,7 +1019,7 @@ def _menu_items(s, ui=None):
     if menu[0] == "context":
         return CONTEXT_MENUS[menu[1]]
     if menu[1] == 0 and ui and ui.boxed:
-        return [MENUS[0][1][0], ("Done", "Ctrl-Q", ("command", "quit")), ("Cancel", "Ctrl-C", ("command", "cancel"))]
+        return [*MENUS[0][1][:2], ("Done", "Ctrl-Q", ("command", "quit")), ("Cancel", "Ctrl-C", ("command", "cancel"))]
     return MENUS[menu[1]][1]
 
 
@@ -1444,10 +1444,32 @@ def _zoom(s, factor):
     s["view"][2] = min(max(s["view"][2] * factor, ZOOM_RANGE[0]), ZOOM_RANGE[1])
 
 
+def clipboard_sequence(text):
+    """Ask the terminal to put text on the system clipboard (OSC 52). It may refuse without saying so, as tmux does unless set to allow it."""
+    return f"\x1b]52;c;{base64.b64encode(text.encode()).decode('ascii')}\x1b\\"
+
+
+def take_clipboard(s):
+    """The sequence for what was just copied, once: it's not part of the drawing, so it mustn't go on in the state."""
+    text = s.pop("clipboard", None)
+    return clipboard_sequence(text) if text else ""
+
+
+def _copy(s):
+    smiles, problem, _ = analyse(s)
+    if smiles:
+        s["clipboard"], s["message"] = smiles, "SMILES sent to the clipboard."
+    else:
+        s["message"] = f"Nothing to copy: {problem}" if problem else "Nothing to copy: the drawing is empty."
+
+
 def _command(s, ui, name):
     """Run a command; returns what ends the editor, if it does: see `finish`."""
     if name == "quit":
         return True
+    if name == "copy":
+        _copy(s)
+        return False
     if name == "cancel":
         return CANCEL
     if name in ("undo", "redo"):
@@ -2009,6 +2031,9 @@ def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
         s["entry"] = None
         return False
     pressed = ui.button_at(col, row) if button == 0 else None
+    if pressed == "copy":
+        _copy(s)
+        return False
     if pressed:  # a stray click outside the box does nothing, but these end it
         return True if pressed == "done" else CANCEL
     title = ui.title_at(col, row)
@@ -2048,7 +2073,7 @@ def handle_events(s, ui, events, pixels):
             if ended:
                 return ended
         else:
-            if not (event[1] & 32):  # moving the pointer doesn't dismiss a message
+            if not (event[1] & 32) and not event[4]:  # moving the pointer or letting go doesn't dismiss a message
                 s["message"] = ""
             ended = _mouse(s, ui, event[1], event[2], event[3], event[4], pixels)
             if ended:
@@ -2102,7 +2127,8 @@ def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None,
     result = finish(s, ended) if ended else None
     if result:
         return result[0], "", result[1]
-    output = frame(s, ui, theme)
+    copied = take_clipboard(s)
+    output = copied + frame(s, ui, theme)
     return CONTINUE, encode(s), output
 
 

@@ -291,7 +291,7 @@ def render_json():
 @app.route("/api/v1/render.txt")
 def render_text():
     """For terminals: ?input=<SMILES or molblock>[&format=][&cols=][&rows=][&mode=][&color=1][&theme=light], and for Sixel
-    [&cell_width=<the cell's pixels>][&background=<RRGGBB>]."""
+    [&cell_width=<the cell's pixels>][&background=<RRGGBB>]. Graphics modes also take [&fog=<0 to 100>], which text modes ignore."""
     plain = {"Content-Type": "text/plain; charset=utf-8"}
     theme = request.args.get("theme", graphics.DEFAULT_THEME)
     try:
@@ -299,11 +299,15 @@ def render_text():
         if theme not in graphics.THEMES:
             raise molecule.ParseError("bad_request", f"theme must be one of {', '.join(graphics.THEMES)}.")
         cell_pixels, background = sixel_options(request.args)
+        fog = request.args.get("fog", "0")
+        low, high = graphics.FOG_RANGE
+        if not fog.isascii() or not fog.isdigit() or not low <= int(fog) <= high:
+            raise molecule.ParseError("bad_request", f"fog must be a whole number from {low} to {high}.")
         parsed = molecule.parse(request.args.get("input"), request.args.get("format", "auto"))
     except molecule.ParseError as e:
         return e.message + "\n", 400, plain
     if mode in graphics.MODES:
-        return graphics.render(parsed.mol, mode, cols, rows, theme, cell_pixels, background), 200, plain
+        return graphics.render(parsed.mol, mode, cols, rows, theme, cell_pixels, background, int(fog)), 200, plain
     result = renderer.render(parsed.mol, cols, rows, mode)
     return (result.ansi if request.args.get("color") == "1" else result.text) + "\n", 200, plain
 

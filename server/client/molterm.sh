@@ -3,6 +3,7 @@
 #
 #   molterm 'CC(=O)Oc1ccccc1C(=O)O'
 #   molterm -m braille -t light 'CCO'
+#   molterm -t mono -f 40 'CCO'         black on white, softly diffused, as if seen through fogged glass
 #   molterm demo     a guided medicinal chemistry session, one step at a time, then your own commands
 #   molterm play     the same session, playing by itself
 #   molterm edit     draw a molecule with the mouse and keyboard, in a terminal with Kitty graphics; prints its SMILES on quitting
@@ -13,16 +14,17 @@
 set -u
 url=${MOLTERM_URL:-@@URL@@}
 mode=${MOLTERM_MODE:-auto}
-theme=""; cols=""; rows=""; verbose=0; box=""; title=""
+theme=""; cols=""; rows=""; verbose=0; box=""; title=""; fog=""
 
 usage() {
     cat <<USAGE
-usage: molterm [-m mode] [-t theme] [-c cols] [-r rows] [-v] <SMILES>
+usage: molterm [-m mode] [-t theme] [-f fog] [-c cols] [-r rows] [-v] <SMILES>
        molterm [-m mode] [-t theme] [-c cols] [-v] demo|play
        molterm [-t theme] [-v] [-b row,col,rows,cols] [-T title] edit [SMILES]
        molterm [-t theme] [-v] tui ['SMILES name' | 'ro:SMILES name' ...]
   -m  auto, kitty, iterm, sixel, octant, braille or ascii (default auto, or \$MOLTERM_MODE)
-  -t  dark or light, to suit the background (default: ask the terminal)
+  -t  dark, light or mono (all black), to suit the background (default: ask the terminal)
+  -f  fog: how far the lines diffuse, from 0 (none) to 100, for one structure in a graphics mode
   -c  most columns to use   -r  most rows to use
   -v  say which mode was chosen, on stderr
   -b  keep the editor in this box of the window, for use from another text interface: from 0 at the top left, counting the border
@@ -31,10 +33,11 @@ usage: molterm [-m mode] [-t theme] [-c cols] [-r rows] [-v] <SMILES>
 USAGE
 }
 
-while getopts m:t:c:r:b:T:vh option; do
+while getopts m:t:f:c:r:b:T:vh option; do
     case $option in
         m) mode=$OPTARG ;;
         t) theme=$OPTARG ;;
+        f) fog=$OPTARG ;;
         c) cols=$OPTARG ;;
         r) rows=$OPTARG ;;
         v) verbose=1 ;;
@@ -352,6 +355,7 @@ set -- -sS -G --data-urlencode "input=$smiles" --data-urlencode "mode=$mode"
 [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
 [ -n "$cols" ] && set -- "$@" --data-urlencode "cols=$cols"
 [ -n "$rows" ] && set -- "$@" --data-urlencode "rows=$rows"
+[ -n "$fog" ] && set -- "$@" --data-urlencode "fog=$fog"
 if [ "$mode" = sixel ]; then
     [ -n "$background" ] && set -- "$@" --data-urlencode "background=$background"
     [ -n "$cell_width" ] && set -- "$@" --data-urlencode "cell_width=$cell_width"

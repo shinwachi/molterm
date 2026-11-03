@@ -20,6 +20,8 @@ COMPOUNDS = (("Caffeine", "Cn1cnc2c1c(=O)n(C)c(=O)n2C"),
              ("Imatinib", "Cc1ccc(NC(=O)c2ccc(CN3CCN(C)CC3)cc2)cc1Nc1nccc(-c2cccnc2)n1"))
 _IMAGE_CELL = 30  # pixels per column before enlarging: stays sharp, and fits the web terminal's store of images
 _MAX_ENLARGE = 2.6  # about the size of ASCII's largest bonds
+_FOG_CELL = 20  # fog has no fine detail, and two to a screen take up more of that store
+PASTED_FOG = 50
 _HOME = "\x1b_Ga=d,q=2\x1b\\\x1b[2J\x1b[H\x1b[0m"
 _BOLD = "\x1b[1m"
 
@@ -45,6 +47,26 @@ def _side_by_side(name, smiles, mode, cols, rows, cell_width, cell_height):
     out = [_HOME, editor._ansi(0, 0, f"{_BOLD}{name}"), editor._ansi(1, 0, "Kitty graphics"), editor._ansi(1, cols // 2, title), editor._ansi(3, 0), picture]
     out.extend(editor._ansi(3 + index, cols // 2, line[:half]) for index, line in enumerate(text[:height]))
     return "".join(out)
+
+
+def _settings(name, smiles, left, right, cols, rows):
+    """A molecule with two fog settings, each (theme, fog), at the same scale and with the options that give it."""
+    mol = molecule.parse(smiles, "smiles").mol
+    half, height = cols // 2 - 2, rows - 4
+    drawn = [graphics.styled_image(mol, half, height, theme, _FOG_CELL, fog) for theme, fog in (left, right)]
+    enlarge = min(_MAX_ENLARGE, *(half / used for _, used in drawn))
+    out = [_HOME, editor._ansi(0, 0, f"{_BOLD}{name}\x1b[0m")]
+    for (theme, fog), (image, used), col in zip((left, right), drawn, (0, cols // 2)):
+        out.append(editor._ansi(1, col, f"-t {theme}" + (f" -f {fog}" if fog else "")))
+        out.append(editor._ansi(3, col) + graphics.kitty_sequence(graphics._png(image), max(round(used * enlarge), 1), move_cursor=False).rstrip("\n"))
+    return "".join(out)
+
+
+def _pasted(smiles, cols):
+    """A shell, with the copied SMILES pasted into a command, and what that command prints."""
+    mol = molecule.parse(smiles, "smiles").mol
+    command = f"$ molterm -t {THEME} -f {PASTED_FOG} '{smiles}'"
+    return _HOME + editor._ansi(0, 0, command) + editor._ansi(2, 0) + graphics.render(mol, graphics.KITTY, cols, renderer.DEFAULT_ROWS, THEME, fog=PASTED_FOG).rstrip("\n")
 
 
 class _Session:
@@ -81,6 +103,11 @@ class _Session:
         grid, b = board.Grid(self.cols, self.rows), self.board()
         row, col = grid.tile(index, b["top"])
         return col + grid.tile_cols / 2, row + grid.tile_rows / 2
+
+    def copy_label(self, index):
+        grid = board.Grid(self.cols, self.rows)
+        row, col = grid.copy_label(index, self.board()["top"])
+        return col + len(board.COPY_LABEL) / 2, row + 0.5
 
     def _box(self):
         b = self.board()
@@ -129,7 +156,8 @@ def _edit(cols, rows, cell_width, cell_height):
     run = _Session(cols, rows, cell_width, cell_height)
     run.frames.append(_frame("A text interface with structures in it, the kind of list a real tool would show.", _HOME + run.output, pause=2600))
     run.hover(run.tile(0), "Hovering outlines a structure, and its SMILES, formula, MW and cLogP appear at the bottom.")
-    run.click(run.tile(0), "Aspirin is marked read-only, so clicking it only says so.")
+    run.key("c", "Pressing c copies the SMILES of the structure under the pointer. The terminal puts it on the system clipboard, shown below the screen here.", pause=3600)
+    run.click(run.tile(0), "Aspirin is marked read-only, so clicking it only says so. Copying still works, since it changes nothing.")
     run.hover(run.tile(1), "Paracetamol is editable.", pause=1500)
     run.click(run.tile(1), "Clicking it opens the editor in a window over the list, with the same tools as the full-screen editor.", pause=2800)
     run.hover(run.atom(_hydroxyl), "Hover over an atom and it becomes the hotspot, as in ChemDraw. Clicks and keys now act on it.")
@@ -140,9 +168,15 @@ def _edit(cols, rows, cell_width, cell_height):
     run.click(run.atom(_ortho_carbon), "Another click, another bond.")
     run.hover(run.atom(_new_carbon), "Hover over the new carbon...", pause=1400)
     run.key("f", "...and f turns it into fluorine. The status line keeps up with the SMILES.", pause=3000)
-    run.hover(run.button("done"), "Done is on the window's bottom edge, beside Cancel.", pause=1500)
+    run.hover(run.button("copy"), "Copy SMILES is on the window's bottom edge.", pause=1400)
+    run.click(run.button("copy"), "It copies the drawing as it stands, before anything is saved.", pause=3200)
+    run.hover(run.button("done"), "Done is on the same edge, beside Cancel.", pause=1500)
     run.click(run.button("done"), "The window closes, and the tile is redrawn and marked edited.", pause=3000)
     run.hover(run.tile(1), "The list now holds the new structure.", pause=2600)
+    run.hover(run.copy_label(1), "The frame around the structure under the pointer has a copy label, for the mouse.", pause=1500)
+    run.click(run.copy_label(1), "Clicking it copies the edited SMILES.", pause=3000)
+    smiles = run.board()["items"][1][1]
+    run.frames.append(_frame("Pasted anywhere that takes text: here, into a shell, to draw it again with the fog setting.", _pasted(smiles, cols), pause=4500))
     output = run._send("q")
     final = _HOME + editor._ansi(0, 0, f"{_BOLD}The list, as printed on quitting\x1b[0m") + "".join(editor._ansi(2 + index, 2, line) for index, line in enumerate(output.split("\n")))
     run.frames.append(_frame("Quitting hands the list back, as text another program can read.", final, pause=4000))
@@ -156,6 +190,8 @@ def frames(cols, rows, cell_width, cell_height):
     shown = [_frame("The same molecule both ways: real pixels from RDKit on the left, plain ASCII on the right.", _side_by_side(*COMPOUNDS[0], "ascii", cols, rows, cell_width, cell_height), pause=4500),
              _frame("Terminals with Kitty graphics get the image. The ASCII goes anywhere text goes: a log, an email, an old terminal.", _side_by_side(*COMPOUNDS[1], "ascii", cols, rows, cell_width, cell_height), pause=4500),
              _frame("ASCII is coarse, but rings, double bonds and labels still read at this size.", _side_by_side(*COMPOUNDS[2], "ascii", cols, rows, cell_width, cell_height), pause=4500),
-             _frame("A larger drug, imatinib, is too much for ASCII. Braille packs eight dots into each character, and the image stays sharp.", _side_by_side(*COMPOUNDS[3], "braille", cols, rows, cell_width, cell_height), pause=4500)]
+             _frame("A larger drug, imatinib, is too much for ASCII. Braille packs eight dots into each character, and the image stays sharp.", _side_by_side(*COMPOUNDS[3], "braille", cols, rows, cell_width, cell_height), pause=4500),
+             _frame("A renderer setting: fog diffuses the lines a little, as if the drawing were seen through fogged glass.", _settings(*COMPOUNDS[0], (THEME, 0), (THEME, 50), cols, rows), pause=5000),
+             _frame("Fog goes from 0 to 100. Even at 100 the lines stay sharp enough to read.", _settings(*COMPOUNDS[2], (THEME, 25), (THEME, 100), cols, rows), pause=5000)]
     edit, _ = _edit(cols, rows, cell_width, cell_height)
     return shown + edit
