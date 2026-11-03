@@ -579,3 +579,18 @@ def test_other_terminals_outside_tmux_get_no_placeholders(stub):
     fake_tmux_in(stub, "xterm-256color", "on")
     run_in_terminal(stub, DA1_PLAIN, TMUX="/tmp/tmux,1,0", TERM="tmux-256color")
     assert "mode=braille" in sent(stub) and "placeholders=1" not in sent(stub)
+
+
+def test_verbose_in_tmux_says_what_it_found(stub):
+    fake_tmux_in(stub, "xterm-ghostty ghostty", "on")
+    output = run_in_terminal(stub, DA1_PLAIN, args=["-v", "CCO"], TMUX="/tmp/tmux,1,0", TERM="tmux-256color")[0]
+    assert b"inside 'xterm-ghostty ghostty'" in output and b"placeholders: yes" in output
+
+
+def test_the_editor_in_tmux_says_why_it_cant_start(stub):
+    fake_tmux_in(stub, "xterm-ghostty ghostty", "off")
+    output = run_in_terminal(stub, DA1_PLAIN, args=["edit"], TMUX="/tmp/tmux,1,0", TERM="tmux-256color")[0]
+    assert b"tmux set -g allow-passthrough on" in output
+    fake_tmux_in(stub, "screen-256color", "on")
+    output = run_in_terminal(stub, DA1_PLAIN, args=["edit"], TMUX="/tmp/tmux,1,0", TERM="tmux-256color")[0]
+    assert b"outside it is 'screen-256color'" in output

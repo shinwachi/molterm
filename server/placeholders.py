@@ -38,13 +38,26 @@ DIACRITICS = [chr(code) for code in _DIACRITICS]
 MAX_CELLS = len(DIACRITICS)
 
 
+def wire_id(number):
+    """The id a picture goes by in the terminal, for one of ours numbered from 1 to MAX_NUMBER. tmux turns 24-bit colours into 256 when it
+    doesn't know the outer terminal has them (so with Ghostty's terminfo), and the colour is how a placeholder names its picture. So the
+    id's lowest byte, never 0, is a 256-colour index, which tmux passes on as it is, and its highest byte is a third combining mark on
+    each cell, as Kitty's protocol allows: id = high << 24 | low."""
+    return (number // 255) << 24 | (number % 255 + 1)
+
+
+MAX_NUMBER = 255 * 297 - 1
+
+
 def wrap(sequence):
     """One escape sequence, for tmux to pass to the terminal as it is."""
     return "\x1bPtmux;" + sequence.replace("\x1b", "\x1b\x1b") + "\x1b\\"
 
 
 def transmit(png, image_id, cols, rows):
-    """Send a PNG as a virtual placement of cols by rows cells, to be shown wherever its placeholders are printed."""
+    """Send a PNG as a virtual placement of cols by rows cells, to be shown wherever its placeholders are printed. Ids here, as in
+    delete, cells and lines, are our numbers, which wire_id turns into the terminal's."""
+    image_id = wire_id(image_id)
     payload = base64.b64encode(png).decode("ascii")
     chunks = [payload[i:i + CHUNK] for i in range(0, len(payload), CHUNK)] or [""]
     out = []
@@ -55,12 +68,17 @@ def transmit(png, image_id, cols, rows):
 
 
 def delete(image_id):
-    return wrap(f"\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\")
+    return wrap(f"\x1b_Ga=d,d=I,i={wire_id(image_id)},q=2\x1b\\")
 
 
 def colour(image_id):
-    """The foreground colour that names a picture: its id, which must be below 2**24, as red, green and blue."""
-    return f"\x1b[38;2;{(image_id >> 16) & 255};{(image_id >> 8) & 255};{image_id & 255}m"
+    """The foreground colour that names a picture, in 256 colours: the low byte of its id."""
+    return f"\x1b[38;5;{wire_id(image_id) & 255}m"
+
+
+def _cell(image_id, row, col):
+    high = wire_id(image_id) >> 24
+    return PLACEHOLDER + DIACRITICS[row] + DIACRITICS[col] + DIACRITICS[high]
 
 
 def cells(image_id, cols, rows, at, hidden=None):
@@ -77,14 +95,14 @@ def cells(image_id, cols, rows, at, hidden=None):
             start = col
             while col < cols and not (hidden and hidden(row, col)):
                 col += 1
-            run = "".join(PLACEHOLDER + DIACRITICS[row] + DIACRITICS[c] for c in range(start, col))
+            run = "".join(_cell(image_id, row, c) for c in range(start, col))
             out.append(at(row, start) + colour(image_id) + run + "\x1b[39m")
     return "".join(out)
 
 
 def lines(png, image_id, cols, rows):
     """A picture as lines of text, for printing into a shell: it scrolls with the text, in tmux's history too."""
-    rows_text = [colour(image_id) + "".join(PLACEHOLDER + DIACRITICS[row] + DIACRITICS[c] for c in range(min(cols, MAX_CELLS))) + "\x1b[39m"
+    rows_text = [colour(image_id) + "".join(_cell(image_id, row, c) for c in range(min(cols, MAX_CELLS))) + "\x1b[39m"
                  for row in range(min(rows, MAX_CELLS))]
     return transmit(png, image_id, cols, rows) + "\n".join(rows_text) + "\n"
 

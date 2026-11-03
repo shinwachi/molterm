@@ -24,7 +24,8 @@ def placeholder_cells(text, image_id):
     """(row, col) of every placeholder cell printed in the colour of `image_id`."""
     cells = []
     for run in re.findall(re.escape(placeholders.colour(image_id)) + r"([^\x1b]*)", text):
-        for match in re.finditer(placeholders.PLACEHOLDER + "(.)(.)", run):
+        for match in re.finditer(placeholders.PLACEHOLDER + "(.)(.)(.)", run):
+            assert placeholders.DIACRITICS.index(match[3]) == placeholders.wire_id(image_id) >> 24
             cells.append((placeholders.DIACRITICS.index(match[1]), placeholders.DIACRITICS.index(match[2])))
     return cells
 
@@ -39,14 +40,14 @@ def test_passthrough_doubles_every_escape():
 
 def test_a_picture_is_sent_as_a_virtual_placement_in_pieces():
     sent = unwrapped(placeholders.transmit(b"x" * 10000, 7001, 20, 6))
-    assert sent[0].startswith("\x1b_Ga=T,f=100,U=1,i=7001,c=20,r=6,q=2,m=1;") and sent[-1].startswith("\x1b_Gq=2,m=0;")
+    assert sent[0].startswith(f"\x1b_Ga=T,f=100,U=1,i={placeholders.wire_id(7001)},c=20,r=6,q=2,m=1;") and sent[-1].startswith("\x1b_Gq=2,m=0;")
     assert len(sent) == 4
 
 
 def test_cells_carry_their_row_and_column_and_skip_what_is_hidden():
-    text = placeholders.cells(0x123456, 3, 2, lambda r, c: f"<{r},{c}>", hidden=lambda r, c: (r, c) == (1, 1))
-    assert placeholders.colour(0x123456) == "\x1b[38;2;18;52;86m"
-    assert placeholder_cells(text, 0x123456) == [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2)]
+    text = placeholders.cells(7001, 3, 2, lambda r, c: f"<{r},{c}>", hidden=lambda r, c: (r, c) == (1, 1))
+    assert placeholders.colour(7001) == f"\x1b[38;5;{7001 % 255 + 1}m"  # 256 colours, which tmux passes on as they are
+    assert placeholder_cells(text, 7001) == [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2)]
     assert "<1,2>" in text  # a new run after the hidden cell starts where it should
 
 
@@ -60,7 +61,8 @@ def test_a_drawing_through_tmux_is_lines_of_placeholders():
     with placeholders.using(True):
         text = graphics.render(mol)
     commands = unwrapped(text)
-    image = int(re.search(r"i=(\d+)", commands[0])[1])
+    wire = int(re.search(r"i=(\d+)", commands[0])[1])
+    image = next(n for n in range(placeholders.MAX_NUMBER + 1) if placeholders.wire_id(n) == wire)
     cols, rows = int(re.search(r"c=(\d+)", commands[0])[1]), int(re.search(r"r=(\d+)", commands[0])[1])
     cells = placeholder_cells(text, image)
     assert len(cells) == cols * rows and cells[-1] == (rows - 1, cols - 1)
@@ -99,3 +101,10 @@ def test_the_list_through_tmux_prints_tile_cells_before_its_labels():
     first = board._FIRST_ID
     assert placeholder_cells(output, first)
     assert output.index(placeholders.colour(first)) < output.index("Aspirin")
+
+
+def test_ids_survive_tmux_turning_colours_into_256():
+    """Each of our numbers has its own id, whose low byte is never 0 and whose high byte has a mark."""
+    ids = {placeholders.wire_id(n) for n in range(placeholders.MAX_NUMBER + 1)}
+    assert len(ids) == placeholders.MAX_NUMBER + 1
+    assert all(i & 255 and (i >> 24) < len(placeholders.DIACRITICS) and not (i >> 8) & 0xFFFF for i in ids)

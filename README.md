@@ -120,7 +120,15 @@ edit` and `molterm tui`; the client asks for it with `placeholders=1`. Turn pass
 tmux set -g allow-passthrough on      # and add `set -g allow-passthrough on` to ~/.tmux.conf to keep it
 ```
 
-Without it, the client says so and falls back to Braille (and `edit` and `tui` stop with that message). In the editor a cell can show
+Without it, the client says so and falls back to Braille (and `edit` and `tui` stop with that message).
+
+A placeholder names its picture by its colour, and tmux turns 24-bit colours into 256 when it doesn't know the outer terminal has
+them, as with Ghostty's terminfo: an id sent that way pointed at the wrong picture, and nothing showed. So the id's low byte is a
+256-colour index, which tmux passes on as it is, and its high byte a third combining mark on each cell, as Kitty's protocol allows.
+
+If pictures still don't show in tmux, `molterm -v` says what the client found: the mode, tmux's version, the terminal tmux says is
+outside it, `allow-passthrough`, and whether pictures go as placeholders. They need tmux 3.3 or later, the client from a server with
+this support (the dev server's `/molterm`; v0.1.1's has none), and Kitty, or Ghostty 1.0 or later, outside. In the editor a cell can show
 only one picture, so through tmux the selection marks are drawn into the structure rather than over it, and the boxed editor has no
 backing picture: its cells cover the list below anyway.
 
@@ -323,7 +331,8 @@ warning states, and phone width. Hard inputs at the atom cap parse in about 1 s 
 The client and image modes were run in real terminals under a virtual display, and the screenshots checked by eye: Kitty,
 xterm with Sixel on dark and light backgrounds, xterm without Sixel (Braille), tmux in xterm (Sixel) and tmux in Kitty (Braille,
 before placeholders). Placeholders were checked with a real tmux 3.5a: it passed the wrapped commands on unwrapped and drew the
-placeholder cells, colour and all; `tests/test_placeholders.py` checks the sequences, cells and order (pictures before menus) for
+placeholder cells, colour and all, and `molterm edit` was run inside a real tmux 3.5a under a terminal claiming to be Ghostty: both
+pictures passed through and every placeholder named one of them; `tests/test_placeholders.py` checks the sequences, cells and order (pictures before menus) for
 drawings, the editor and the list. They haven't been seen drawn in a real Ghostty or Kitty under tmux.
 `tests/test_client.py` runs the client under a fake terminal for the rest.
 

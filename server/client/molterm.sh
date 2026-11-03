@@ -196,6 +196,11 @@ fi
 read_background
 read_cell_size
 [ $verbose = 1 ] && echo "molterm: using $mode" >&2
+if [ $verbose = 1 ] && [ -n "${TMUX:-}" ]; then
+    outer=$(tmux display -p '#{client_termname} #{client_termtype}' 2>/dev/null)
+    echo "molterm: in tmux $(tmux -V 2>/dev/null | cut -d' ' -f2), inside '$outer'; allow-passthrough is" \
+         "'$(tmux show -Apv allow-passthrough 2>/dev/null)'; pictures as Unicode placeholders: $([ $placeholders = 1 ] && echo yes || echo no)" >&2
+fi
 
 # The guided session. The server runs each command, and only the commands it lists; nothing typed here reaches a shell.
 TAB=$(printf '\t')
@@ -298,7 +303,11 @@ leave_editor() {
     [ $editing = 1 ] || return 0
     editing=0
     if [ -n "$box" ]; then  # the screen is the host's, so only the editor's own images go
-        for id in 7001 7002 7005 7006 7010 7011 7020 7021; do kitty_command "a=d,d=I,i=$id,q=2" >/dev/tty; done
+        for id in 7001 7002 7005 7006 7010 7011 7020 7021; do
+            # through tmux the editor's pictures go by other ids (see wire_id in server/placeholders.py)
+            [ $placeholders = 1 ] && id=$(( (id / 255) << 24 | (id % 255 + 1) ))
+            kitty_command "a=d,d=I,i=$id,q=2" >/dev/tty
+        done
         printf '\033[?1016l\033[?1006l\033[?1003l\033[?25h' >/dev/tty
     else
         kitty_command 'a=d,q=2' >/dev/tty
@@ -349,7 +358,17 @@ edit_session() {
         exit 1
     fi
     if [ "$mode" != kitty ]; then
-        echo "molterm: the editor needs Kitty graphics, as in Kitty or Ghostty, and this terminal seems to offer $mode. -m kitty overrides this." >&2
+        if [ -n "${TMUX:-}" ]; then
+            outer=$(tmux display -p '#{client_termname} #{client_termtype}' 2>/dev/null)
+            if outer_kitty && ! passthrough_on; then
+                echo "molterm: the editor needs Kitty graphics, which tmux passes on only with: tmux set -g allow-passthrough on" >&2
+            else
+                echo "molterm: the editor needs Kitty graphics, and tmux says the terminal outside it is '$outer', not Kitty or Ghostty." \
+                     "-m kitty overrides this." >&2
+            fi
+        else
+            echo "molterm: the editor needs Kitty graphics, as in Kitty or Ghostty, and this terminal seems to offer $mode. -m kitty overrides this." >&2
+        fi
         exit 1
     fi
     pixels=0

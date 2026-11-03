@@ -289,7 +289,7 @@ def gallery(items, cols, cell_pixels, theme=DEFAULT_THEME):
 def _through_tmux(image, cols):
     """A picture as lines of placeholders, for tmux, which keeps them as text: they scroll with the shell, in its history too."""
     rows = max(math.ceil(cols * image.height / image.width / CELL_ASPECT), 1)
-    return placeholders.lines(_png(image), random.randint(1 << 20, (1 << 24) - 1), cols, rows)
+    return placeholders.lines(_png(image), random.randint(256, placeholders.MAX_NUMBER), cols, rows)
 
 
 def sequence(image, cols, mode, background=None, theme=DEFAULT_THEME):
