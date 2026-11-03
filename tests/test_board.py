@@ -45,8 +45,8 @@ class List:
 
     @property
     def ui(self):
-        box = board.box_for(self.cols, self.rows)
-        return editor.Layout(self.cols, self.rows, CW, CH, self.pixels, box, "")
+        """Where the window is now."""
+        return board._box_layout(self.state, self.cols, self.rows, (CW, CH, self.pixels))
 
     def tile(self, index):
         grid = board.Grid(self.cols, self.rows)
@@ -328,7 +328,7 @@ def test_a_large_drawing_gives_up_old_undo_steps_rather_than_the_session():
     state = board.new_state([["n", "C", True, False]])
     drawing = editor.new_state()
     drawing["undo"] = [[[[i, "C", float(i), float(i * j) / 7.0, 0] for i in range(1, 200)], [], 200] for j in range(30)]
-    state["editing"] = {"index": 0, "state": drawing, "start": "C"}
+    state["editing"] = {"index": 0, "state": drawing, "start": "C", "box": [0, 0, 30, 100], "restore": None, "minimized": False, "drag": None}
     state["message"] = big
     text = board._encode(state)
     assert len(text) <= editor.MAX_STATE
@@ -436,3 +436,167 @@ def test_the_editor_cannot_copy_an_empty_drawing():
 
 def test_copy_is_in_the_file_menu():
     assert ("Copy SMILES", "", ("command", "copy")) in editor.MENUS[0][1]
+
+
+# The window: moved, resized, minimized and maximized by the list, as a window manager would
+
+
+def press(col, row):
+    return f"\x1b[<0;{col + 1};{row + 1}M"
+
+
+def drag_to(col, row):
+    return f"\x1b[<32;{col + 1};{row + 1}M"
+
+
+def let_go(col, row):
+    return f"\x1b[<0;{col + 1};{row + 1}m"
+
+
+def window(session):
+    return list(session.state["editing"]["box"])
+
+
+def control(session, name):
+    """Where a button on the window's top edge is on the screen."""
+    b = session.state
+    ui = board._box_layout(b, session.cols, session.rows, (CW, CH, session.pixels))
+    _, label, col = next(c for c in ui.controls() if c[0] == name)
+    return col + ui.origin[1] + 1, ui.origin[0] - 1
+
+
+def test_the_window_has_buttons_to_minimize_and_maximize_and_a_grip():
+    output = List().open(0).output
+    assert " _ " in output and " □ " in output and editor.RESIZE_GRIP in output
+
+
+def test_dragging_the_title_bar_moves_the_window_and_the_drawing_with_it():
+    session = List(cols=200, rows=60).open(0)
+    top, left, height, width = window(session)
+    session.send(press(left + 20, top) + drag_to(left + 17, top + 2))
+    assert window(session) == [top + 2, left - 3, height, width]
+    output = session.send(drag_to(left + 15, top + 1) + let_go(left + 15, top + 1)).output
+    assert window(session) == [top + 1, left - 5, height, width]
+    assert session.state["editing"]["drag"] is None
+    assert "i=7020" in output and f"\x1b[{top + 2};{left - 5 + 1}H" in output  # its backing, and its corner, at the new place
+    # the drawing still answers where it is shown now
+    session.point_at_atom(0)
+    assert session.drawing["hover"] == ["a", session.drawing["atoms"][0][0]]
+    session.send("n")
+    assert sorted(a[1] for a in session.drawing["atoms"]) == ["C", "N", "O"]
+
+
+def test_the_window_stays_on_the_screen():
+    session = List(cols=200, rows=60).open(0)
+    top, left, height, width = window(session)
+    session.send(press(left + 20, top) + drag_to(0, 0) + let_go(0, 0))
+    assert window(session) == [0, 0, height, width]
+    session.send(press(20, 0) + drag_to(199, 59) + let_go(199, 59))
+    assert window(session) == [60 - height, 200 - width, height, width]
+
+
+def test_dragging_the_grip_or_an_edge_resizes_it_but_not_below_what_the_editor_needs():
+    session = List().open(0)
+    top, left, height, width = window(session)
+    corner = (left + width - 1, top + height - 1)
+    session.send(press(*corner) + drag_to(corner[0] - 10, corner[1] - 4) + let_go(corner[0] - 10, corner[1] - 4))
+    assert window(session) == [top, left, height - 4, width - 10]
+    right = left + width - 11
+    session.send(press(right, top + 5) + drag_to(right + 6, top + 9) + let_go(right + 6, top + 9))
+    assert window(session) == [top, left, height - 4, width - 4]
+    bottom = top + height - 5
+    session.send(press(left + 3, bottom) + drag_to(left + 9, bottom + 2) + let_go(left + 9, bottom + 2))
+    assert window(session) == [top, left, height - 2, width - 4]
+    session.send(press(left + width - 5, top + height - 3) + drag_to(0, 0) + let_go(0, 0))
+    smallest = window(session)
+    assert smallest[2] < height and smallest[3] < width
+    assert editor.fits(board._box_layout(session.state, COLS, ROWS, (CW, CH, False)))
+    assert session.send("e").state["editing"]  # still an editor
+
+
+def test_the_editors_own_buttons_on_the_bottom_edge_still_work():
+    session = List().open(0)
+    session.button("cancel")
+    assert session.state["editing"] is None
+
+
+def test_maximize_fills_the_screen_and_a_second_press_puts_it_back():
+    session = List().open(0)
+    before = window(session)
+    session.send(click(*control(session, "maximize")))
+    assert window(session) == [0, 0, ROWS, COLS]
+    session.send(click(*control(session, "maximize")))
+    assert window(session) == before
+
+
+def test_minimizing_shows_the_list_with_the_window_in_the_top_bar():
+    session = List().open(0)
+    session.point_at_atom(0).send("n")
+    output = session.send(click(*control(session, "minimize"))).output
+    state = session.state
+    assert state["editing"]["minimized"] and "□ Edit ethanol" in output and "minimized" in output
+    assert "i=7020" in output and "a=d" in output  # the editor's images went
+    # the list is usable meanwhile, but quitting or opening another would lose the edit
+    session.send(hover(*session.tile(2)))
+    assert session.state["cursor"] == 2
+    assert session.send("c").output.count("\x1b]52;c;") == 1
+    session.send(click(*session.tile(2)))
+    assert session.state["editing"]["index"] == 0 and "still open" in session.output
+    session.send("q")
+    assert session.status == editor.CONTINUE and "still open" in session.output
+    # clicking it in the top bar brings it back as it was
+    chip_col, _ = board._chip(session.state, board.Grid(COLS, ROWS))
+    output = session.send(click(chip_col + 2, 0)).output
+    assert not session.state["editing"]["minimized"] and "i=7020" in output
+    assert sorted(a[1] for a in session.drawing["atoms"]) == ["C", "N", "O"]
+
+
+def test_opening_the_minimized_structure_again_brings_it_back():
+    session = List().open(0)
+    session.send(click(*control(session, "minimize")))
+    session.send(click(*session.tile(0)))
+    assert session.state["editing"] and not session.state["editing"]["minimized"]
+
+
+def test_hovering_a_window_button_marks_it():
+    session = List().open(0)
+    col, row = control(session, "minimize")
+    session.send(hover(col, row))
+    assert session.drawing["button"] == "minimize"
+
+
+def test_a_smaller_terminal_keeps_the_window_inside_it():
+    session = List().open(0)
+    top, left, height, width = window(session)
+    session.send(press(left + 20, top) + drag_to(COLS, ROWS) + let_go(COLS, ROWS))
+    session.cols, session.rows = 100, 36
+    session.send("")
+    top, left, height, width = window(session)
+    assert top + height <= 36 and left + width <= 100
+    assert editor.fits(board._box_layout(session.state, 100, 36, (CW, CH, False)))
+
+
+def test_a_maximized_window_follows_the_terminals_size():
+    session = List().open(0)
+    session.send(click(*control(session, "maximize")))
+    session.cols, session.rows = 110, 40
+    session.send("")
+    assert window(session) == [0, 0, 40, 110]
+
+
+def test_a_tampered_window_is_refused():
+    session = List().open(0)
+    for change in ({"box": [0, 0, -1, 5]}, {"minimized": "yes"}, {"drag": {"mode": "fly", "from": [0, 0], "box": [0, 0, 30, 90]}},
+                   {"drag": {"mode": "move", "from": ["x", 0], "box": [0, 0, 30, 90]}}, {"restore": [1, 2]}):
+        b = session.state
+        b["editing"].update(change)
+        try:
+            editor.decode(editor.encode(b), board._check_state)
+        except editor.StateError:
+            continue
+        raise AssertionError(change)
+
+
+def test_a_box_for_another_host_has_no_window_buttons():
+    _, _, output = editor.step("", "CCO", "", COLS, ROWS, CW, CH, box=(2, 3, 30, 90))
+    assert " _ " not in output and editor.RESIZE_GRIP not in output

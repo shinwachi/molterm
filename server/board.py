@@ -1,7 +1,8 @@
-"""A text interface with structures in it: click one that is editable and the editor opens in a box over the rest.
+"""A text interface with structures in it: click one that is editable and the editor opens in a window over the rest.
 
 It shows how to host the editor, and is itself useful for going through a list of compounds. Like the editor it runs entirely here, and
-the client only passes on raw input. While the box is open, input goes to the editor, whose state travels inside this one.
+the client only passes on raw input. While the box is open, input goes to the editor, whose state travels inside this one, except for
+what moves, resizes, minimizes or maximizes the box, which this does as a window manager would.
 """
 from functools import lru_cache
 
@@ -23,6 +24,7 @@ _FIRST_ID = 7100
 _THUMB_PIXELS = 2  # image pixels per screen pixel, to stay sharp on a high-density screen
 _MAX_BOND = 0.2  # a small molecule's bonds as a share of the width, so that ethanol doesn't fill the tile
 COPY_LABEL = " copy "  # on the frame of the tile under the pointer
+DRAGS = ("move", "resize", "resize_rows", "resize_cols")
 
 
 class BoardError(ValueError):
@@ -84,10 +86,21 @@ def _check_state(b):
         if b[name] is not None and not isinstance(b[name], str):
             raise editor.StateError("The list is not valid.")
     if b["editing"] is not None:
-        index, start = b["editing"]["index"], b["editing"]["start"]
+        editing = b["editing"]
+        index, start = editing["index"], editing["start"]
         if type(index) is not int or not 0 <= index < len(items) or not items[index][2] or not (start is None or isinstance(start, str)):
             raise editor.StateError("The list is not valid.")
-        editor.check_state(b["editing"]["state"])
+        drag = editing["drag"]
+        if not (_is_box(editing["box"]) and (editing["restore"] is None or _is_box(editing["restore"])) and editing["minimized"] in (True, False)):
+            raise editor.StateError("The list is not valid.")
+        if drag is not None and not (drag["mode"] in DRAGS and _is_box(drag["box"]) and isinstance(drag["from"], list) and len(drag["from"]) == 2
+                                     and all(isinstance(v, (int, float)) and abs(v) < 10_000 for v in drag["from"])):
+            raise editor.StateError("The list is not valid.")
+        editor.check_state(editing["state"])
+
+
+def _is_box(box):
+    return isinstance(box, list) and len(box) == 4 and all(type(v) is int and 0 <= v <= 10_000 for v in box)
 
 
 def _encode(b):
@@ -196,7 +209,7 @@ def _list_text(b, grid):
 
 def _status_lines(b, grid, colours):
     dim, warn = _style(colours, "dim"), _style(colours, "warn")
-    if b["editing"]:  # the box has its own, and this would only show beside it
+    if _shown(b):  # the box has its own, and this would only show beside it
         return "", ""
     if b["message"]:
         second = warn + editor._fit_text(b["message"], grid.cols)
@@ -244,6 +257,9 @@ def _list_frame(b, grid, theme, ui_cells):
     first, second = _status_lines(b, grid, colours)
     tiles = "".join(_tile_text(b, grid, index, colours) for index in range(count) if grid.tile(index, b["top"]))
     text = _list_text(b, grid) + editor._ansi(0, 0, f"{bar}\x1b[K{editor._fit_text(heading, grid.cols)}") + tiles
+    chip = _chip(b, grid)
+    if chip:
+        text += editor._ansi(0, chip[0], _style(colours, "pick", "on_pick") + chip[1])
     text += editor._ansi(grid.rows - 2, 0, first) + editor._ansi(grid.rows - 1, 0, second) + "\x1b[0m"
     if b["text"] != text:
         out.append(text)
@@ -257,8 +273,14 @@ def _open(b, index, cols, rows, ui_args):
     if not editable:
         b["message"] = f"{name or smiles} is read-only."
         return
+    if b["editing"]:  # only when it's minimized, as the list has the input otherwise
+        if b["editing"]["index"] == index:
+            _restore(b)
+        else:
+            b["message"] = f"{_title(b, b['editing']['index'])} is still open: bring it back from the top bar first."
+        return
     box = box_for(cols, rows)
-    ui = editor.Layout(cols, rows, *ui_args, box=box, title=_title(b, index))
+    ui = editor.Layout(cols, rows, *ui_args, box=box, title=_title(b, index), window=True)
     if not editor.fits(ui):
         b["message"] = "This window is too small for the editor."
         return
@@ -267,7 +289,7 @@ def _open(b, index, cols, rows, ui_args):
         b["message"] = state["message"]
         return
     editor._fit(state, ui)
-    b["editing"] = {"index": index, "state": state, "start": editor.analyse(state)[0]}
+    b["editing"] = {"index": index, "state": state, "start": editor.analyse(state)[0], "box": list(box), "restore": None, "minimized": False, "drag": None}
     b["message"], b["text"] = "", None
 
 
@@ -295,6 +317,122 @@ def _close(b, status, answer):
     return editor.images_gone()
 
 
+def _shown(b):
+    """Is the editor's window open and not minimized?"""
+    return bool(b["editing"]) and not b["editing"]["minimized"]
+
+
+def _repaint(b):
+    """After the window moves, changes size or goes, the list and the editor are both drawn again, in that order."""
+    b["text"] = None
+    b["editing"]["state"]["size"] = None
+
+
+def _fits(box, cols, rows, ui_args):
+    return (box[0] >= 0 and box[1] >= 0 and box[0] + box[2] <= rows and box[1] + box[3] <= cols
+            and editor.fits(editor.Layout(cols, rows, *ui_args, box=tuple(box), window=True)))
+
+
+def _keep_in(box, cols, rows, ui_args):
+    """A box kept inside the window, shrunk if it must be, or where a new one would open if it can't be made to fit."""
+    height, width = min(box[2], rows), min(box[3], cols)
+    kept = [max(min(box[0], rows - height), 0), max(min(box[1], cols - width), 0), height, width]
+    return kept if _fits(kept, cols, rows, ui_args) else list(box_for(cols, rows))
+
+
+def _minimize(b):
+    b["editing"]["minimized"], b["editing"]["state"]["button"] = True, None
+    b["message"] = f"{_title(b, b['editing']['index'])} is minimized. Click it in the top bar to bring it back."
+    _repaint(b)
+    return editor.images_gone()
+
+
+def _restore(b):
+    b["editing"]["minimized"], b["message"] = False, ""
+    _repaint(b)
+
+
+def _maximize(b, cols, rows, ui_args):
+    """Fill the window, or go back to the size it had."""
+    editing = b["editing"]
+    if editing["restore"]:
+        editing["box"], editing["restore"] = _keep_in(editing["restore"], cols, rows, ui_args), None
+    else:
+        editing["restore"], editing["box"] = editing["box"], [0, 0, rows, cols]
+    _repaint(b)
+
+
+def _window_part(b, cols, rows, ui_args, col, row):
+    """What of the window's frame is at a point: one of its buttons, or how dragging it there changes the window, or None for the editor's."""
+    top, left, height, width = b["editing"]["box"]
+    ui = _box_layout(b, cols, rows, ui_args)
+    inside_col, inside_row = col - ui.origin[1], row - ui.origin[0]
+    along, across = int(row) if row >= 0 else -1, int(col) if col >= 0 else -1
+    if not (top <= along < top + height and left <= across < left + width):
+        return None
+    if along == top:
+        return ui.button_at(inside_col, inside_row) or "move"
+    if along == top + height - 1:
+        if across == left + width - 1:
+            return "resize"
+        return None if ui.button_at(inside_col, inside_row) else "resize_rows"
+    return "resize_cols" if across == left + width - 1 else None
+
+
+def _drag_window(b, cols, rows, ui_args, col, row):
+    editing = b["editing"]
+    drag = editing["drag"]
+    top, left, height, width = drag["box"]
+    down, right = round(row - drag["from"][1]), round(col - drag["from"][0])
+    if drag["mode"] == "move":
+        wanted = [max(min(top + down, rows - height), 0), max(min(left + right, cols - width), 0), height, width]
+    else:
+        taller = height + (down if drag["mode"] in ("resize", "resize_rows") else 0)
+        wider = width + (right if drag["mode"] in ("resize", "resize_cols") else 0)
+        taller, wider = min(taller, rows - top), min(wider, cols - left)
+        # as near as the editor allows, keeping the size it has where the new one is too small
+        wanted = next((box for box in ([top, left, taller, wider], [top, left, editing["box"][2], wider], [top, left, taller, editing["box"][3]])
+                       if _fits(box, cols, rows, ui_args)), editing["box"])
+    if wanted != editing["box"]:
+        editing["box"], editing["restore"] = wanted, None
+        _repaint(b)
+
+
+def _window_event(b, event, cols, rows, ui_args, pixels):
+    """Moving, resizing, minimizing and maximizing the editor's window. Returns (whether it took the event, what to print)."""
+    if event[0] != "mouse":
+        return False, ""
+    editing = b["editing"]
+    code, x, y, release = event[1:]
+    col, row = (x / ui_args[0], y / ui_args[1]) if pixels else (x - 0.5, y - 0.5)
+    if editing["drag"]:
+        if code & 32 and not release:
+            _drag_window(b, cols, rows, ui_args, col, row)
+        else:
+            editing["drag"] = None
+        return True, ""
+    if code & (3 | 32 | 64) or release:
+        return False, ""
+    part = _window_part(b, cols, rows, ui_args, col, row)
+    if part == "minimize":
+        return True, _minimize(b)
+    if part == "maximize":
+        _maximize(b, cols, rows, ui_args)
+    elif part in DRAGS:
+        editing["drag"] = {"mode": part, "from": [col, row], "box": list(editing["box"])}
+    else:
+        return False, ""
+    return True, ""
+
+
+def _chip(b, grid):
+    """The minimized window's place in the top bar: (col, text), or None."""
+    if not b["editing"] or not b["editing"]["minimized"]:
+        return None
+    text = f" □ {editor._fit_text(_title(b, b['editing']['index']), grid.cols // 2)} "
+    return grid.cols - len(text) - 1, text
+
+
 def _move_cursor(b, grid, name):
     count = len(b["items"])
     if b["cursor"] is None:
@@ -320,7 +458,9 @@ def _handle_list(b, grid, event, cols, rows, ui_args, pixels, copies):
         name = event[1]
         b["message"] = ""
         if name in ("q", "quit", "interrupt"):
-            return True
+            if not b["editing"]:
+                return True
+            b["message"] = f"{_title(b, b['editing']['index'])} is still open: bring it back from the top bar, then Done or Cancel."
         if name in ("left", "right", "up", "down"):
             _move_cursor(b, grid, name)
         elif name == "c":
@@ -339,6 +479,10 @@ def _handle_list(b, grid, event, cols, rows, ui_args, pixels, copies):
     else:
         col, row = x - 0.5, y - 0.5
     hit = grid.tile_at(col, row, b["top"], len(b["items"]))
+    chip = _chip(b, grid)
+    if chip and int(row) == 0 and chip[0] <= col < chip[0] + len(chip[1]) and not code & (3 | 32 | 64) and not release:
+        _restore(b)
+        return False
     if code & 64:
         b["top"] = max(min(b["top"] + (1 if code & 3 else -1), grid.last_top(len(b["items"]))), 0)
         b["cursor"], b["message"] = grid.tile_at(col, row, b["top"], len(b["items"])), ""
@@ -390,9 +534,15 @@ def step(state_text, items_text, raw, cols, rows, cell_width=None, cell_height=N
         b["size"], b["shown"], b["text"] = size, {}, None
         if b["editing"]:
             b["editing"]["state"]["size"] = None
+            maximized = b["editing"]["restore"] is not None
+            b["editing"]["box"] = [0, 0, rows, cols] if maximized else _keep_in(b["editing"]["box"], cols, rows, ui_args)
     b["top"] = min(b["top"], grid.last_top(len(b["items"])))
-    for position, event in enumerate(events):
-        if b["editing"]:
+    for event in events:
+        if _shown(b):
+            taken, printed = _window_event(b, event, cols, rows, ui_args, pixels)
+            if taken:
+                out.append(printed)
+                continue
             ui = _box_layout(b, cols, rows, ui_args)
             ended = editor.handle_events(b["editing"]["state"], ui, [event], pixels)
             finished = editor.finish(b["editing"]["state"], ended) if ended else None
@@ -400,10 +550,9 @@ def step(state_text, items_text, raw, cols, rows, cell_width=None, cell_height=N
                 out.append(_close(b, *finished))
         elif _handle_list(b, grid, event, cols, rows, ui_args, pixels, copies):
             return editor.QUIT, "", _final_list(b)
-    if not b["editing"] or b["text"] is None:
-        painted = _list_frame(b, grid, theme, ui_args[:2])
-        out.append(painted)
-    if b["editing"]:
+    if not _shown(b) or b["text"] is None:
+        out.append(_list_frame(b, grid, theme, ui_args[:2]))
+    if _shown(b):
         out.append(editor.take_clipboard(b["editing"]["state"]))
         out.append(editor.frame(b["editing"]["state"], _box_layout(b, cols, rows, ui_args), theme))
     out.extend(editor.clipboard_sequence(text) for text in copies)
@@ -413,4 +562,4 @@ def step(state_text, items_text, raw, cols, rows, cell_width=None, cell_height=N
 
 
 def _box_layout(b, cols, rows, ui_args):
-    return editor.Layout(cols, rows, *ui_args, box=box_for(cols, rows), title=_title(b, b["editing"]["index"]))
+    return editor.Layout(cols, rows, *ui_args, box=tuple(b["editing"]["box"]), title=_title(b, b["editing"]["index"]), window=True)

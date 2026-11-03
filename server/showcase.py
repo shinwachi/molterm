@@ -92,6 +92,15 @@ class _Session:
         output = self._send(self._report(0, *place) + self._report(0, *place, "m"))
         self.frames.append(_frame(caption, output, list(place), click=True, pause=pause))
 
+    def drag(self, start, end, caption, steps=3, pause=1600):
+        """Press at `start`, move to `end` in a few steps, each shown as the client would get it, and let go there."""
+        for step in range(1, steps + 1):
+            along = [a + (b - a) * step / steps for a, b in zip(start, end)]
+            raw = (self._report(0, *start) if step == 1 else "") + self._report(32, *along)
+            if step == steps:
+                raw += self._report(0, *along, "m")
+            self.frames.append(_frame(caption, self._send(raw), along, pause=pause if step == steps else 150))
+
     def key(self, name, caption, pause=2400):
         output = self._send(name)
         self.frames.append(_frame(caption, output, key=name, pause=pause))
@@ -123,6 +132,24 @@ class _Session:
         _, ui = self._box()
         _, label, col = next(button for button in ui.buttons() if button[0] == name)
         return col + len(label) / 2 + ui.origin[1], ui.rows + 0.5 + ui.origin[0]
+
+    def control(self, name):
+        """One of the buttons on the window's top edge."""
+        _, ui = self._box()
+        _, label, col = next(button for button in ui.controls() if button[0] == name)
+        return col + len(label) / 2 + ui.origin[1], ui.origin[0] - 0.5
+
+    def title_bar(self):
+        top, left, _, width = self.board()["editing"]["box"]
+        return left + width / 3, top + 0.5
+
+    def grip(self):
+        top, left, height, width = self.board()["editing"]["box"]
+        return left + width - 0.5, top + height - 0.5
+
+    def chip(self):
+        col, text = board._chip(self.board(), board.Grid(self.cols, self.rows))
+        return col + len(text) / 2, 0.5
 
 
 def _hydroxyl(s):
@@ -168,6 +195,16 @@ def _edit(cols, rows, cell_width, cell_height):
     run.click(run.atom(_ortho_carbon), "Another click, another bond.")
     run.hover(run.atom(_new_carbon), "Hover over the new carbon...", pause=1400)
     run.key("f", "...and f turns it into fluorine. The status line keeps up with the SMILES.", pause=3000)
+    run.hover(run.grip(), "The window works like one on a desktop. The grip at its corner resizes it...", pause=1400)
+    corner = run.grip()
+    run.drag(corner, (corner[0] - 26, corner[1] - 7), "...and the drawing keeps its place in the middle as it shrinks.")
+    run.hover(run.title_bar(), "Its title bar moves it...", pause=1200)
+    bar = run.title_bar()
+    run.drag(bar, (bar[0] + 24, bar[1] + 6), "...over the list, which shows again wherever the window was.")
+    run.hover(run.control("minimize"), "The buttons at the top right minimize and maximize it.", pause=1400)
+    run.click(run.control("minimize"), "Minimized, the window waits in the top bar, edit and all, while the list is used.", pause=3000)
+    run.hover(run.chip(), "Clicking it there...", pause=1200)
+    run.click(run.chip(), "...brings the window back where it was, with the drawing as it was left.", pause=2600)
     run.hover(run.button("copy"), "Copy SMILES is on the window's bottom edge.", pause=1400)
     run.click(run.button("copy"), "It copies the drawing as it stands, before anything is saved.", pause=3200)
     run.hover(run.button("done"), "Done is on the same edge, beside Cancel.", pause=1500)

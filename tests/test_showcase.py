@@ -53,6 +53,28 @@ def test_the_edit_opens_a_window_and_closes_it(frames):
     assert any("edited" in frame["output"] for frame in frames)
 
 
+def test_the_window_is_resized_moved_minimized_and_brought_back():
+    run = showcase._Session(SIZE["cols"], SIZE["rows"], SIZE["cell_width"], SIZE["cell_height"])
+    run.click(run.tile(1), "")
+    top, left, height, width = run.board()["editing"]["box"]
+    corner = run.grip()
+    run.drag(corner, (corner[0] - 26, corner[1] - 7), "")
+    assert run.board()["editing"]["box"] == [top, left, height - 7, width - 26]
+    bar = run.title_bar()
+    run.drag(bar, (bar[0] + 24, bar[1] + 6), "")
+    assert run.board()["editing"]["box"] == [top + 6, left + 24, height - 7, width - 26]
+    run.click(run.control("minimize"), "")
+    assert run.board()["editing"]["minimized"] and "□ Edit Paracetamol" in run.frames[-1]["output"]
+    run.click(run.chip(), "")
+    assert not run.board()["editing"]["minimized"]
+    assert run.board()["editing"]["box"] == [top + 6, left + 24, height - 7, width - 26]
+
+
+def test_the_demo_shows_the_window_being_handled(frames):
+    captions = " ".join(frame["caption"] for frame in frames)
+    assert "resizes it" in captions and "title bar moves it" in captions and "Minimized" in captions
+
+
 def test_the_status_line_follows_each_step_of_the_edit(frames):
     outputs = "".join(frame["output"] for frame in frames)
     assert "CCOc1ccc(NC(C)=O)cc1" in outputs and showcase.EDITED in outputs

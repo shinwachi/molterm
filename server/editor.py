@@ -51,6 +51,8 @@ MAX_LABEL = 32
 PRESS_MODES = ("draw", "move", "marquee", "pan", "none")
 LAYERS = ("palette", "structure", "overlay", "text", "backing")
 MIN_BOX_COLS = 36  # room for the buttons on the bottom edge
+WINDOW_BUTTONS = (("minimize", " _ "), ("maximize", " □ "))  # on the top edge of a box its host can move: the host acts on them
+RESIZE_GRIP = "◢"
 
 ACCENT, RED = (0.22, 0.53, 0.9), (0.94, 0.33, 0.31)
 HOTSPOT, HOTSPOT_DOT = (0.45, 0.72, 1.0), (0.2, 0.8, 0.35)  # ChemDraw marks an atom with a light blue circle and a green dot
@@ -260,7 +262,7 @@ def check_state(s):
     for name in ("menu_hover", "tip"):
         if s[name] is not None:
             _integer(s[name], 1000)
-    if s["button"] not in (None, "done", "cancel", "copy"):
+    if s["button"] not in (None, "done", "cancel", "copy", *dict(WINDOW_BUTTONS)):
         raise StateError("A choice in the drawing is not valid.")
     if not isinstance(s["shown"], dict) or not all(k in LAYERS and isinstance(v, str) and len(v) <= 64 for k, v in s["shown"].items()):
         raise StateError("A choice in the drawing is not valid.")
@@ -745,11 +747,13 @@ CONTEXT_MENUS = {
 
 class Layout:
     """Where everything is. Columns and rows here count from 0 at the top left of the editor, which is the screen's unless the editor
-    is in a box: then `box` is (row, col, rows, cols) on the screen, counting its border, and `title` goes in the border."""
+    is in a box: then `box` is (row, col, rows, cols) on the screen, counting its border, and `title` goes in the border. A `window` box
+    also has buttons to minimize and maximize it on its top edge, and a grip to resize it at the bottom right, for a host that does so."""
 
-    def __init__(self, cols, rows, cell_width=None, cell_height=None, pixels=False, box=None, title=""):
+    def __init__(self, cols, rows, cell_width=None, cell_height=None, pixels=False, box=None, title="", window=False):
         self.box, self.title = box, title
         self.boxed = box is not None
+        self.window = self.boxed and window
         self.origin = (box[0] + 1, box[1] + 1) if box else (0, 0)
         if box:
             rows, cols = box[2] - 2, box[3] - 2
@@ -797,10 +801,19 @@ class Layout:
             found.append((name, label, col))
         return found
 
+    def controls(self):
+        """On the top edge of a window: (name, label, column)."""
+        col, found = self.cols, []
+        for name, label in WINDOW_BUTTONS[::-1] if self.window else ():
+            col -= len(label)
+            found.append((name, label, col))
+        return found
+
     def button_at(self, col, row):
-        if not self.boxed or math.floor(row) != self.rows:
+        if not self.boxed or math.floor(row) not in (-1, self.rows):
             return None
-        return next((name for name, label, start in self.buttons() if start <= col < start + len(label)), None)
+        found = self.controls() if math.floor(row) == -1 else self.buttons()
+        return next((name for name, label, start in found if start <= col < start + len(label)), None)
 
     def title_at(self, col, row):
         if not 0 <= row < MENU_ROWS:
@@ -1118,15 +1131,17 @@ def _place(layer, s, ui, png, cols, rows, row, col):
 def _border(s, ui, colours):
     """The box's edge, with its title and buttons."""
     dim, ink = f"\x1b[{colours['dim']}m", f"\x1b[{colours['ink']}m"
-    title = f" {_fit_text(ui.title, ui.cols - 4)} " if ui.title else ""
+    controls = ui.controls()
+    room = ui.cols - 4 - sum(len(label) for _, label, _ in controls)
+    title = f" {_fit_text(ui.title, room)} " if ui.title else ""
     out = [ui.at(-1, -1, f"{dim}╭─\x1b[1m{ink}{title}\x1b[22m{dim}{'─' * (ui.cols - 1 - len(title))}╮")]
     for row in range(ui.rows):
         out.append(ui.at(row, -1, f"{dim}│") + ui.at(row, ui.cols, f"{dim}│"))
-    out.append(ui.at(ui.rows, -1, f"{dim}╰{'─' * ui.cols}╯"))
-    for name, label, col in ui.buttons():
+    out.append(ui.at(ui.rows, -1, f"{dim}╰{'─' * ui.cols}{RESIZE_GRIP if ui.window else '╯'}"))
+    for name, label, col in [*ui.buttons(), *controls]:
         chosen = s["button"] == name
         style = f"\x1b[{colours['pick']};{colours['on_pick']}m" if chosen else f"\x1b[{colours['bar']};{colours['ink']}m"
-        out.append(ui.at(ui.rows, col, style + label))
+        out.append(ui.at(-1 if name in dict(WINDOW_BUTTONS) else ui.rows, col, style + label))
     out.append("\x1b[0m")
     return "".join(out)
 
@@ -1147,7 +1162,7 @@ def frame(s, ui, theme):
     """What to print for the current state: only the layers that changed, or nothing if the screen already shows it."""
     smiles, problem, wrong = analyse(s)
     colours = _CHROME.get(theme, _CHROME["dark"])
-    screen = [ui.cols, ui.rows, ui.cell_width, ui.cell_height, theme, ui.box]
+    screen = [ui.cols, ui.rows, ui.cell_width, ui.cell_height, theme, ui.box, ui.window]
 
     def digest(*parts):
         return hashlib.sha256(json.dumps([screen, *parts]).encode()).hexdigest()[:16]
@@ -2033,6 +2048,8 @@ def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
     pressed = ui.button_at(col, row) if button == 0 else None
     if pressed == "copy":
         _copy(s)
+        return False
+    if pressed in dict(WINDOW_BUTTONS):  # the host's, which takes them before they come here
         return False
     if pressed:  # a stray click outside the box does nothing, but these end it
         return True if pressed == "done" else CANCEL

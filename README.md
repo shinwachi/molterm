@@ -42,7 +42,8 @@ from a CDN. Its page downloads 4.2 MB of script.
 
 http://molterm-dev.localhost/showcase is an automated demo in the same web terminal, black on white. It sets molecules as Kitty
 graphics beside plain ASCII, with Braille for a larger drug, and shows the fog setting. Then it works through a real
-edit: it copies a SMILES, clicks a structure in a list, edits it in the windowed editor, chooses Done, copies the result, pastes it
+edit: it copies a SMILES, clicks a structure in a list, edits it in the windowed editor, resizes, moves and minimizes that window,
+chooses Done, copies the result, pastes it
 into a command and gets the list back. The server makes every frame with the same code as `molterm tui`, and the page only prints
 them and moves a pointer to show where the input went. It plays by itself, with **Stop** and **Start again**, and doesn't take
 input. It won't overwrite your clipboard on its own: it shows what the terminal was asked to copy below the screen, with a **Copy**
@@ -143,7 +144,12 @@ plus `od`.
 ### Editing inside a text interface
 
 `molterm tui` is a text interface with structures in it: a grid of drawings, where hovering marks a tile and clicking an editable one opens
-the editor in a box over the rest. Done (or Ctrl-Q) puts the edit back in the list and redraws that tile, and Cancel (or Ctrl-C) leaves it as it was.
+the editor in a window over the rest. Done (or Ctrl-Q) puts the edit back in the list and redraws that tile, and Cancel (or Ctrl-C) leaves it as it was.
+
+The window works like one on a desktop. Drag its title bar to move it, and its right or bottom edge, or the ◢ grip at the corner, to resize it;
+it won't go smaller than the editor needs, nor off the screen. **□** on its top edge fills the screen and a second click puts it back, and **_**
+minimizes it into the list's top bar, edit and all, where a click brings it back. While it's minimized the list can be browsed and copied from,
+but opening another structure or quitting says to finish that edit first. A smaller terminal pulls the window inside it.
 
 ```sh
 ./molterm tui                                                   # a sample list
@@ -249,7 +255,9 @@ nothing, help covering the drawing, and quitting.
 `molterm tui` was run in the same Ghostty: hovering and clicking tiles, the box hiding the pictures below it, the hotspot and keys landing correctly
 inside the box, its menus and help, a click outside doing nothing, Done redrawing the tile, Cancel, scrolling, resizing with the box open, and the
 printed list. `-b` was run there from a shell script standing in for a host, with text all around the box. `tests/test_board.py` checks that nothing
-from the box lands outside it, and refuses tampered states.
+from the box lands outside it, and refuses tampered states. Moving, resizing, maximizing and minimizing the window are checked there with raw
+mouse input, including that the drawing still answers where it is shown after a move; they haven't been tried in a real terminal yet.
+A drag step takes about 35 ms on the server, as the editor is drawn again at each step.
 
 `/kitty` was checked in Chrome: a full automated run at normal speed, typing with Backspace, Tab, Up and a mistake, the scrollback,
 no console errors, and no page overflow at 320, 375 and 640 px.
@@ -257,6 +265,7 @@ no console errors, and no page overflow at 320, 375 and 640 px.
 `/showcase` was watched in Chrome: a full run with no console errors, the side-by-side screens, the window opening over the list, the
 palette and hotspot in it, Done, the redrawn tile and the printed list. The edit's result, `CCOc1ccc(NC(C)=O)cc1F`, is checked by tests.
 Its fog frames, all three ways of copying and the pasted drawing were watched there too, with the page's Copy button checked for selecting the right text.
+The window being resized, moved, minimized into the top bar with every thumbnail of the list still showing, and brought back, was watched there as well.
 Actual clipboard writes haven't been tested: not OSC 52 in a real terminal, nor the Copy button's browser copy. Fog has not been run in a real terminal; its images were checked by eye and by tests.
 
 Open issues:
@@ -297,6 +306,8 @@ Open issues:
 - `molterm tui` opens, edits and prints a list. It can't add or remove structures or read a file. It holds at most 60 structures, and cuts names
   at 60 characters. A very large drawing gives up its oldest undo steps to keep the state small enough to send.
 - In a window under 64 columns or 16 rows, the box takes the whole window. In a narrow box the help text is cut at the edge.
+- The window can only be resized from its right and bottom edges, not its left or top. There is one window at a time, and the minimize and
+  maximize buttons act on press, not on release as desktop buttons do. Only `molterm tui` moves it: a host using `-b` places the box itself.
 - `molterm edit` keeps elements, charges, Kekulé bonds, wedges and 2D positions. A loaded SMILES with isotopes or unusual bonds loses
   them, and says so. It holds at most 200 atoms and 30 undo steps.
 - xterm cuts a Sixel image off at 1000 x 1000 pixels by default, so `grid` is clipped in `molterm demo` there.
