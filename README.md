@@ -42,12 +42,12 @@ from a CDN. Its page downloads 4.2 MB of script.
 
 http://molterm-dev.localhost/showcase is an automated demo in the same web terminal, black on white. It sets molecules as Kitty
 graphics beside plain ASCII, with Braille for a larger drug, and shows the fog setting. Then it works through a real
-edit: it copies a SMILES, clicks a structure in a list, edits it in the windowed editor, resizes, moves and minimizes that window,
-chooses Done, copies the result, pastes it
+edit: it copies a SMILES, copies a structure as SMILES, SVG and PNG from its right-click menu, clicks a structure in a list, edits it in
+the windowed editor, highlights an atom and adds a note to another, resizes, moves and minimizes that window, chooses Done, copies the result, pastes it
 into a command and gets the list back. The server makes every frame with the same code as `molterm tui`, and the page only prints
 them and moves a pointer to show where the input went. It plays by itself, with **Stop** and **Start again**, and doesn't take
-input. It won't overwrite your clipboard on its own: it shows what the terminal was asked to copy below the screen, with a **Copy**
-button.
+input. It won't overwrite your clipboard on its own: it shows what the terminal was asked to copy below the screen, with a **Copy text**
+button, and for a copy with pictures a preview of the PNG and **Save PNG** and **Save SVG** links.
 
 Or use a real terminal:
 
@@ -116,7 +116,13 @@ ChemDraw. Press `?` in it for every control.
 ./molterm edit                                 # start empty
 ./molterm edit 'CC(=O)Oc1ccccc1C(=O)O'         # start from a SMILES
 smiles=$(./molterm edit)                       # Ctrl-Q prints the SMILES on stdout, so it can be captured
+./molterm edit 'CCO |atomProp:2.atomNote.hydroxyl|'   # CXSMILES brings its annotations
 ```
+
+A drawing with annotations is printed as CXSMILES: the SMILES, then the annotations as atom properties, which RDKit reads back.
+RDKit's own `atomNote` holds an atom's note, so RDKit draws it unchanged. Highlights, bond annotations and what is shown are
+molterm's own properties, `molterm_highlight`, `molterm_bond_<other atom>_highlight` and `_note`, and `molterm_show`, since CXSMILES has no
+place for bond properties: other programs keep them as atom properties without knowing what they mean.
 
 - **Tool palette, on the left:** selection, eraser, pan, text, bonds, charges and rings, drawn as icons. A tool stays chosen until you
   pick another.
@@ -131,7 +137,12 @@ smiles=$(./molterm edit)                       # Ctrl-Q prints the SMILES on std
 - **Text tool, or Enter on an atom:** a box opens at the atom for an element or a group such as OMe, CF3, CO2H, NO2, Ph, Boc or Ts.
   Groups become real atoms. A group replaces an atom at the end of a chain, and is added as a substituent to a ring atom.
 - **Selection:** drag across empty space to select, drag to move, Delete to remove, and arrows to nudge.
-- **Menus:** a menu bar (also F10), and right-click for the menu of what is under the pointer.
+- **Menus:** a menu bar (also F10), and right-click for the menu of what is under the pointer. Right-click a selection for its own menu,
+  to copy just those atoms and the bonds between them, annotate them or delete them.
+- **Annotations, drawn by RDKit:** highlights in four colours and short notes on atoms and bonds, from an atom's or bond's menu, a
+  selection's menu or the **Annotate** menu, which also shows atom numbers and CIP stereo labels (R, S, E, Z). They are undone like any
+  other change, follow their atoms through Clean Up, and go when their atom or bond goes.
+- **Copying:** **File** copies the drawing as SMILES, SVG or PNG, or all three at once; see [Copying](#copying) below.
 - The SMILES, formula, MW and cLogP update below the drawing. Atoms RDKit can't accept, such as an oxygen with three bonds, get a red
   box, so a drawing can be invalid on its way to being finished. Ctrl-Q then stays in the editor and says why. Ctrl-C leaves anyway, printing
   the problem and exiting with 1.
@@ -154,13 +165,28 @@ but opening another structure or quitting says to finish that edit first. A smal
 ```sh
 ./molterm tui                                                   # a sample list
 ./molterm tui 'ro:CC(=O)Oc1ccccc1C(=O)O Aspirin' 'CCO Ethanol'  # "SMILES name"; ro: means read-only
+./molterm tui 'CCO |atomProp:2.atomNote.OH| Ethanol'            # a CXSMILES keeps its annotations
 ./molterm tui 'CCO Ethanol' > edited.smi                        # q prints the list as it now stands
 ```
 
-To copy a structure's SMILES, point at it and press `c`, or click **copy** on the frame around it; read-only ones can be copied too.
-In the editor, use **Copy SMILES** on the box's bottom edge, or **File > Copy SMILES**, which also works in the full-screen `molterm edit`.
-Copying uses the terminal's clipboard sequence (OSC 52), so it reaches your clipboard even over SSH. A terminal can refuse it without saying
-so: Kitty and Ghostty allow it by default, while tmux needs `set -g set-clipboard on`. The SMILES is also on the status line.
+Each structure keeps its annotations, draws them on its tile, opens with them in the editor and gets back what the editor saves.
+The list prints each line as `SMILES name`, or `CXSMILES name` for one with annotations.
+Right-click a structure, or press `/` or `m` with the pointer on it, for its menu: **Edit**, the four kinds of copy, and for an editable one
+**Show Atom Numbers**, **Show Stereo Labels** and **Clear Annotations**. Arrows and Enter work in it, and anything else closes it.
+
+### Copying
+
+Everything that copies takes the annotations along. In the list, point at a structure and press `c`, or click **copy** on its frame, for
+its SMILES; its right-click menu also copies an SVG, a PNG or all three. Read-only structures can be copied too. In the editor, **Copy
+SMILES** is on the window's bottom edge, the **File** menu and the empty canvas's menu copy the drawing in each format, and a selection's
+menu copies only the selection; these work in the full-screen `molterm edit` too.
+
+- **SMILES** goes as text, through the terminal's clipboard sequence (OSC 52), so it reaches your clipboard even over SSH. A terminal can
+  refuse it without saying so: Kitty and Ghostty allow it by default, while tmux needs `set -g set-clipboard on`.
+- **SVG and PNG** are drawn by RDKit, 600 by 450 on white, and go through Kitty's clipboard protocol (OSC 5522), which can put several
+  types on the clipboard at once: a paste into a document gets the picture, and a paste into a text field gets the text. For SVG that text
+  is the SVG itself, and for PNG it's the SMILES. The text goes by OSC 52 first, so terminals without Kitty's protocol, Ghostty among
+  them, still get it, and only it. Kitty answers whether it took the copy, and the status line says so.
 
 A drawing left as it was keeps its SMILES exactly, an empty drawing isn't saved, and an invalid one stays open with the reason.
 Clicks outside the box do nothing, so a stray one can't lose work.
@@ -208,6 +234,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `server/client/molterm.sh` | The terminal client, served at `/molterm`: asks the terminal what it supports and chooses a mode, then draws one molecule or runs the guided session. |
 | `server/editor_icons.py` | The editor's tool palette, drawn as one image with Pillow. |
 | `server/editor.py` | The molecular editor: all of its input handling, geometry and drawing. The drawing is kept as plain atoms and bonds, since it often isn't valid chemistry while it's being made, and RDKit reads it as a molblock for each frame. |
+| `server/annotate.py` | Annotations: highlights, notes, atom numbers and stereo labels, as CXSMILES, drawn by RDKit, and copied as SMILES, SVG and PNG. |
 | `server/board.py` | `molterm tui`: the grid of structures, which hosts the editor in a box and carries its state inside its own. |
 | `server/static/kitty.js` | The `/kitty` page: a line editor and the guided session, written for restty. It uses the same commands and story as the client, but not its code. |
 | `server/showcase.py`, `server/static/showcase.js` | The `/showcase` demo: the script, which drives the list and editor as the client would, and the page that plays its frames. |
@@ -262,17 +289,24 @@ A drag step takes about 35 ms on the server, as the editor is drawn again at eac
 `/kitty` was checked in Chrome: a full automated run at normal speed, typing with Backspace, Tab, Up and a mistake, the scrollback,
 no console errors, and no page overflow at 320, 375 and 640 px.
 
+Annotations and copying are checked by `tests/test_annotate.py`: CXSMILES written and read back by RDKit with awkward note text, notes
+following atoms through undo, delete, Clean Up and RDKit's reordering on save, the menus of atoms, bonds and selections, copying part of a
+drawing, the list's menu from the mouse and the keys, and that what a copy sends decodes to the SMILES, a PNG and an SVG.
+Their drawings were checked by eye: highlights, notes, atom numbers and an (S) label in the editor, on a tile and in an export.
+
 `/showcase` was watched in Chrome: a full run with no console errors, the side-by-side screens, the window opening over the list, the
 palette and hotspot in it, Done, the redrawn tile and the printed list. The edit's result, `CCOc1ccc(NC(C)=O)cc1F`, is checked by tests.
 Its fog frames, all three ways of copying and the pasted drawing were watched there too, with the page's Copy button checked for selecting the right text.
-The window being resized, moved, minimized into the top bar with every thumbnail of the list still showing, and brought back, was watched there as well.
-Actual clipboard writes haven't been tested: not OSC 52 in a real terminal, nor the Copy button's browser copy. Fog has not been run in a real terminal; its images were checked by eye and by tests.
+The window being resized, moved, minimized into the top bar with every thumbnail of the list still showing, and brought back, was watched there as well,
+and so were the copy in all three formats with its PNG preview, the highlight and note in the editor and on the tile, and the printed CXSMILES.
+Actual clipboard writes haven't been tested: not OSC 52 or Kitty's OSC 5522 in a real terminal, nor the page's browser copy. Fog has not been run in a real terminal; its images were checked by eye and by tests.
 
 Open issues:
 
 - `/showcase` needs at least 90 columns by 30 rows at the smallest font, so it says it can't start on a phone. It sizes itself once, so
   resizing the window needs a reload. The hotspot stays light blue in its black-on-white theme, as it's what shows where the keys act.
 - restty paints cell backgrounds under the box's backing image, so grey bars and highlights inside the editor's box don't show there, only their text.
+  Menus over a drawing show the drawing through them there, as they do over the list's tiles.
   The black-on-white theme's highlight is underlined for that reason. Real terminals aren't expected to do this.
 - restty keeps about 10 MB of decoded images and drops the oldest, so `/showcase` asks for images at 7 pixels per column, and the editor's are a
   little soft there. In a real terminal they're sharp.
@@ -306,6 +340,11 @@ Open issues:
 - `molterm tui` opens, edits and prints a list. It can't add or remove structures or read a file. It holds at most 60 structures, and cuts names
   at 60 characters. A very large drawing gives up its oldest undo steps to keep the state small enough to send.
 - In a window under 64 columns or 16 rows, the box takes the whole window. In a narrow box the help text is cut at the edge.
+- Pictures reach the clipboard only in Kitty: Ghostty, iTerm2 and others don't take OSC 5522 and get the text alone, and say nothing.
+  The SVG and PNG are drawn at one size, with RDKit's own colours rather than the terminal's theme.
+- Notes are cut at 40 characters and a drawing holds at most 400 annotations. Atom numbers in the editor follow the drawing's order, which
+  after saving becomes the order of the written SMILES, so the numbers can change on Done. A bond note sits in RDKit's colour for notes.
+- Annotation needs a menu: there are no keys for it, as ChemDraw's tables have none.
 - The window can only be resized from its right and bottom edges, not its left or top. There is one window at a time, and the minimize and
   maximize buttons act on press, not on release as desktop buttons do. Only `molterm tui` moves it: a host using `-b` places the box itself.
 - `molterm edit` keeps elements, charges, Kekulé bonds, wedges and 2D positions. A loaded SMILES with isotopes or unusual bonds loses

@@ -101,9 +101,27 @@ class _Session:
                 raw += self._report(0, *along, "m")
             self.frames.append(_frame(caption, self._send(raw), along, pause=pause if step == steps else 150))
 
-    def key(self, name, caption, pause=2400):
+    def right_click(self, place, caption, pause=2000):
+        output = self._send(self._report(2, *place) + self._report(2, *place, "m"))
+        self.frames.append(_frame(caption, output, list(place), click=True, pause=pause))
+
+    def key(self, name, caption, pause=2400, shown=None):
         output = self._send(name)
-        self.frames.append(_frame(caption, output, key=name, pause=pause))
+        self.frames.append(_frame(caption, output, key=shown or name, pause=pause))
+
+    def list_item(self, label):
+        """An item of the list's right-click menu."""
+        b, grid = self.board(), board.Grid(self.cols, self.rows)
+        col, row, width = board._menu_place(b, grid)
+        index = next(i for i, item in enumerate(board._menu_items(b, b["menu"]["index"])) if item and item[0].strip() == label)
+        return col + min(width, 16) / 2, row + index + 0.5
+
+    def menu_item(self, label):
+        """An item of the editor's open menu."""
+        s, ui = self._box()
+        col, row, width = editor._menu_box(s, ui)
+        index = next(i for i, item in enumerate(editor._menu_items(s, ui)) if item and editor._item_label(s, item).strip() == label)
+        return col + min(width, 16) / 2 + ui.origin[1], row + index + 0.5 + ui.origin[0]
 
     def board(self):
         return editor.decode(self.state, board._check_state)
@@ -161,6 +179,14 @@ def _ether_methyl(s):
     return next(a[0] for a in s["atoms"] if a[1] == "C" and len(editor._neighbours(s, a[0])) == 1 and editor._atom(s, editor._neighbours(s, a[0])[0])[1] == "O")
 
 
+def _fluorine(s):
+    return next(a[0] for a in s["atoms"] if a[1] == "F")
+
+
+def _ether_oxygen(s):
+    return next(a[0] for a in s["atoms"] if a[1] == "O" and len(editor._neighbours(s, a[0])) == 2)
+
+
 def _ortho_carbon(s):
     """A ring CH beside the carbon that holds the ether's O."""
     oxygen = next(a[0] for a in s["atoms"] if a[1] == "O" and len(editor._neighbours(s, a[0])) == 2)
@@ -185,6 +211,10 @@ def _edit(cols, rows, cell_width, cell_height):
     run.hover(run.tile(0), "Hovering outlines a structure, and its SMILES, formula, MW and cLogP appear at the bottom.")
     run.key("c", "Pressing c copies the SMILES of the structure under the pointer. The terminal puts it on the system clipboard, shown below the screen here.", pause=3600)
     run.click(run.tile(0), "Aspirin is marked read-only, so clicking it only says so. Copying still works, since it changes nothing.")
+    run.right_click(run.tile(0), "Right-clicking a structure opens its menu. A read-only one can't be edited, but can be copied three ways.", pause=2600)
+    run.hover(run.list_item("Copy SMILES, SVG and PNG"), "Copying all three at once...", pause=1200)
+    run.click(run.list_item("Copy SMILES, SVG and PNG"), "...puts the picture and the SMILES on the clipboard together, through Kitty's clipboard protocol. "
+              "A document gets the picture, a text field the SMILES. They're shown below the screen.", pause=4200)
     run.hover(run.tile(1), "Paracetamol is editable.", pause=1500)
     run.click(run.tile(1), "Clicking it opens the editor in a window over the list, with the same tools as the full-screen editor.", pause=2800)
     run.hover(run.atom(_hydroxyl), "Hover over an atom and it becomes the hotspot, as in ChemDraw. Clicks and keys now act on it.")
@@ -195,6 +225,12 @@ def _edit(cols, rows, cell_width, cell_height):
     run.click(run.atom(_ortho_carbon), "Another click, another bond.")
     run.hover(run.atom(_new_carbon), "Hover over the new carbon...", pause=1400)
     run.key("f", "...and f turns it into fluorine. The status line keeps up with the SMILES.", pause=3000)
+    run.right_click(run.atom(_fluorine), "Right-clicking an atom opens its menu, which also annotates it.", pause=2200)
+    run.click(run.menu_item("Highlight"), "Highlight marks it, drawn by RDKit, as notes, atom numbers and stereo labels are.", pause=2600)
+    run.right_click(run.atom(_ether_oxygen), "Now a note on the ether's oxygen.", pause=1600)
+    run.click(run.menu_item("Note..."), "Note... asks for it on the status line.", pause=1600)
+    run.key("ethyl ether", "Typing it...", pause=1400)
+    run.key("\r", "...and Enter puts it beside the atom. Annotations are kept with the structure, as CXSMILES.", pause=3000, shown="Enter")
     run.hover(run.grip(), "The window works like one on a desktop. The grip at its corner resizes it...", pause=1400)
     corner = run.grip()
     run.drag(corner, (corner[0] - 26, corner[1] - 7), "...and the drawing keeps its place in the middle as it shrinks.")
@@ -206,17 +242,18 @@ def _edit(cols, rows, cell_width, cell_height):
     run.hover(run.chip(), "Clicking it there...", pause=1200)
     run.click(run.chip(), "...brings the window back where it was, with the drawing as it was left.", pause=2600)
     run.hover(run.button("copy"), "Copy SMILES is on the window's bottom edge.", pause=1400)
-    run.click(run.button("copy"), "It copies the drawing as it stands, before anything is saved.", pause=3200)
+    run.click(run.button("copy"), "It copies the drawing as it stands, annotations included, before anything is saved.", pause=3400)
     run.hover(run.button("done"), "Done is on the same edge, beside Cancel.", pause=1500)
-    run.click(run.button("done"), "The window closes, and the tile is redrawn and marked edited.", pause=3000)
+    run.click(run.button("done"), "The window closes, and the tile is redrawn with its highlight and note, and marked edited.", pause=3200)
     run.hover(run.tile(1), "The list now holds the new structure.", pause=2600)
     run.hover(run.copy_label(1), "The frame around the structure under the pointer has a copy label, for the mouse.", pause=1500)
     run.click(run.copy_label(1), "Clicking it copies the edited SMILES.", pause=3000)
     smiles = run.board()["items"][1][1]
-    run.frames.append(_frame("Pasted anywhere that takes text: here, into a shell, to draw it again with the fog setting.", _pasted(smiles, cols), pause=4500))
+    run.frames.append(_frame("Pasted anywhere that takes text: here, its SMILES into a shell, to draw it again with the fog setting.", _pasted(smiles, cols), pause=4500))
     output = run._send("q")
-    final = _HOME + editor._ansi(0, 0, f"{_BOLD}The list, as printed on quitting\x1b[0m") + "".join(editor._ansi(2 + index, 2, line) for index, line in enumerate(output.split("\n")))
-    run.frames.append(_frame("Quitting hands the list back, as text another program can read.", final, pause=4000))
+    lines = [line[start:start + cols - 4] for line in output.split("\n") for start in range(0, len(line), cols - 4)]  # long CXSMILES wrap
+    final = _HOME + editor._ansi(0, 0, f"{_BOLD}The list, as printed on quitting\x1b[0m") + "".join(editor._ansi(2 + index, 2, line) for index, line in enumerate(lines))
+    run.frames.append(_frame("Quitting hands the list back as text another program can read: CXSMILES, which RDKit reads with the annotations.", final, pause=4500))
     return run.frames, output
 
 

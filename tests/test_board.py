@@ -6,6 +6,7 @@ import sys
 import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
+import annotate  # noqa: E402
 import board  # noqa: E402
 import editor  # noqa: E402
 from app import app  # noqa: E402
@@ -174,7 +175,7 @@ def test_cancel_and_ctrl_c_leave_the_structure_alone():
         session = List().open(0)
         session.point_at_atom(0).send("n")
         leave(session)
-        assert session.state["editing"] is None and session.state["items"][0][1:] == ["CCO", True, False]
+        assert session.state["editing"] is None and session.state["items"][0][1:4] == ["CCO", True, False]
         assert "Cancelled" in session.output and session.status == editor.CONTINUE
 
 
@@ -325,9 +326,9 @@ def test_a_window_too_small_for_the_list_says_so_and_recovers():
 
 def test_a_large_drawing_gives_up_old_undo_steps_rather_than_the_session():
     big = "".join(chr(ord("a") + i % 26) for i in range(4000))
-    state = board.new_state([["n", "C", True, False]])
+    state = board.new_state([["n", "C", True, False, annotate.empty()]])
     drawing = editor.new_state()
-    drawing["undo"] = [[[[i, "C", float(i), float(i * j) / 7.0, 0] for i in range(1, 200)], [], 200] for j in range(30)]
+    drawing["undo"] = [[[[i, "C", float(i), float(i * j) / 7.0, 0] for i in range(1, 200)], [], 200, annotate.empty()] for j in range(30)]
     state["editing"] = {"index": 0, "state": drawing, "start": "C", "box": [0, 0, 30, 100], "restore": None, "minimized": False, "drag": None}
     state["message"] = big
     text = board._encode(state)
@@ -336,7 +337,7 @@ def test_a_large_drawing_gives_up_old_undo_steps_rather_than_the_session():
 
 
 def test_a_tampered_state_is_refused():
-    state = board.new_state([["n", "C", True, False]])
+    state = board.new_state([["n", "C", True, False, annotate.empty()]])
     bad = [dict(state, cursor=5), dict(state, top=-1), dict(state, items=[]), dict(state, shown={"x": "y"}),
            dict(state, editing={"index": 0, "state": {}, "start": None}), dict(state, items=[["n", "C", False, False]], editing={"index": 0, "state": editor.new_state(), "start": None})]
     for tampered in bad:
@@ -435,7 +436,7 @@ def test_the_editor_cannot_copy_an_empty_drawing():
 
 
 def test_copy_is_in_the_file_menu():
-    assert ("Copy SMILES", "", ("command", "copy")) in editor.MENUS[0][1]
+    assert ("Copy SMILES", "", ("copy", ("smiles", False))) in editor.MENUS[0][1]
 
 
 # The window: moved, resized, minimized and maximized by the list, as a window manager would

@@ -14,7 +14,9 @@
         #pointer.clicking svg { transform: scale(0.8); transform-origin: 0 0; }
         #clipboard { margin-top: var(--sp-2); align-items: center; }
         #clipboard[hidden] { display: flex; visibility: hidden; }  /* keeps its room, so the page doesn't shift when it appears */
-        #clipboard-text { font-family: monospace; overflow-wrap: anywhere; }
+        #clipboard-text { font-family: monospace; overflow-wrap: anywhere; flex: 1 1 20ch; }
+        #clipboard-image { height: 64px; background: #ffffff; border-radius: var(--radius, 4px); }
+        #clipboard [hidden] { display: none; }
         #keycap { position: absolute; left: 0; top: 0; display: none; z-index: 2; padding: 2px 9px; background: #000000; color: #ffffff; border-radius: 4px; font: bold 15px monospace; }
     </style>
 {% endblock %}
@@ -32,8 +34,11 @@
     </div></div>
     <div class="toolbar" id="clipboard" hidden>
         <span>Clipboard</span>
+        <img id="clipboard-image" alt="The PNG that was copied" hidden>
         <span id="clipboard-text"></span>
-        <button class="btn" id="clipboard-copy" type="button">Copy</button>
+        <button class="btn" id="clipboard-copy" type="button">Copy text</button>
+        <a class="btn" id="clipboard-png" download="molecule.png" hidden>Save PNG</a>
+        <a class="btn" id="clipboard-svg" download="molecule.svg" hidden>Save SVG</a>
     </div>
 {% endblock %}
 {% block script %}

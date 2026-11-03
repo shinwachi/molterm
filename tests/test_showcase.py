@@ -10,7 +10,9 @@ import pytest
 from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
+import annotate  # noqa: E402
 import asciiart  # noqa: E402
+import board  # noqa: E402
 import editor  # noqa: E402
 import editor_icons  # noqa: E402
 import graphics  # noqa: E402
@@ -44,7 +46,12 @@ def test_the_demo_shows_an_image_beside_ascii(frames):
 
 def test_the_edit_gives_what_the_demo_says_and_is_handed_back(frames):
     assert molecule.parse(showcase.EDITED, "smiles").to_dict()["formula"] == "C10H12FNO2"
-    assert showcase.EDITED + " Paracetamol" in frames[-1]["output"]
+    _, output = showcase._edit(**SIZE)
+    line = output.split("\n")[1]
+    written, name = board._split_line(line)
+    smiles, notes = annotate.split(written)
+    assert smiles == showcase.EDITED and name == "Paracetamol"
+    assert [entry[1:] for entry in notes["atoms"]] == [["", "ethyl ether"], ["yellow", ""]]
     assert frames[-1]["output"].index("\x1b[2J") < frames[-1]["output"].index("as printed on quitting")
 
 
@@ -89,7 +96,8 @@ def test_pointers_stay_in_the_window_and_every_frame_has_a_caption(frames):
 
 @pytest.mark.parametrize("size", [dict(cols=90, rows=30, cell_width=7, cell_height=13), dict(cols=160, rows=38, cell_width=7, cell_height=15)])
 def test_the_edit_works_in_other_windows(size):
-    assert showcase.EDITED + " Paracetamol" in showcase.frames(**size)[-1]["output"]
+    _, output = showcase._edit(**size)
+    assert annotate.split(board._split_line(output.split("\n")[1])[0])[0] == showcase.EDITED
 
 
 def test_every_image_fits_the_web_terminals_store(frames):
@@ -213,9 +221,15 @@ def _clipboard(output):
 
 
 def test_showcase_copies_from_the_list_and_the_window():
-    copied = [text for frame in showcase.frames(120, 38, 7, 14) for text in _clipboard(frame["output"])]
+    frames = showcase.frames(120, 38, 7, 14)
+    copied = [text for frame in frames for text in _clipboard(frame["output"])]
     aspirin = "CC(=O)Oc1ccccc1C(=O)O"
-    assert copied == [aspirin, showcase.EDITED, showcase.EDITED]
+    edited = "CCOc1ccc(NC(C)=O)cc1F |atomProp:2.atomNote.ethyl ether:13.molterm_highlight.yellow|"
+    assert copied == [aspirin, aspirin, edited, edited]
+    pictures = [frame["output"] for frame in frames if "\x1b]5522;type=write" in frame["output"]]
+    assert len(pictures) == 1
+    mimes = {base64.b64decode(m).decode() for m in re.findall(r"\x1b\]5522;type=wdata:mime=([A-Za-z0-9+/=]+);", pictures[0])}
+    assert mimes == {"text/plain", "image/png", "image/svg+xml"}
 
 
 def test_showcase_pastes_what_it_copied_into_a_foggy_drawing():

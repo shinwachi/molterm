@@ -20,6 +20,7 @@ from rdkit.Chem import AllChem, Crippen, Descriptors, rdMolDescriptors
 from rdkit.Chem.Draw import rdMolDraw2D
 from rdkit.Geometry import Point2D
 
+import annotate
 import editor_icons
 import graphics
 import molecule
@@ -85,10 +86,12 @@ Ring tool    click a bond or atom to fuse, Alt+click a ring atom to sprout, or c
 Bond tool    click to draw or to step a bond's order, drag to aim or to join
 Text tool    click an atom and type: N, Cl, OMe, CF3, CO2H, NO2, Ph, Boc, Ts...
 Selection    drag to move, drag across empty space to select, Shift+click to add; a letter labels them all
-Right-click, or / or ? on an atom or bond, for its menu. The wheel zooms. The middle button pans.
+Right-click, or / or ? on an atom or bond, for its menu. Right-click a selection to copy or annotate it.
+The wheel zooms. The middle button pans. Annotations are kept in the SMILES as CXSMILES.
 
 Anywhere     Ctrl-Z undo   Ctrl-Y redo   Ctrl-A select all   Ctrl-K clean up   Tab next   Esc back out
              F5 actual size   F6 fit   F7 F8 ] [ zoom   F10 menus   Ctrl-Q quit and print the SMILES"""
+MAX_PROMPT = annotate.MAX_NOTE
 
 
 class StateError(ValueError):
@@ -103,7 +106,7 @@ def new_state():
             "view": [0.0, 0.0, DEFAULT_ZOOM], "focus": None, "hover": None, "last": None, "selected": [], "pointer": None,
             "press": None, "drag": None, "undo": [], "redo": [], "entry": None, "label": None, "help": False, "message": "",
             "menu": None, "menu_target": None, "menu_hover": None, "tip": None, "button": None, "cover": False, "shown": {}, "flips": {}, "size": None,
-            "partial": ""}
+            "partial": "", "notes": annotate.empty(), "prompt": None}
 
 
 def encode(state):
@@ -221,8 +224,21 @@ def _check_menu(menu):
         raise StateError("A menu in the drawing is not valid.")
 
 
+def _check_notes(notes, atoms, bonds):
+    """Annotations by editor id, on atoms and bonds that are there."""
+    try:
+        annotate.check(notes)
+    except annotate.NoteError as error:
+        raise StateError(str(error)) from error
+    ids, pairs = {a[0] for a in atoms}, {tuple(sorted(b[:2])) for b in bonds}
+    if not all(entry[0] in ids for entry in notes["atoms"]) or not all(tuple(entry[:2]) in pairs for entry in notes["bonds"]):
+        raise StateError("An annotation in the drawing is not valid.")
+
+
 def check_state(s):
+    s.pop("clipboard", None)  # only ever made here, and printed as it is
     _check_structure(s["atoms"], s["bonds"], s["next"])
+    _check_notes(s["notes"], s["atoms"], s["bonds"])
     if s["tool"] not in TOOLS or s["bond"] not in _ORDER or isinstance(s["bond"], bool):
         raise StateError("A tool in the drawing is not valid.")
     if s["ring"] not in RINGS or isinstance(s["ring"], bool):
@@ -239,8 +255,9 @@ def check_state(s):
     for stack in (s["undo"], s["redo"]):
         if not isinstance(stack, list) or len(stack) > MAX_UNDO:
             raise StateError("The drawing is too large.")
-        for atoms, bonds, next_id in stack:
+        for atoms, bonds, next_id, notes in stack:
             _check_structure(atoms, bonds, next_id)
+            _check_notes(notes, atoms, bonds)
     if s["press"] is not None:
         _check_press(s["press"])
     for name in ("drag", "pointer"):
@@ -248,6 +265,14 @@ def check_state(s):
             _check_point(s[name])
     if s["entry"] is not None and (not isinstance(s["entry"], str) or len(s["entry"]) > MAX_ENTRY):
         raise StateError("The text in the drawing is too long.")
+    if s["prompt"] is not None:
+        prompt = s["prompt"]
+        if not isinstance(prompt["targets"], list) or not prompt["targets"] or len(prompt["targets"]) > MAX_ATOMS + MAX_BONDS:
+            raise StateError("A choice in the drawing is not valid.")
+        for target in prompt["targets"]:
+            _check_target(target)
+        if not isinstance(prompt["text"], str) or len(prompt["text"]) > MAX_PROMPT:
+            raise StateError("The text in the drawing is too long.")
     if s["label"] is not None:
         label = s["label"]
         _check_target(label["target"])
@@ -291,7 +316,7 @@ def _neighbours(s, ident):
 
 def _save(s):
     """Remember the structure for undo. Call this before changing it."""
-    s["undo"] = (s["undo"] + [[json.loads(json.dumps(s["atoms"])), json.loads(json.dumps(s["bonds"])), s["next"]]])[-MAX_UNDO:]
+    s["undo"] = (s["undo"] + [json.loads(json.dumps([s["atoms"], s["bonds"], s["next"], s["notes"]]))])[-MAX_UNDO:]
     s["redo"] = []
 
 
@@ -299,8 +324,8 @@ def _restore(s, source, target):
     if not s[source]:
         s["message"] = f"Nothing to {source}."
         return
-    s[target] = (s[target] + [[s["atoms"], s["bonds"], s["next"]]])[-MAX_UNDO:]
-    s["atoms"], s["bonds"], s["next"] = s[source].pop()
+    s[target] = (s[target] + [[s["atoms"], s["bonds"], s["next"], s["notes"]]])[-MAX_UNDO:]
+    s["atoms"], s["bonds"], s["next"], s["notes"] = s[source].pop()
     _forget_missing(s)
 
 
@@ -310,6 +335,10 @@ def _forget_missing(s):
         if target and ((target[0] == "a" and not _atom(s, target[1])) or (target[0] == "b" and not _bond(s, target[1], target[2]))):
             s[name] = None
     s["selected"] = [ident for ident in s["selected"] if _atom(s, ident)]
+    ids, pairs = {a[0] for a in s["atoms"]}, {tuple(sorted(b[:2])) for b in s["bonds"]}
+    notes = s["notes"]
+    notes["atoms"] = [entry for entry in notes["atoms"] if entry[0] in ids]
+    notes["bonds"] = [entry for entry in notes["bonds"] if tuple(entry[:2]) in pairs]
 
 
 def _add_atom(s, element, x, y):
@@ -405,6 +434,48 @@ def analyse(s):
     return None, text, atoms
 
 
+def _mol_with_ids(atoms, bonds):
+    """The atoms and bonds as a valid molecule without explicit hydrogens, each atom keeping its id as molterm_id, or None."""
+    with rdBase.BlockLogs():
+        mol = Chem.MolFromMolBlock(to_molblock(atoms, bonds), removeHs=False)
+        if mol is None:
+            return None
+        for atom, entry in zip(mol.GetAtoms(), atoms):
+            atom.SetIntProp("molterm_id", entry[0])
+        return Chem.RemoveHs(mol)
+
+
+def _by_index(notes, index):
+    """Notes keyed by editor id to notes keyed by index, through {id: index}, leaving out what isn't there."""
+    return annotate.renumber(notes, index)
+
+
+def written(s, selection=False):
+    """(SMILES, the molecule in the SMILES's atom order with 2D coordinates, its notes by that order), for the drawing or only the
+    selected atoms and the bonds between them; or None if that isn't valid chemistry."""
+    chosen = set(s["selected"]) if selection else None
+    atoms = [a for a in s["atoms"] if chosen is None or a[0] in chosen]
+    bonds = [b for b in s["bonds"] if chosen is None or (b[0] in chosen and b[1] in chosen)]
+    if not atoms:
+        return None
+    mol = _mol_with_ids(atoms, bonds)
+    if mol is None:
+        return None
+    smiles = Chem.MolToSmiles(mol)
+    order = list(mol.GetPropsAsDict(True, True)["_smilesAtomOutputOrder"])
+    mol = Chem.RenumberAtoms(mol, order)
+    index = {atom.GetIntProp("molterm_id"): atom.GetIdx() for atom in mol.GetAtoms()}
+    return smiles, mol, _by_index(s["notes"], index)
+
+
+def annotated(s):
+    """The drawing as SMILES, with its annotations as a CXSMILES extension if it has any; "" if it's empty, None if it's not valid."""
+    if not s["atoms"]:
+        return ""
+    found = written(s)
+    return annotate.write(found[0], found[2]) if found else None
+
+
 def facts(smiles):
     with rdBase.BlockLogs():
         mol = Chem.MolFromSmiles(smiles)
@@ -454,7 +525,9 @@ def load_smiles(s, text):
     if s["atoms"]:
         _save(s)
     before = Chem.MolToSmiles(mol)
+    notes = annotate.read(mol)
     _from_mol(s, mol)
+    s["notes"] = annotate.renumber(notes, {index: index + 1 for index in range(mol.GetNumAtoms())})
     s["focus"] = None
     if analyse(s)[0] != before:
         s["message"] = "Some details, such as isotopes or unusual bonds, aren't kept by this editor."
@@ -729,19 +802,30 @@ PALETTE = [("select", ("tool", "select"), "Selection [Space]: drag to move, or d
 _ICON_NAMES = tuple(entry[0] for entry in PALETTE)
 
 # (label, key, action), with None for a dividing line
-MENUS = [("File", [("Load SMILES...", "/", ("command", "entry")), ("Copy SMILES", "", ("command", "copy")), ("Quit and print SMILES", "Ctrl-Q", ("command", "quit"))]),
+_COPY = [("Copy SMILES", "", ("copy", ("smiles", False))), ("Copy SVG", "", ("copy", ("svg", False))), ("Copy PNG", "", ("copy", ("png", False))),
+         ("Copy SMILES, SVG and PNG", "", ("copy", ("all", False)))]
+_ANNOTATE = [*((f"Highlight {name.title()}", "", ("highlight", name)) for name in annotate.HIGHLIGHTS), ("Remove Highlight", "", ("highlight", "")),
+             ("Note...", "", ("note", None)), ("Clear Annotations", "", ("clear", None))]
+MENUS = [("File", [("Load SMILES...", "/", ("command", "entry")), *_COPY, ("Quit and print SMILES", "Ctrl-Q", ("command", "quit"))]),
          ("Edit", [("Undo", "Ctrl-Z", ("command", "undo")), ("Redo", "Ctrl-Y", ("command", "redo")), None,
                    ("Select All", "Ctrl-A", ("command", "select_all")), ("Delete", "Del", ("command", "delete"))]),
          ("View", [("Actual Size", "F5", ("command", "actual")), ("Fit to Window", "F6", ("command", "fit")), ("Magnify", "F7", ("command", "zoom_in")), ("Reduce", "F8", ("command", "zoom_out"))]),
          ("Structure", [("Clean Up", "Ctrl-K", ("command", "tidy"))]),
+         ("Annotate", [*_ANNOTATE, None, ("Show Atom Numbers", "", ("show", "numbers")), ("Show Stereo Labels", "", ("show", "cip")), None,
+                       ("Clear All Annotations", "", ("command", "clear_notes"))]),
          ("Help", [("Keys and Mouse", "?", ("command", "help"))])]
 CONTEXT_MENUS = {
     "atom": [(symbol, key, ("element", symbol)) for symbol, key in (("C", "c"), ("N", "n"), ("O", "o"), ("S", "s"), ("P", "p"), ("F", "f"), ("Cl", "l"), ("Br", "b"))]
-    + [None, ("Label...", "Enter", ("label", None)), ("Charge +", "+", ("charge", 1)), ("Charge -", "-", ("charge", -1)), ("Delete", "Del", ("delete", None))],
+    + [None, ("Label...", "Enter", ("label", None)), ("Charge +", "+", ("charge", 1)), ("Charge -", "-", ("charge", -1)), ("Delete", "Del", ("delete", None)),
+       None, ("Highlight", "", ("highlight", "yellow")), ("Note...", "", ("note", None)), ("Clear Annotations", "", ("clear", None))],
     "bond": [("Single", "1", ("kind", SINGLE)), ("Double", "2", ("kind", DOUBLE)), ("Triple", "3", ("kind", TRIPLE)), ("Wedged", "w", ("kind", WEDGE)),
-             ("Hashed", "h", ("kind", HASH)), None, ("Delete", "Del", ("delete", None))],
+             ("Hashed", "h", ("kind", HASH)), None, ("Delete", "Del", ("delete", None)),
+             None, ("Highlight", "", ("highlight", "yellow")), ("Note...", "", ("note", None)), ("Clear Annotations", "", ("clear", None))],
     "empty": [("Undo", "Ctrl-Z", ("command", "undo")), ("Redo", "Ctrl-Y", ("command", "redo")), None, ("Clean Up", "Ctrl-K", ("command", "tidy")),
-              ("Fit to Window", "F6", ("command", "fit")), ("Select All", "Ctrl-A", ("command", "select_all"))],
+              ("Fit to Window", "F6", ("command", "fit")), ("Select All", "Ctrl-A", ("command", "select_all")), None, *_COPY],
+    # the selection's own: what is copied is the selected atoms and the bonds between them
+    "selection": [*((label.replace("Copy", "Copy Selection as", 1) if "," not in label else "Copy Selection as SMILES, SVG and PNG", key, ("copy", (action[1][0], True)))
+                    for label, key, action in _COPY), None, *_ANNOTATE, None, ("Delete", "Del", ("command", "delete"))],
 }
 
 
@@ -955,9 +1039,17 @@ def draw_structure(s, ui, theme):
     options.useMolBlockWedging = True
     options.fixedFontSize = max(int(per_unit * 0.42), 8)
     mol = _raw_mol(s)
+    notes = _by_index(s["notes"], {a[0]: i for i, a in enumerate(s["atoms"])})
+    annotate.set_options(options, notes)
+    if "cip" in notes["show"]:
+        with rdBase.BlockLogs():
+            valid = Chem.MolFromMolBlock(to_molblock(s["atoms"], s["bonds"]), removeHs=False)
+        if valid is not None:
+            annotate.label_stereo(mol, valid)
+    highlights = annotate.apply(mol, notes)
     with rdBase.BlockLogs():
         Chem.ReapplyMolBlockWedging(mol)
-        drawer.DrawMolecule(mol)
+        drawer.DrawMolecule(mol, **highlights)
     drawer.FinishDrawing()
     return drawer.GetDrawingText()
 
@@ -1032,19 +1124,28 @@ def _menu_items(s, ui=None):
     if menu[0] == "context":
         return CONTEXT_MENUS[menu[1]]
     if menu[1] == 0 and ui and ui.boxed:
-        return [*MENUS[0][1][:2], ("Done", "Ctrl-Q", ("command", "quit")), ("Cancel", "Ctrl-C", ("command", "cancel"))]
+        return [*MENUS[0][1][:-1], ("Done", "Ctrl-Q", ("command", "quit")), ("Cancel", "Ctrl-C", ("command", "cancel"))]
     return MENUS[menu[1]][1]
+
+
+def _item_label(s, item):
+    """A menu item's text, with a tick on a setting that is on."""
+    label, _, (kind, value) = item
+    if kind == "show":
+        return ("✓ " if value in s["notes"]["show"] else "  ") + label
+    return label
 
 
 def _menu_box(s, ui):
     """Where the open menu is: (col, row, width), kept on the screen."""
     items = _menu_items(s, ui)
-    width = max(len(item[0]) + len(item[1]) for item in items if item) + 5
+    width = max(len(_item_label(s, item)) + len(item[1]) for item in items if item) + 5
     if s["menu"][0] == "bar":
         col, row = ui.titles[s["menu"][1]][0], MENU_ROWS
     else:
         col, row = s["menu"][2], s["menu"][3]
-    return max(min(col, ui.cols - width), 0), max(min(row, ui.rows - len(items)), 0), width
+    # above the status lines, which are drawn after it
+    return max(min(col, ui.cols - width), 0), max(min(row, ui.rows - STATUS_ROWS - len(items)), 0), width
 
 
 def _menu_item_at(s, ui, col, row):
@@ -1077,7 +1178,7 @@ def _popups(s, ui, colours):
             if item is None:
                 text, style = "─" * width, f"\x1b[{colours['bar']};{colours['dim']}m"
             else:
-                label, key, _ = item
+                label, key = _item_label(s, item), item[1]
                 text = f" {label}{' ' * (width - len(label) - len(key) - 2)}{key} "
                 style = f"\x1b[{colours['pick']};{colours['on_pick']}m" if index == s["menu_hover"] else bar
             out.append(ui.at(start_row + index, start_col, style + text))
@@ -1098,6 +1199,11 @@ def _popups(s, ui, colours):
 
 def _status(s, ui, smiles, problem, colours):
     dim, err, warn = (f"\x1b[{colours[name]}m" for name in ("dim", "err", "warn"))
+    if s["prompt"] is not None:
+        count = len(s["prompt"]["targets"])
+        shown = _fit_text(s["prompt"]["text"], ui.cols - 8)
+        where = "this atom or bond" if count == 1 else f"these {count} atoms and bonds"
+        return f"\x1b[1mNote:\x1b[0m {shown}\x1b[7m \x1b[0m", f"{dim}{_fit_text(f'Enter puts it on {where}, and an empty note takes it off. Esc cancels.', ui.cols)}\x1b[0m"
     if s["entry"] is not None:
         width = ui.cols - 9
         shown = _fit_text(s["entry"][-width:], width)
@@ -1172,7 +1278,7 @@ def frame(s, ui, theme):
     popups = _popups(s, ui, colours)
     menu_bar = _menu_bar(s, ui, colours)
     status = _status(s, ui, smiles, problem, colours)
-    keys = {"palette": digest(active, s["tip"]), "structure": digest(s["atoms"], s["bonds"], s["view"]),
+    keys = {"palette": digest(active, s["tip"]), "structure": digest(s["atoms"], s["bonds"], s["view"], s["notes"]),
             "overlay": digest(marks, s["view"]), "text": digest(popups, menu_bar, status, ui.title, s["button"])}
     if ui.boxed:
         keys["backing"] = digest()
@@ -1221,8 +1327,9 @@ def frame(s, ui, theme):
 # Input
 
 
-_TOKEN = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[([0-9;]*)([A-Za-z~])|\x1bO([A-Za-z])", re.S)
-_INCOMPLETE = re.compile(r"\x1b(\[[<0-9;]*|O)?$")
+_TOKEN = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[([0-9;]*)([A-Za-z~])|\x1bO([A-Za-z])|\x1b[\]P_^]([^\x07\x1b]*)(?:\x07|\x1b\\)", re.S)
+_INCOMPLETE = re.compile(r"\x1b(\[[<0-9;]*|O|[\]P_^][^\x07\x1b]*\x1b?)?$")
+_COPY_STATUS = re.compile(r"5522;.*type=write:status=([A-Z]+)")
 _ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
 _TILDE_KEYS = {"3": "delete", "15": "f5", "17": "f6", "18": "f7", "19": "f8", "21": "f10"}
 _CONTROL_KEYS = {"\r": "enter", "\n": "enter", "\t": "tab", "\x7f": "backspace", "\b": "backspace", "\x03": "interrupt", "\x11": "quit",
@@ -1249,6 +1356,10 @@ def parse_events(raw):
                     events.append(("key", _TILDE_KEYS[match[5].split(";")[0]]))
             elif match[7] in _ARROWS:
                 events.append(("key", _ARROWS[match[7]]))
+            elif match[8] is not None:  # a terminal's answer, as Kitty gives to a copy, which mustn't turn into keys
+                answer = _COPY_STATUS.match(match[8])
+                if answer:
+                    events.append(("clipboard", answer[1]))
             continue
         if raw[position] == "\x1b":
             rest = raw[position:]
@@ -1461,21 +1572,102 @@ def _zoom(s, factor):
 
 def clipboard_sequence(text):
     """Ask the terminal to put text on the system clipboard (OSC 52). It may refuse without saying so, as tmux does unless set to allow it."""
-    return f"\x1b]52;c;{base64.b64encode(text.encode()).decode('ascii')}\x1b\\"
+    return annotate.clipboard_sequence([("text/plain", text.encode())])
 
 
 def take_clipboard(s):
     """The sequence for what was just copied, once: it's not part of the drawing, so it mustn't go on in the state."""
-    text = s.pop("clipboard", None)
-    return clipboard_sequence(text) if text else ""
+    return s.pop("clipboard", None) or ""
 
 
-def _copy(s):
-    smiles, problem, _ = analyse(s)
-    if smiles:
-        s["clipboard"], s["message"] = smiles, "SMILES sent to the clipboard."
+COPIED = {"smiles": "SMILES sent to the clipboard.",
+          "svg": "SVG sent to the clipboard, as text and as a picture.",
+          "png": "PNG sent to the clipboard, with the SMILES as its text. Terminals without Kitty's clipboard protocol take only the SMILES.",
+          "all": "SMILES, SVG and PNG sent to the clipboard. Terminals without Kitty's clipboard protocol take only the SMILES."}
+
+
+def _copy(s, kind="smiles", selection=False):
+    """Copy the drawing, or the selection, as text and pictures with its annotations."""
+    if selection and not s["selected"]:
+        s["message"] = "Select some atoms first."
+        return
+    found = written(s, selection)
+    if found:
+        smiles, mol, notes = found
+        s["clipboard"] = annotate.clipboard_sequence(annotate.clipboard(smiles, mol, notes, kind))
+        s["message"] = ("The selection: " if selection else "") + COPIED[kind]
+        return
+    if not s["atoms"]:
+        s["message"] = "Nothing to copy: the drawing is empty."
     else:
-        s["message"] = f"Nothing to copy: {problem}" if problem else "Nothing to copy: the drawing is empty."
+        problem = analyse(s)[1] if not selection else "the selection isn't valid chemistry on its own."
+        s["message"] = f"Nothing to copy: {problem}"
+
+
+def _annotation_targets(s, target):
+    """What an annotation goes on: the atom or bond a menu was opened on, or else the selection with the bonds inside it."""
+    if target:
+        return [target]
+    chosen = set(s["selected"])
+    return [["a", ident] for ident in s["selected"]] + [["b", b[0], b[1]] for b in s["bonds"] if b[0] in chosen and b[1] in chosen]
+
+
+def _entry(s, target):
+    """The annotation list entry for an atom or bond, as [*ids, highlight, note], or None."""
+    ids = target[1:2] if target[0] == "a" else sorted(target[1:])
+    found = s["notes"]["atoms" if target[0] == "a" else "bonds"]
+    return next((entry for entry in found if entry[:-2] == ids), None)
+
+
+def _annotate(s, targets, highlight=None, note=None):
+    """Set the highlight or the note, or with both None clear them, on each target. "" takes one off."""
+    _save(s)
+    for target in targets:
+        entry = _entry(s, target)
+        ids = target[1:2] if target[0] == "a" else sorted(target[1:])
+        if entry is None:
+            entry = [*ids, "", ""]
+            s["notes"]["atoms" if target[0] == "a" else "bonds"].append(entry)
+        if highlight is None and note is None:
+            entry[-2:] = ["", ""]
+        if highlight is not None:
+            entry[-2] = highlight
+        if note is not None:
+            entry[-1] = annotate.clean_note(note)
+    for name in ("atoms", "bonds"):
+        s["notes"][name] = sorted(entry for entry in s["notes"][name] if entry[-2] or entry[-1])
+    if len(s["notes"]["atoms"]) + len(s["notes"]["bonds"]) > annotate.MAX_NOTES:
+        _restore(s, "undo", "redo")
+        s["redo"].pop()
+        s["message"] = f"The editor holds at most {annotate.MAX_NOTES} annotations."
+
+
+def _annotation(s, kind, value, target):
+    targets = _annotation_targets(s, target)
+    if not targets:
+        s["message"] = "Select atoms first, or right-click an atom or bond for its own menu."
+    elif kind == "highlight":
+        _annotate(s, targets, highlight=value)
+    elif kind == "clear":
+        _annotate(s, targets)
+    elif kind == "note":
+        known = _entry(s, targets[0]) if len(targets) == 1 else None
+        s["prompt"] = {"targets": targets, "text": known[-1] if known else ""}
+
+
+def _prompt_key(s, name):
+    prompt = s["prompt"]
+    if name == "esc":
+        s["prompt"] = None
+    elif name == "enter":
+        targets = [t for t in prompt["targets"] if _target_points(s, t)]
+        s["prompt"] = None
+        if targets:
+            _annotate(s, targets, note=prompt["text"])
+    elif name == "backspace":
+        prompt["text"] = prompt["text"][:-1]
+    elif len(name) == 1 and len(prompt["text"]) < MAX_PROMPT and name.isprintable():
+        prompt["text"] += name
 
 
 def _command(s, ui, name):
@@ -1484,6 +1676,11 @@ def _command(s, ui, name):
         return True
     if name == "copy":
         _copy(s)
+        return False
+    if name == "clear_notes":
+        if not annotate.is_empty(s["notes"]):
+            _save(s)
+            s["notes"] = annotate.empty()
         return False
     if name == "cancel":
         return CANCEL
@@ -1527,6 +1724,14 @@ def _act(s, ui, action, target):
         _delete_target(s, target)
     elif kind == "label":
         _open_label(s, target, 0.0, 0.0)
+    elif kind == "copy":
+        _copy(s, *value)
+    elif kind in ("highlight", "clear", "note"):
+        _annotation(s, kind, value, target)
+    elif kind == "show":
+        _save(s)
+        shown = s["notes"]["show"]
+        s["notes"]["show"] = [name for name in annotate.SHOWN if (name in shown) != (name == value)]
     return False
 
 
@@ -1540,15 +1745,17 @@ def _delete(s, target):
 def _tidy(s, ui):
     if not s["atoms"]:
         return
-    with rdBase.BlockLogs():
-        mol = Chem.MolFromMolBlock(to_molblock(s["atoms"], s["bonds"]))
+    mol = _mol_with_ids(s["atoms"], s["bonds"])
     if mol is None:
         s["message"] = "Clean Up needs a valid structure."
         return
     _save(s)
     AllChem.Compute2DCoords(mol)
     kept = Chem.Mol(mol)
+    renamed = {atom.GetIntProp("molterm_id"): atom.GetIdx() + 1 for atom in mol.GetAtoms()}  # _from_mol numbers them afresh
+    notes = annotate.renumber(s["notes"], renamed)
     _from_mol(s, kept)
+    s["notes"] = notes
     s["focus"], s["hover"], s["selected"] = None, None, []
     _fit(s, ui)
 
@@ -1878,6 +2085,9 @@ def _key(s, ui, name):
     if s["entry"] is not None:
         _entry_key(s, name)
         return False
+    if s["prompt"] is not None:
+        _prompt_key(s, name)
+        return False
     if s["label"] is not None:
         _label_key(s, name)
         return False
@@ -2042,8 +2252,8 @@ def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
         _label_key(s, "enter")
         s["label"] = None
         return False
-    if s["entry"] is not None:
-        s["entry"] = None
+    if s["entry"] is not None or s["prompt"] is not None:
+        s["entry"], s["prompt"] = None, None
         return False
     pressed = ui.button_at(col, row) if button == 0 else None
     if pressed == "copy":
@@ -2066,6 +2276,9 @@ def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
     target = _target_at(s, ui, x, y)
     if button == 2:
         kind = {"a": "atom", "b": "bond"}[target[0]] if target else "empty"
+        on_selection = all(i in s["selected"] for i in target[1:]) if target else _in_selection(s, x, y)
+        if s["selected"] and on_selection:
+            kind, target = "selection", None
         s["menu"], s["menu_hover"], s["menu_target"] = ["context", kind, int(col), int(row)], None, target
     else:
         _start_press(s, target, col, row, x, y, button)
@@ -2089,6 +2302,8 @@ def handle_events(s, ui, events, pixels):
             ended = _key(s, ui, event[1])
             if ended:
                 return ended
+        elif event[0] == "clipboard":
+            s["message"] = copy_answer(event[1])
         else:
             if not (event[1] & 32) and not event[4]:  # moving the pointer or letting go doesn't dismiss a message
                 s["message"] = ""
@@ -2097,6 +2312,13 @@ def handle_events(s, ui, events, pixels):
                 return ended
     _settle(s)
     return False
+
+
+def copy_answer(status):
+    """What to say when the terminal answers a copy through Kitty's clipboard protocol."""
+    if status == "DONE":
+        return "The terminal took the copy, pictures and all."
+    return f"The terminal refused the pictures ({status}), so only the text was copied."
 
 
 def _settle(s):
@@ -2113,7 +2335,7 @@ def finish(s, ended):
         return CANCELLED, ""
     answer, problem, _ = analyse(s)
     if answer is not None:
-        return QUIT, answer
+        return QUIT, annotated(s)
     if ended == INTERRUPT:
         return FAILED, f"The drawing isn't valid chemistry, so there is no SMILES: {problem}"
     s["message"] = f"Not saved, because the drawing isn't valid: {problem}"

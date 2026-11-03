@@ -11,7 +11,11 @@ const caption = document.getElementById("caption"), progress = document.getEleme
 const pointer = document.getElementById("pointer"), keycap = document.getElementById("keycap");
 const playButton = document.getElementById("play");
 const clipboard = document.getElementById("clipboard"), clipboardText = document.getElementById("clipboard-text");
+const clipboardImage = document.getElementById("clipboard-image");
+const savePng = document.getElementById("clipboard-png"), saveSvg = document.getElementById("clipboard-svg");
 const COPIED = /\x1b\]52;c;([A-Za-z0-9+/=]*)\x1b\\/g;
+// Kitty's clipboard protocol, which carries the pictures: a write, then pieces of each type, then an empty piece to end it
+const KITTY_COPY = /\x1b\]5522;([^\x1b]*)\x1b\\/g;
 
 // a font that gives about the same grid on any screen, since the demo is laid out for it
 const FONT_SIZE = Math.min(Math.max(Math.floor(document.getElementById("frame").clientWidth / (WANTED_COLS * ADVANCE)), 10), 24);
@@ -89,6 +93,43 @@ async function move(target) {
     await sleep(MOVE);
 }
 
+const decodeText = base64 => new TextDecoder().decode(Uint8Array.from(atob(base64), c => c.charCodeAt(0)));
+
+function showText(text) {
+    clipboardText.textContent = text.startsWith("<?xml") ? `SVG, ${(text.length / 1024).toFixed(0)} KB of text` : text;
+}
+
+// What the terminal was asked to copy, shown below the screen, as a page that plays by itself shouldn't overwrite the viewer's clipboard
+function showCopies(output) {
+    for (const [, text] of output.matchAll(COPIED)) {
+        clipboardText.dataset.text = decodeText(text);
+        showText(clipboardText.dataset.text);
+        clipboardImage.hidden = savePng.hidden = saveSvg.hidden = true;
+        clipboard.hidden = false;
+    }
+    let types = null;
+    for (const [, packet] of output.matchAll(KITTY_COPY)) {
+        if (packet === "type=write") {
+            types = {};
+        } else if (packet === "type=wdata" && types) {
+            if (types["text/plain"]) {
+                clipboardText.dataset.text = decodeText(types["text/plain"]);
+                showText(clipboardText.dataset.text);
+            }
+            const png = types["image/png"], svg = types["image/svg+xml"];
+            clipboardImage.hidden = savePng.hidden = !png;
+            saveSvg.hidden = !svg;
+            if (png) clipboardImage.src = savePng.href = `data:image/png;base64,${png}`;
+            if (svg) saveSvg.href = `data:image/svg+xml;base64,${svg}`;
+            types = null;
+        } else if (types && packet.startsWith("type=wdata:mime=")) {
+            const [meta, data] = packet.split(";");
+            const mime = atob(meta.slice("type=wdata:mime=".length));
+            types[mime] = (types[mime] || "") + data;
+        }
+    }
+}
+
 async function show(frame, mine) {
     caption.textContent = frame.caption;
     progress.textContent = `${position + 1} of ${frames.length}`;
@@ -108,12 +149,8 @@ async function show(frame, mine) {
     }
     if (mine !== generation) return;
     if (frame.output) {
-        // a page that plays by itself shouldn't overwrite the viewer's clipboard, so this shows what the terminal was asked to copy instead
-        for (const [, text] of frame.output.matchAll(COPIED)) {
-            clipboardText.textContent = atob(text);
-            clipboard.hidden = false;
-        }
-        write(frame.output.replace(COPIED, ""));
+        showCopies(frame.output);
+        write(frame.output.replace(COPIED, "").replace(KITTY_COPY, ""));
     }
     await sleep(frame.pause);
 }
@@ -158,11 +195,16 @@ async function load() {
 
 // The site is plain HTTP, where browsers offer no navigator.clipboard, so this is the older way, which a click allows.
 document.getElementById("clipboard-copy").onclick = () => {
+    // the whole text, which for an SVG is more than is shown
+    const shown = clipboardText.textContent;
+    clipboardText.textContent = clipboardText.dataset.text || shown;
     const selection = getSelection(), range = document.createRange();
     range.selectNodeContents(clipboardText);
     selection.removeAllRanges();
     selection.addRange(range);
     document.execCommand("copy");
+    selection.removeAllRanges();
+    clipboardText.textContent = shown;
 };
 
 playButton.onclick = () => {

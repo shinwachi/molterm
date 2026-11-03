@@ -6,8 +6,10 @@
 #   molterm -t mono -f 40 'CCO'         black on white, softly diffused, as if seen through fogged glass
 #   molterm demo     a guided medicinal chemistry session, one step at a time, then your own commands
 #   molterm play     the same session, playing by itself
-#   molterm edit     draw a molecule with the mouse and keyboard, in a terminal with Kitty graphics; prints its SMILES on quitting
-#   molterm tui      a list of structures: click one and the editor opens in a box over the list; prints the list on quitting
+#   molterm edit     draw a molecule with the mouse and keyboard, in a terminal with Kitty graphics; prints its SMILES on quitting,
+#                    as CXSMILES if it has annotations (highlights, notes, atom numbers, stereo labels)
+#   molterm tui      a list of structures: click one and the editor opens in a window over the list, right-click one to copy it as
+#                    SMILES, SVG or PNG; prints the list on quitting
 #
 # Asks the terminal what it can do, then uses Kitty graphics, iTerm2 images or Sixel, and falls back to Braille text.
 # Needs only sh, curl, stty and dd. The molecule goes to the server named below, or in $MOLTERM_URL.
@@ -21,7 +23,7 @@ usage() {
 usage: molterm [-m mode] [-t theme] [-f fog] [-c cols] [-r rows] [-v] <SMILES>
        molterm [-m mode] [-t theme] [-c cols] [-v] demo|play
        molterm [-t theme] [-v] [-b row,col,rows,cols] [-T title] edit [SMILES]
-       molterm [-t theme] [-v] tui ['SMILES name' | 'ro:SMILES name' ...]
+       molterm [-t theme] [-v] tui ['SMILES name' | 'ro:SMILES name' ...]   (a SMILES may be CXSMILES with annotations)
   -m  auto, kitty, iterm, sixel, octant, braille or ascii (default auto, or \$MOLTERM_MODE)
   -t  dark, light or mono (all black), to suit the background (default: ask the terminal)
   -f  fog: how far the lines diffuse, from 0 (none) to 100, for one structure in a graphics mode
