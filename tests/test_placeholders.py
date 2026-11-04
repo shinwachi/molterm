@@ -85,10 +85,12 @@ def test_the_editor_through_tmux_draws_its_pictures_as_cells_under_its_menus():
         assert "U=1" in "".join(unwrapped(output)) and "\x1b_G" not in PASSTHROUGH.sub("", output)
         assert len(placeholder_cells(output, structure)) == ui.canvas_cols * ui.canvas_rows
         assert len(placeholder_cells(output, palette)) == ui.per_row * ui.button_cols * ui.palette_rows
-        # nothing changed: nothing printed; a menu opened: the cells again, then the menu over them
+        # nothing changed: nothing printed; a menu opened: the menu over the cells, which stay; closed: the cells again where it was
         assert editor.step(state, "", "", 100, 30, 10, 20)[2] == ""
         _, state, output = editor.step(state, "", "\x1b[<0;2;1M\x1b[<0;2;1m", 100, 30, 10, 20)
-        assert output.index(placeholders.PLACEHOLDER) < output.index("Load")
+        assert "Load" in output and placeholders.PLACEHOLDER not in output
+        _, state, closed = editor.step(state, "", "\x1b", 100, 30, 10, 20)
+        assert len(placeholder_cells(closed, structure)) == ui.canvas_cols * ui.canvas_rows
         # no second picture laid over the drawing: the selection marks go into it
         assert "7005" not in "".join(unwrapped(output)) and "7020" not in "".join(unwrapped(output))
 
@@ -108,3 +110,26 @@ def test_ids_survive_tmux_turning_colours_into_256():
     ids = {placeholders.wire_id(n) for n in range(placeholders.MAX_NUMBER + 1)}
     assert len(ids) == placeholders.MAX_NUMBER + 1
     assert all(i & 255 and (i >> 24) < len(placeholders.DIACRITICS) and not (i >> 8) & 0xFFFF for i in ids)
+
+
+def test_through_tmux_a_changed_picture_is_never_removed_before_its_cells_move():
+    """Removing the old picture would leave tmux's cells, which it redraws later, naming nothing for a moment: a flicker."""
+    with placeholders.using(True):
+        _, state, first = editor.step("", "CCO", "", 100, 30, 10, 20)
+        _, state, hovered = editor.step(state, "", "\x1b[<35;2;5M", 100, 30, 10, 20)  # over the palette: its picture changes
+        _, state, again = editor.step(state, "", "\x1b[<35;2;9M", 100, 30, 10, 20)
+        _, _, listed = board.step("", "", "\x1b[<35;5;5M", 120, 40, 10, 20, True)
+    for output in (hovered, again):
+        assert "U=1" in "".join(unwrapped(output)) and "a=d" not in "".join(unwrapped(output))
+    assert "a=d" not in "".join(unwrapped(listed))
+
+
+def test_through_tmux_only_the_changed_picture_has_its_cells_printed():
+    with placeholders.using(True):
+        _, state, _ = editor.step("", "CCO", "", 100, 30, 10, 20)
+        s = editor.decode(state)
+        structure = editor._IDS["structure"] + s["flips"]["structure"]
+        _, state, hovered = editor.step(state, "", "\x1b[<35;2;5M", 100, 30, 10, 20)  # the palette's hover changes; the drawing doesn't
+        s = editor.decode(state)
+        palette = editor._IDS["palette"] + s["flips"]["palette"]
+    assert placeholder_cells(hovered, palette) and not placeholder_cells(hovered, structure)

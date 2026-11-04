@@ -1,6 +1,7 @@
 """The molecular editor, driven through its one entry point with the raw bytes a terminal would send."""
 import base64
 import json
+import math
 import os
 import random
 import re
@@ -469,6 +470,33 @@ def test_sprouting_from_each_kind_of_carbon(key, start, smiles):
     session = Session(start[0]).hover_atom(start[1]).keys(key)
     assert session.smiles == canonical(smiles)
     assert session.keys("\x1a").smiles == canonical(start[0])  # however many atoms it took, one undo
+
+
+def smallest_angle(state, bonds=(2, 3)):
+    """The smallest angle, in degrees, between two bonds at any atom of a drawing with as many bonds as one of `bonds`."""
+    atoms = {a[0]: a for a in state["atoms"]}
+    around = {}
+    for first, second, _ in state["bonds"]:
+        around.setdefault(first, []).append(second)
+        around.setdefault(second, []).append(first)
+    smallest = 360
+    for ident, neighbours in around.items():
+        here = atoms[ident]
+        directions = sorted(math.degrees(math.atan2(atoms[n][3] - here[3], atoms[n][2] - here[2])) % 360 for n in neighbours)
+        for i in range(len(directions) if len(directions) in bonds else 0):
+            smallest = min(smallest, (directions[(i + 1) % len(directions)] - directions[i]) % 360)
+    return smallest
+
+
+@pytest.mark.parametrize("key", list("1234567890az"))
+@pytest.mark.parametrize("start", [PRIMARY, SECONDARY, TERTIARY, AROMATIC], ids=["primary", "secondary", "tertiary", "aromatic"])
+def test_sprouts_keep_their_angles_open(key, start):
+    # what a sprout adds leaves the atoms at a chemist's angles: 120 degrees in a chain or a ring of six, 108 in a ring of five, and
+    # never folded back onto the bonds that were there, as pressing 2 on the end of a chain once did. A fourth bond on a carbon that
+    # already has three, or a ring or two methyls on one with two, can only go into the room between them, as in ChemDraw
+    session = Session(start[0]).hover_atom(start[1]).keys(key)
+    assert smallest_angle(session.state, bonds=(2, 3)) >= 100
+    assert smallest_angle(session.state, bonds=(4,)) >= 55
 
 
 @pytest.mark.parametrize("key, kind", [("4", editor.WEDGE), ("5", editor.HASH)])

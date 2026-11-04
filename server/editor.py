@@ -539,6 +539,13 @@ def load_smiles(s, text):
 # Where new atoms go
 
 
+def _straight_on(s, ident):
+    """The direction along an end atom's only bond, from its neighbour through it: where a group or ring that takes the atom's place
+    goes, so that the bond meets it at even angles rather than folded back."""
+    atom, neighbour = _atom(s, ident), _atom(s, _neighbours(s, ident)[0])
+    return math.atan2(atom[3] - neighbour[3], atom[2] - neighbour[2])
+
+
 def _direction(s, ident, kind=SINGLE, cyclic=False):
     """The angle for a new bond from an atom: into the largest gap, and straight on beside a triple bond.
 
@@ -664,6 +671,8 @@ def _ring_on_target(s, target, size, x, y, sprout=False):
                 _set_bond(s, target[1], first, SINGLE)
                 made = _add_ring(s, size, first_x + radius * math.cos(angle), first_y + radius * math.sin(angle), angle + math.pi, (first,))
         else:
+            if len(_neighbours(s, target[1])) == 1:  # the ring takes in the end of a chain: centred straight on, the chain between its sides
+                angle = _straight_on(s, target[1])
             made = _add_ring(s, size, atom[2] + radius * math.cos(angle), atom[3] + radius * math.sin(angle), angle + math.pi, (target[1],))
     else:
         made = _add_ring(s, size, x, y, math.radians(90))
@@ -730,6 +739,10 @@ def _attach_group(s, atom, smiles, x, y):
         return
     _save(s)
     outward = _direction(s, atom[0]) if atom else 0.0
+    if atom and len(_neighbours(s, atom[0])) == 1:
+        # the group's first atom takes this atom's place, so it leaves along the bond it replaces the end of, not along a new bond
+        # from here, which would turn the group 60 degrees and fold one of its branches back onto the chain
+        outward = _straight_on(s, atom[0])
     parent = None
     if atom and len(_neighbours(s, atom[0])) >= 2:
         parent, atom = atom, None
@@ -1223,18 +1236,21 @@ def _place(layer, s, ui, png, cols, rows, row, col):
     old = _IDS[layer] + s["flips"].get(layer, 0)
     s["flips"][layer] = 1 - s["flips"].get(layer, 0)
     new = _IDS[layer] + s["flips"][layer]
-    if placeholders.active.get():  # sent only: its cells are printed with the text, see _grids
-        return placeholders.transmit(png, new, cols, rows) + placeholders.delete(old)
+    if placeholders.active.get():
+        # sent only: its cells are printed with the text, see _grids. The old picture isn't removed: tmux shows the new cells only when
+        # it next redraws, and until then they'd name nothing and flicker blank. The next change overwrites it under the same id.
+        return placeholders.transmit(png, new, cols, rows)
     sequence = graphics.kitty_sequence(png, cols, rows=rows, image_id=new, move_cursor=False, z=_Z[layer]).rstrip("\n")
     return ui.at(row, col) + sequence + f"\x1b_Ga=d,d=I,i={old},q=2\x1b\\"
 
 
-def _grids(s, ui):
-    """Through tmux, the cells that show the palette and the drawing: printed before the menus, which then cover them."""
+def _grids(s, ui, only=None):
+    """Through tmux, the cells that show the palette and the drawing, or `only` those layers: printed before the menus, which then
+    cover them."""
     out = []
     for layer, cols, rows, left in (("palette", ui.per_row * ui.button_cols, ui.palette_rows, 0),
                                     ("structure", ui.canvas_cols, ui.canvas_rows, ui.left)):
-        if layer in s["flips"]:
+        if layer in s["flips"] and (only is None or layer in only):
             image = _IDS[layer] + s["flips"][layer]
             out.append(placeholders.cells(image, cols, rows, lambda r, c, left=left: ui.at(ui.top + r, left + c)))
     return "".join(out)
@@ -1310,7 +1326,9 @@ def frame(s, ui, theme):
     if not resized and all(s["shown"].get(name) == keys[name] for name in keys):
         return ""
     out = ["\x1b[?2026h"]  # terminals that know this show the whole frame at once
-    if tmux and any(s["shown"].get(name) != keys[name] for name in keys if name != "text"):
+    # through tmux, only the pictures that changed have their cells printed again, so that tmux has less to redraw
+    regrid = [name for name in ("palette", "structure") if s["shown"].get(name) != keys[name]]
+    if tmux and regrid:
         s["shown"]["text"] = None  # the grids are printed with the text, and the menus over them
     if resized:
         if ui.boxed:  # what is beside the box is the host's
@@ -1336,12 +1354,13 @@ def frame(s, ui, theme):
         else:
             out.append(f"\x1b_Ga=d,d=I,i={_IDS['overlay'] + s['flips'].get('overlay', 0)},q=2\x1b\\")
     if s["shown"].get("text") != keys["text"]:
-        if s["cover"]:  # plain cells again, so that the images show through where a menu was
+        covered = s["cover"]
+        if covered:  # plain cells again, so that the images show through where a menu was
             for row in range(ui.top, ui.top + ui.canvas_rows):
                 out.append(ui.blank(row))
         s["cover"] = bool(popups)
-        if tmux:
-            out.append(_grids(s, ui))
+        if tmux:  # everything after a resize or a menu, which cleared cells; otherwise only what changed
+            out.append(_grids(s, ui, None if covered or resized else regrid))
         if ui.boxed:
             out.append(_border(s, ui, colours))
         out.append(menu_bar)
@@ -1915,8 +1934,10 @@ def _sprout_dimethyl(s, ident, kind):
     if kind in ("tertiary", "aromatic"):  # no room for two: the table has an isopropyl group here, and doesn't list aromatic carbons
         _sprout_group(s, _atom(s, ident), "*C(C)C")
         return
-    middle = _direction(s, ident)
-    spread = math.radians(35 if kind == "secondary" else 60)
+    # either side of straight on at the end of a chain, so that the three bonds are 120 degrees apart; at a carbon with two bonds the
+    # two new ones share the gap between them, 80 degrees from each other and from those
+    middle = _straight_on(s, ident) if kind == "primary" else _direction(s, ident)
+    spread = math.radians(40 if kind == "secondary" else 60)
     if _grow(s, ident, "C", SINGLE, angle=middle - spread):
         _grow(s, ident, "C", SINGLE, angle=middle + spread, save=False)
     _let_go(s)

@@ -126,6 +126,11 @@ A placeholder names its picture by its colour, and tmux turns 24-bit colours int
 them, as with Ghostty's terminfo: an id sent that way pointed at the wrong picture, and nothing showed. So the id's low byte is a
 256-colour index, which tmux passes on as it is, and its high byte a third combining mark on each cell, as Kitty's protocol allows.
 
+tmux passes picture commands on at once but redraws the cells that show them a little later, so a picture that changes is never
+removed through tmux: each layer of the editor alternates between two ids, and a new picture goes under the one its cells don't name
+yet, replacing what was there. Removing the old one would leave the cells naming nothing until tmux redrew them, a flicker. Only the
+cells of the picture that changed are printed again (all of them after a resize or a closed menu), so that tmux has less to redraw.
+
 If pictures still don't show in tmux, `molterm -v` says what the client found: the mode, tmux's version, the terminal tmux says is
 outside it, `allow-passthrough`, and whether pictures go as placeholders. They need tmux 3.3 or later, the client from a server with
 this support (the dev server's `/molterm`; v0.1.1's has none), and Kitty, or Ghostty 1.0 or later, outside. In the editor a cell can show
@@ -190,7 +195,11 @@ place for bond properties: other programs keep them as atom properties without k
   for what is there: on an atom `3` sprouts a phenyl and `n` makes nitrogen, on a bond `3` makes it triple and `a` fuses a benzene, and
   over nothing keys only choose tools, such as `u` for cyclohexane. After a sprout the hotspot moves to the new atom, so `1` `1` `o`
   builds a chain. After a ring or group it clears until the pointer moves, so a held key can't scatter copies. Arrows move the hotspot
-  instead, atom to bond to atom, so a mouse is optional.
+  instead, atom to bond to atom, so a mouse is optional. What a sprout adds meets the chain at even angles: a group or ring that takes
+  in the end of a chain goes on straight along its last bond, so `2` on the end makes the acetyl's three bonds 120 degrees apart
+  (it used to be turned 60 degrees, folding the methyl or the oxygen back onto the chain). Only a fourth bond on a carbon that has
+  three, or a ring or two methyls on one with two, has to fit into the room left, at 60 degrees, as in ChemDraw.
+  `tests/test_editor.py` checks the angles of every sprouting key on each kind of carbon.
 - **Text tool, or Enter on an atom:** a box opens at the atom for an element or a group such as OMe, CF3, CO2H, NO2, Ph, Boc or Ts.
   Groups become real atoms. A group replaces an atom at the end of a chain, and is added as a substituent to a ring atom.
 - **Selection:** drag across empty space to select, drag to move, Delete to remove, and arrows to nudge.
