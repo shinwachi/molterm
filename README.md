@@ -128,8 +128,14 @@ them, as with Ghostty's terminfo: an id sent that way pointed at the wrong pictu
 
 tmux passes picture commands on at once but redraws the cells that show them a little later, so a picture that changes is never
 removed through tmux: each layer of the editor alternates between two ids, and a new picture goes under the one its cells don't name
-yet, replacing what was there. Removing the old one would leave the cells naming nothing until tmux redrew them, a flicker. Only the
+yet. Removing the old one would leave the cells naming nothing until tmux redrew them, a flicker. Only the
 cells of the picture that changed are printed again (all of them after a resize or a closed menu), so that tmux has less to redraw.
+
+The id a new picture goes under is cleared just before it is sent (`a=d,d=I`). Ghostty 1.3, sent a picture under an id it already
+has, replaces the picture but keeps that id's placements and adds another; its placeholders take their size from whichever it finds
+first. So a placement left from an earlier frame or run of another size, such as the 19-button palette before the chain and R tools,
+squeezed the picture into the wrong number of cells and centred it. In a tmux pane of Ghostty the palette then shrank and grew as
+the two ids alternated on hover, and the drawing sat off the cells the mouse is read in, so a dragged bond ended away from the pointer.
 
 If pictures still don't show in tmux, `molterm -v` says what the client found: the mode, tmux's version, the terminal tmux says is
 outside it, `allow-passthrough`, and whether pictures go as placeholders. They need tmux 3.3 or later, the client from a server with
@@ -213,12 +219,6 @@ place for bond properties: other programs keep them as atom properties without k
   box, so a drawing can be invalid on its way to being finished. Ctrl-Q then stays in the editor and says why. Ctrl-C leaves anyway, printing
   the problem and exiting with 1.
 
-The client only passes raw input to the server, and the server keeps no sessions: the drawing travels with each request and is checked
-when it comes back. So every action needs a round trip. The palette, molecule and marks are separate images, and only those that
-changed are sent: hovering costs 1 to 9 KB, and a change to the molecule about 60 KB. It needs the same tools as the rest of the client,
-plus `od`.
-
-### Editing inside a text interface
 ### Markush structures, queries and Ketcher's other tools
 
 The editor also has the small-molecule tools of EPAM's Ketcher that it lacked, macromolecules aside, with Markush structures first.
@@ -257,6 +257,12 @@ and written for attachment points outside a definition. An atom list or a query 
 written as CXSMARTS, such as `[#6]-,=[#6]-[#6,#7,#8]`, which the editor and the renderers read back. The renderers draw a Markush
 structure's definitions beside its core, and the list (`molterm tui`) keeps the text as it came.
 
+The client only passes raw input to the server, and the server keeps no sessions: the drawing travels with each request and is checked
+when it comes back. So every action needs a round trip. The palette, molecule and marks are separate images, and only those that
+changed are sent: hovering costs 1 to 9 KB, and a change to the molecule about 60 KB. It needs the same tools as the rest of the client,
+plus `od`.
+
+### Editing inside a text interface
 
 `molterm tui` is a text interface with structures in it: a grid of drawings, where hovering marks a tile and clicking an editable one opens
 the editor in a window over the rest. Done (or Ctrl-Q) puts the edit back in the list and redraws that tile, and Cancel (or Ctrl-C) leaves it as it was.
@@ -380,7 +386,9 @@ xterm with Sixel on dark and light backgrounds, xterm without Sixel (Braille), t
 before placeholders). Placeholders were checked with a real tmux 3.5a: it passed the wrapped commands on unwrapped and drew the
 placeholder cells, colour and all, and `molterm edit` was run inside a real tmux 3.5a under a terminal claiming to be Ghostty: both
 pictures passed through and every placeholder named one of them; `tests/test_placeholders.py` checks the sequences, cells and order (pictures before menus) for
-drawings, the editor and the list. They haven't been seen drawn in a real Ghostty or Kitty under tmux.
+drawings, the editor and the list. In real Ghostty 1.3.1 under tmux 3.6, screenshots of the editor showed the palette drawn at 91%
+of its cells, then at full size while hovering, which the clearing of ids described above fixes; the fix itself hasn't been seen
+there yet.
 `tests/test_client.py` runs the client under a fake terminal for the rest.
 
 `molterm demo` was run the same way, against the dev server: in Kitty through `curl | sh`, with Enter, typed commands, `clear` and
@@ -402,6 +410,13 @@ A drag step takes about 35 ms on the server, as the editor is drawn again at eac
 `/kitty` was checked in Chrome: a full automated run at normal speed, typing with Backspace, Tab, Up and a mistake, the scrollback,
 no console errors, and no page overflow at 320, 375 and 640 px.
 
+The Markush and Ketcher features are checked by `tests/test_markush.py`: each kind of text read into the editor and written back as it came,
+the label box, the keys and the R-group tool, each menu and prompt, a variable attachment found where it's drawn, a definition made from a
+selection and its logic undone, the chain tool's length, the Structure commands, a flip keeping a stereocentre, Clean Up keeping the
+Markush parts, the renderers and the list, and tampered properties refused. The drawing of R-groups, attachment points, a repeating unit,
+a stereo group, a generic atom and a bridging definition was checked by eye, and in the live VisiData demo in Chrome the new palette icons,
+`r`, the bond menu, the atom's submenu, an atom list typed into the prompt and a dragged chain were used.
+
 Annotations and copying are checked by `tests/test_annotate.py`: CXSMILES written and read back by RDKit with awkward note text, notes
 following atoms through undo, delete, Clean Up and RDKit's reordering on save, the menus of atoms, bonds and selections, copying part of a
 drawing, the list's menu from the mouse and the keys, and that what a copy sends decodes to the SMILES, a PNG and an SVG.
@@ -410,13 +425,6 @@ Their drawings were checked by eye: highlights, notes, atom numbers and an (S) l
 `/showcase` was watched in Chrome: a full run with no console errors, the side-by-side screens, the window opening over the list, the
 palette and hotspot in it, Done, the redrawn tile and the printed list. The edit's result, `CCOc1ccc(NC(C)=O)cc1F`, is checked by tests.
 Its fog frames, all three ways of copying and the pasted drawing were watched there too, with the page's Copy button checked for selecting the right text.
-The Markush and Ketcher features are checked by `tests/test_markush.py`: each kind of text read into the editor and written back as it came,
-the label box, the keys and the R-group tool, each menu and prompt, a variable attachment found where it's drawn, a definition made from a
-selection and its logic undone, the chain tool's length, the Structure commands, a flip keeping a stereocentre, Clean Up keeping the
-Markush parts, the renderers and the list, and tampered properties refused. The drawing of R-groups, attachment points, a repeating unit,
-a stereo group, a generic atom and a bridging definition was checked by eye, and in the live VisiData demo in Chrome the new palette icons,
-`r`, the bond menu, the atom's submenu, an atom list typed into the prompt and a dragged chain were used.
-
 The window being resized, moved, minimized into the top bar with every thumbnail of the list still showing, and brought back, was watched there as well,
 and so were the copy in all three formats with its PNG preview, the highlight and note in the editor and on the tile, and the printed CXSMILES.
 The themes frame, and the shell scene with its pictures kept in the scrollback while scrolling up to the first command and down to the prompt,
@@ -427,6 +435,13 @@ Actual clipboard writes haven't been tested: not OSC 52 or Kitty's OSC 5522 in a
 
 Open issues:
 
+- Markush: a definition's own annotations, generic atoms and lists are written as plain SMILES inside `RG:`, so they don't survive; Copy
+  Molfile leaves the definitions out (V3000 has RGROUP blocks for them); reactions, Ketcher's S-groups other than repeating units (data,
+  multiple, superatom) and its templates library aren't there. ChemAxon's syntax for two attachment points in a definition isn't
+  documented, so the atom maps are this editor's own. Markush drawing hasn't been seen in a real Kitty or Ghostty, only in restty.
+- The atom's and the selection's right-click menus are 19 lines each, so a box needs at least 23 rows, counting its border, to show them whole; the Markush
+  items are in submenus to keep them that short.
+
 - The named themes haven't been seen in a real terminal with that theme, only on their own backgrounds in `/showcase` and by tests. A fitted
   theme keeps the base theme's element colours, which may sit poorly on an unusual background (for example dark red on a deep red one).
 - `/showcase` scrolls restty's view by sending its canvas wheel events, which relies on restty treating them like a real wheel.
@@ -435,13 +450,6 @@ Open issues:
   resizing the window needs a reload. The hotspot stays light blue in its black-on-white theme, as it's what shows where the keys act.
 - restty paints cell backgrounds under the box's backing image, so grey bars and highlights inside the editor's box don't show there, only their text.
   Menus over a drawing show the drawing through them there, as they do over the list's tiles.
-- Markush: a definition's own annotations, generic atoms and lists are written as plain SMILES inside `RG:`, so they don't survive; Copy
-  Molfile leaves the definitions out (V3000 has RGROUP blocks for them); reactions, Ketcher's S-groups other than repeating units (data,
-  multiple, superatom) and its templates library aren't there. ChemAxon's syntax for two attachment points in a definition isn't
-  documented, so the atom maps are this editor's own. Markush drawing hasn't been seen in a real Kitty or Ghostty, only in restty.
-- The atom's and the selection's right-click menus are 19 lines each, so a box needs at least 23 rows, counting its border, to show them whole; the Markush
-  items are in submenus to keep them that short.
-
   The black-on-white theme's highlight is underlined for that reason. Real terminals aren't expected to do this.
 - restty keeps about 10 MB of decoded images and drops the oldest, so `/showcase` asks for images at 7 pixels per column, and the editor's are a
   little soft there. In a real terminal they're sharp.

@@ -40,8 +40,15 @@ def test_passthrough_doubles_every_escape():
 
 def test_a_picture_is_sent_as_a_virtual_placement_in_pieces():
     sent = unwrapped(placeholders.transmit(b"x" * 10000, 7001, 20, 6))
-    assert sent[0].startswith(f"\x1b_Ga=T,f=100,U=1,i={placeholders.wire_id(7001)},c=20,r=6,q=2,m=1;") and sent[-1].startswith("\x1b_Gq=2,m=0;")
-    assert len(sent) == 4
+    assert sent[1].startswith(f"\x1b_Ga=T,f=100,U=1,i={placeholders.wire_id(7001)},c=20,r=6,q=2,m=1;") and sent[-1].startswith("\x1b_Gq=2,m=0;")
+    assert len(sent) == 5
+
+
+def test_a_picture_sent_again_under_its_id_replaces_its_old_placement():
+    # Ghostty keeps an id's placements when its picture is replaced, and sizes the placeholders by the first it finds: an old one of
+    # another size would squeeze the picture off its cells. So the id goes, placements and all, before the picture comes again.
+    sent = unwrapped(placeholders.transmit(b"x", 7010, 10, 22))
+    assert sent[0] == f"\x1b_Ga=d,d=I,i={placeholders.wire_id(7010)},q=2\x1b" and sent[1].startswith("\x1b_Ga=T,")
 
 
 def test_cells_carry_their_row_and_column_and_skip_what_is_hidden():
@@ -60,7 +67,7 @@ def test_a_drawing_through_tmux_is_lines_of_placeholders():
     mol = molecule.parse("c1ccccc1O", "smiles").mol
     with placeholders.using(True):
         text = graphics.render(mol)
-    commands = unwrapped(text)
+    commands = unwrapped(text)[1:]  # after the delete of whatever had the id
     wire = int(re.search(r"i=(\d+)", commands[0])[1])
     image = next(n for n in range(placeholders.MAX_NUMBER + 1) if placeholders.wire_id(n) == wire)
     cols, rows = int(re.search(r"c=(\d+)", commands[0])[1]), int(re.search(r"r=(\d+)", commands[0])[1])
@@ -117,11 +124,20 @@ def test_through_tmux_a_changed_picture_is_never_removed_before_its_cells_move()
     with placeholders.using(True):
         _, state, first = editor.step("", "CCO", "", 100, 30, 10, 20)
         _, state, hovered = editor.step(state, "", "\x1b[<35;2;5M", 100, 30, 10, 20)  # over the palette: its picture changes
+        s = editor.decode(state)
+        shown = placeholders.wire_id(editor._IDS["palette"] + s["flips"]["palette"])  # what the screen shows when `again` arrives
         _, state, again = editor.step(state, "", "\x1b[<35;2;9M", 100, 30, 10, 20)
         _, _, listed = board.step("", "", "\x1b[<35;5;5M", 120, 40, 10, 20, True)
+    def removed_while_shown(output):
+        """Ids deleted other than just before a new picture under the same id: those whose cells may still be on the screen."""
+        commands = unwrapped(output)
+        return [c for i, c in enumerate(commands) if c.startswith("\x1b_Ga=d")
+                and not (i + 1 < len(commands) and commands[i + 1].startswith("\x1b_Ga=T") and re.search(r"i=\d+", c)[0] in commands[i + 1])]
     for output in (hovered, again):
-        assert "U=1" in "".join(unwrapped(output)) and "a=d" not in "".join(unwrapped(output))
-    assert "a=d" not in "".join(unwrapped(listed))
+        assert "U=1" in "".join(unwrapped(output)) and not removed_while_shown(output)
+    # the picture on the screen is left alone: the next one goes under the other id, which is the only one cleared
+    assert f"a=d,d=I,i={shown}," not in "".join(unwrapped(again)) and f"a=T,f=100,U=1,i={shown}," not in "".join(unwrapped(again))
+    assert not removed_while_shown(listed)
 
 
 def test_through_tmux_only_the_changed_picture_has_its_cells_printed():

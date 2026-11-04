@@ -288,7 +288,7 @@ def _list_frame(b, grid, theme, ui_cells):
             row, col = grid.tile(index, b["top"])
             png = _thumbnail(b["items"][index][1], json.dumps(b["items"][index][4], sort_keys=True), picture_cols, picture_rows, cell_width, cell_height, theme)
             if placeholders.active.get():  # its cells are printed with the text, below
-                # sent again under its id, which replaces it, rather than removed first, which would show blank until it came
+                # sent again under its id; transmit clears the id first, as Ghostty would otherwise size it by an older placement
                 out.append(placeholders.transmit(png, _FIRST_ID + index, picture_cols, picture_rows))
             else:
                 # below the editor's backing, so that the box hides it without its having to be taken away and sent again

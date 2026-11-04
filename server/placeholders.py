@@ -56,11 +56,16 @@ def wrap(sequence):
 
 def transmit(png, image_id, cols, rows):
     """Send a PNG as a virtual placement of cols by rows cells, to be shown wherever its placeholders are printed. Ids here, as in
-    delete, cells and lines, are our numbers, which wire_id turns into the terminal's."""
+    delete, cells and lines, are our numbers, which wire_id turns into the terminal's.
+
+    Whatever had the id before is deleted first. Ghostty, sent a picture under an id it has, replaces the picture but keeps that id's
+    placements, and adds the new one beside them; its placeholders then take their size in cells from whichever it finds first. An
+    old one, from an earlier frame or run with another size, would squeeze the picture into the wrong number of cells, off the ones
+    that show it, and away from where the mouse lands."""
+    out = [delete(image_id)]
     image_id = wire_id(image_id)
     payload = base64.b64encode(png).decode("ascii")
     chunks = [payload[i:i + CHUNK] for i in range(0, len(payload), CHUNK)] or [""]
-    out = []
     for index, chunk in enumerate(chunks):
         keys = f"a=T,f=100,U=1,i={image_id},c={cols},r={rows},q=2," if index == 0 else "q=2,"
         out.append(wrap(f"\x1b_G{keys}m={int(index < len(chunks) - 1)};{chunk}\x1b\\"))
