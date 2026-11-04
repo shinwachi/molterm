@@ -136,6 +136,8 @@ has, replaces the picture but keeps that id's placements and adds another; its p
 first. So a placement left from an earlier frame or run of another size, such as the 19-button palette before the chain and R tools,
 squeezed the picture into the wrong number of cells and centred it. In a tmux pane of Ghostty the palette then shrank and grew as
 the two ids alternated on hover, and the drawing sat off the cells the mouse is read in, so a dragged bond ended away from the pointer.
+Outside tmux the editor clears the new id before placing too, in case a run that ended without tidying up left a picture under it;
+the list's tiles already did, and VisiData's pictures use their own placement ids, which replace rather than add.
 
 If pictures still don't show in tmux, `molterm -v` says what the client found: the mode, tmux's version, the terminal tmux says is
 outside it, `allow-passthrough`, and whether pictures go as placeholders. They need tmux 3.3 or later, the client from a server with

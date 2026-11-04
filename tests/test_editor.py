@@ -1130,9 +1130,11 @@ def test_a_new_image_goes_up_before_the_old_comes_down():
     session = Session().click(60, 20)
     output = session.click_atom(1).output
     placed = [int(i) for i in re.findall(r"a=T[^;]*?i=(\d+)", output) if int(i) in (7001, 7002)]
-    deleted = [int(i) for i in re.findall(r"a=d,d=I,i=(\d+)", output) if int(i) in (7001, 7002)]
-    assert placed and deleted and placed[0] != deleted[0]
-    assert output.index(f"i={placed[0]},") < output.index(f"a=d,d=I,i={deleted[0]}")
+    shown = ({7001, 7002} - {placed[0]}).pop() if placed else None  # what the screen showed: the other id
+    assert placed and f"a=d,d=I,i={shown}," in output
+    assert output.index(f"a=T,f=100,c=") < output.index(f"a=d,d=I,i={shown},")  # the shown picture goes only after the new is up
+    # the new id is cleared just before, so no older placement of it can stay on the screen beside the new one
+    assert output.index(f"a=d,d=I,i={placed[0]},") < output.index(f"i={placed[0]},", output.index(f"a=d,d=I,i={placed[0]},") + 1)
 
 
 def test_frames_are_synchronised():

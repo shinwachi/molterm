@@ -1988,7 +1988,9 @@ def _place(layer, s, ui, png, cols, rows, row, col):
         # it next redraws, and until then they'd name nothing and flicker blank. The next change overwrites it under the same id.
         return placeholders.transmit(png, new, cols, rows)
     sequence = graphics.kitty_sequence(png, cols, rows=rows, image_id=new, move_cursor=False, z=_Z[layer]).rstrip("\n")
-    return ui.at(row, col) + sequence + f"\x1b_Ga=d,d=I,i={old},q=2\x1b\\"
+    # the new id is normally free, removed with the frame before; cleared anyway, as a terminal sent a picture under an id it still
+    # has (left by a run that ended without tidying up) may keep its old placement on the screen beside the new one
+    return f"\x1b_Ga=d,d=I,i={new},q=2\x1b\\" + ui.at(row, col) + sequence + f"\x1b_Ga=d,d=I,i={old},q=2\x1b\\"
 
 
 def _grids(s, ui, only=None):
