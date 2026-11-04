@@ -21,7 +21,7 @@ ALLOWED_PREFIXES = (
     "aggregate-", "dup-", "delete-", "copy-", "cut-", "expand-", "contract-", "rename-", "setcol-precision-", "error",
 )
 ALLOWED = {
-    "addcol-molecule", "addcol-molprops", "open-molecule", "toggle-molterm-mode",
+    "addcol-molecule", "addcol-molprops", "open-molecule", "toggle-molterm-mode", "edit-molecule",
     "addcol-new", "addcol-incr", "addcol-incr-step", "addcol-split", "addcol-capture", "addcol-subst", "addcol-regex-subst",
     "addcol-aggregate", "addcol-rank-sheet", "addcol-histogram",
     "setcol-input", "setcol-fill", "setcol-incr", "setcol-subst", "setcol-subst-all", "setcol-regex-subst", "setcol-regex-subst-all",

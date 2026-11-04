@@ -398,3 +398,115 @@ def test_the_chart_and_its_sheet_follow_each_others_cursor(library):
         for vs in (graph,):
             if vs in vd.sheets:
                 vd.sheets.remove(vs)
+
+
+# editing a molecule in molterm's editor, in a box over the sheet
+
+
+class FakeTerminal:
+    """Answers the cell size query, then hands over `inputs` one read at a time, and keeps what was written."""
+
+    def __init__(self, inputs, size=(40, 120), answers=b"\x1b[6;20;10t\x1b[?1016;2$y\x1b[?62;22c"):
+        self.inputs, self.sizes, self.written = [answers, *inputs], [size], b""
+
+    def size(self):
+        return self.sizes[0] if len(self.sizes) == 1 else self.sizes.pop(0)
+
+    def read(self, timeout):
+        return self.inputs.pop(0) if self.inputs else b""
+
+    def write(self, data):
+        self.written += data
+
+    def close(self):
+        pass
+
+
+class FakeEditor:
+    """Finishes on Ctrl-Q with `result`, cancels on Ctrl-C, and otherwise draws."""
+
+    def __init__(self, result="CC(=O)O"):
+        self.calls, self.result = [], result
+
+    def __call__(self, fields):
+        self.calls.append(dict(fields))
+        events = bytes.fromhex(fields["events"])
+        if b"\x11" in events:
+            return 1, "s", self.result
+        if b"\x03" in events:
+            return 3, "s", ""
+        return 0, f"s{len(self.calls)}", "<drawn>"
+
+
+def test_the_editor_runs_in_a_box_until_done(server):
+    terminal, editor = FakeTerminal([b"", b"x", b"\x11"]), FakeEditor()
+    assert plugin.edit_in_box("CCO", "ethanol", terminal, step=editor) == "CC(=O)O"
+    first = editor.calls[0]
+    assert first["smiles"] == "CCO" and first["title"] == "ethanol" and (first["cell_width"], first["cell_height"], first["pixels"]) == (10, 20, 1)
+    assert first["box"] == "3,5,34,110" and (first["rows"], first["cols"]) == (40, 120)
+    # the state goes back each time, and nothing is sent while nothing happens
+    assert [c.get("state") for c in editor.calls] == [None, "s1", "s2"] and "smiles" not in editor.calls[1]
+    assert [bytes.fromhex(c["events"]) for c in editor.calls] == [b"", b"x", b"\x11"]
+    assert terminal.written.count(b"<drawn>") == 2
+    # afterwards the editor's pictures go, and the mouse reports it asked for stop
+    assert b"\x1b_Ga=d,d=I,i=7001,q=2\x1b\\" in terminal.written and terminal.written.endswith(b"\x1b[?1016l\x1b[?1003l")
+
+
+def test_the_editor_cancelled_gives_nothing_and_resizes_with_the_window(server):
+    terminal, editor = FakeTerminal([b"", b"\x03"]), FakeEditor()
+    terminal.sizes = [(40, 120), (30, 80), (30, 80)]
+    assert plugin.edit_in_box("CCO", "x", terminal, step=editor) is None
+    assert [c["box"] for c in editor.calls] == ["3,5,34,110", "1,2,28,76", "1,2,28,76"]
+
+
+def test_through_tmux_the_editor_asks_for_placeholders_and_removes_its_pictures_by_their_ids_there(server):
+    terminal, editor = FakeTerminal([b"\x11"], answers=b"\x1b[?62c"), FakeEditor()
+    plugin.edit_in_box("CCO", "x", terminal, "placeholders", step=editor)
+    assert editor.calls[0]["placeholders"] == 1 and "cell_width" not in editor.calls[0] and "pixels" not in editor.calls[0]
+    wire = (7001 // 255) << 24 | (7001 % 255 + 1)
+    assert f"\x1bPtmux;\x1b\x1b_Ga=d,d=I,i={wire},q=2\x1b\x1b\\\x1b\\".encode() in terminal.written
+
+
+def test_a_screen_too_small_for_the_editor_says_so():
+    with pytest.raises(plugin.MoltermError, match="too small"):
+        plugin.editor_box(12, 120)
+    assert plugin.editor_box(14, 42) == (1, 2, 12, 38)
+
+
+def test_the_editor_needs_kitty_graphics(monkeypatch):
+    for name in ("TMUX", "STY"):
+        monkeypatch.delenv(name, raising=False)
+    vd.options.molterm_mode = "text"
+    with pytest.raises(plugin.MoltermError, match="needs Kitty graphics"):
+        plugin.editor_graphics()
+    vd.options.molterm_mode = "kitty"
+    assert plugin.editor_graphics() == "direct"
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+    answers = {"display": "xterm-ghostty ghostty 1.2", "show": "on"}
+    monkeypatch.setattr(plugin, "_run", lambda command: answers[command[1]])
+    assert plugin.editor_graphics() == "placeholders"
+    answers["show"] = "off"
+    with pytest.raises(plugin.MoltermError, match="allow-passthrough on"):
+        plugin.editor_graphics()
+    answers["display"] = "xterm-256color"
+    with pytest.raises(plugin.MoltermError, match="not Kitty or Ghostty"):
+        plugin.editor_graphics()
+
+
+def test_done_puts_the_new_smiles_in_the_row_from_any_column_and_undo_takes_it_back(server, sheet, monkeypatch):
+    sheet.addcolMolecule()
+    sheet.cursorVisibleColIndex = 0  # the name column
+    monkeypatch.setattr(plugin, "editor_graphics", lambda: "direct")
+    monkeypatch.setattr(plugin, "Terminal", lambda: FakeTerminal([b"\x11"]))
+    asked = []
+    monkeypatch.setattr(plugin, "edit_in_box", lambda smiles, title, terminal, graphics: asked.append((smiles, title)) or "CC(=O)O")
+    monkeypatch.setattr(plugin.curses, "mousemask", lambda mask: (mask, 0), raising=False)
+    monkeypatch.setattr(vd, "redraw", lambda: None)
+    assert sheet.editMolecule() == "CC(=O)O"
+    vd.sync()
+    assert asked == [("CCO", "ethanol")] and sheet.columns[1].getValue(sheet.rows[0]) == "CC(=O)O"
+    # cancelled, or unchanged: the cell stays as it is
+    monkeypatch.setattr(plugin, "edit_in_box", lambda *args: None)
+    assert sheet.editMolecule() is None
+    vd.sync()
+    assert sheet.columns[1].getValue(sheet.rows[0]) == "CC(=O)O"

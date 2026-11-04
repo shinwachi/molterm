@@ -134,7 +134,7 @@ names = set(vd.commands)
 for name in ('exec-python', 'exec-shell', 'addcol-expr', 'save-sheet', 'open-file', 'options-global', 'sheets-all', 'suspend',
              'pyobj-row', 'syscopy-cell', 'import-python', 'setcol-expr', 'select-expr', 'search-expr', 'macro-record'):
     assert name not in names, name
-for name in ('addcol-molecule', 'addcol-molprops', 'open-molecule', 'sort-asc', 'freq-col', 'search-col', 'go-down', 'quit-sheet'):
+for name in ('addcol-molecule', 'addcol-molprops', 'open-molecule', 'edit-molecule', 'sort-asc', 'freq-col', 'search-col', 'go-down', 'quit-sheet'):
     assert name in names, name
 for call in (lambda: os.system('true'), lambda: subprocess.run(['true']), lambda: os.popen('true'), lambda: os.execvp('true', ['true'])):
     try:

@@ -10,15 +10,20 @@ Load it from ~/.visidatarc:  import molterm_visidata
 Commands (also in the Column menu, under molterm):
     Alt+m  addcol-molecule      add a structure column for the current column's SMILES
     Alt+o  open-molecule        open the current cell's molecule on its own sheet, large, with its properties
+    Alt+E  edit-molecule        draw the current row's molecule in molterm's editor, in a box over the sheet (Kitty graphics, or
+                                tmux passing them on); Done puts the new SMILES in its cell, which U undoes
     Alt+y  addcol-molprops      add columns of properties: formula, MW, cLogP, TPSA, HBD, HBA, RotB, QED, Ro5, PAINS, Brenk
     Alt+t  toggle-molterm-mode  switch between pictures and Braille text
 """
 import atexit
 import base64
+import curses
 import hashlib
 import json
 import os
 import re
+import select
+import subprocess
 import sys
 import threading
 import time
@@ -711,6 +716,13 @@ class Pictures:
         self.placed, self.sent = [], {}
         return True
 
+    def hide(self):
+        """Take the pictures off the screen, keeping them in the terminal: for a box drawn over them, whose own backgrounds they'd show
+        through. The next update places them again."""
+        if self.placed:
+            self.write("".join(f"\x1b_Ga=d,d=i,i={self.image_id(key)},p={slot + 1},q=2\x1b\\" for slot, (key, *_rest) in enumerate(self.placed)))
+        self.placed = []
+
     def clear(self):
         if self.sent:
             self.write("".join(f"\x1b_Ga=d,d=I,i={image},q=2\x1b\\" for image in self.sent))
@@ -748,9 +760,186 @@ def redraw(vd):
 atexit.register(lambda: pictures.clear() if pictures.sent else None)
 
 
+# Editing a molecule: molterm's editor in a box over the sheet. The server runs the editor; this passes it the terminal's raw input and
+# prints what comes back, as molterm's own client does with -b, while VisiData waits.
+
+EDITOR_IDS = range(7001, 7022)  # the editor's pictures, which go when it closes; the server's ids, not ours
+EDITOR_LEAST = (38, 12)  # the smallest box the editor fits in, counting its border
+EDITOR_MOST = (110, 34)
+
+
+def _edit_request(fields):
+    """One step of the editor: (outcome, state, output), the outcome 0 to go on, 1 finished, 2 failed, 3 cancelled."""
+    url = server_url().rstrip("/") + "/api/v1/edit"
+    request = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode())
+    try:
+        with urllib.request.urlopen(request, timeout=vd.options.molterm_timeout) as response:
+            text = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise MoltermError(f"{server_url()} has no editor: it needs a newer molterm server") from None
+        raise MoltermError(error.read().decode("utf-8", "replace").strip() or f"the server answered {error.code}") from None
+    except (urllib.error.URLError, OSError) as error:
+        raise MoltermError(f"can't reach {server_url()}: {getattr(error, 'reason', error)}") from None
+    first, _, output = text.partition("\n")
+    outcome, _, state = first.partition(" ")
+    return int(outcome), state, output
+
+
+def _run(command):
+    try:
+        return subprocess.run(command, capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def editor_graphics():
+    """How the editor's pictures reach the terminal: "direct", or "placeholders" through tmux (see molterm's server/placeholders.py).
+    Raises MoltermError, saying why, where they can't."""
+    if os.environ.get("TMUX"):
+        outer = _run(["tmux", "display", "-p", "#{client_termname} #{client_termtype}"])
+        if not re.search(r"kitty|ghostty", outer, re.I):
+            raise MoltermError(f"the editor needs Kitty graphics, and tmux says the terminal outside it is '{outer.strip()}', not Kitty or Ghostty")
+        if not re.search(r"on|all", _run(["tmux", "show", "-Apv", "allow-passthrough"])):
+            raise MoltermError("the editor needs Kitty graphics, which tmux passes on only with: tmux set -g allow-passthrough on")
+        return "placeholders"
+    if os.environ.get("STY"):
+        raise MoltermError("the editor needs Kitty graphics, which screen doesn't pass on")
+    if mode() != "kitty":
+        raise MoltermError("the editor needs Kitty graphics, as in Kitty or Ghostty (set options.molterm_mode to kitty if this terminal has them)")
+    return "direct"
+
+
+def editor_box(height, width):
+    """Where the editor goes on a screen of this size: (row, col, rows, cols), counting its border, in the middle below the top bar."""
+    cols, rows = min(width - 4, EDITOR_MOST[0]), min(height - 2, EDITOR_MOST[1])
+    if cols < EDITOR_LEAST[0] or rows < EDITOR_LEAST[1]:
+        raise MoltermError(f"the screen is too small for the editor, which needs {EDITOR_LEAST[0] + 4} columns and {EDITOR_LEAST[1] + 2} rows")
+    return 1 + (height - 2 - rows) // 2, (width - cols) // 2, rows, cols
+
+
+class Terminal:
+    """The terminal, read and written around curses, which isn't reading while a command runs."""
+
+    def __init__(self):
+        self.fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+
+    def size(self):
+        size = os.get_terminal_size(self.fd)
+        return size.lines, size.columns
+
+    def write(self, data):
+        while data:
+            data = data[os.write(self.fd, data):]
+
+    def read(self, timeout):
+        ready, _, _ = select.select([self.fd], [], [], timeout)
+        return os.read(self.fd, 4096) if ready else b""
+
+    def close(self):
+        os.close(self.fd)
+
+
+def _ask_cells(terminal):
+    """The cell size in pixels, and whether the mouse can report in pixels, from the terminal's answers: (width, height, pixels)."""
+    terminal.write(b"\x1b[16t\x1b[?1016$p\x1b[c")  # the device attributes come last, and every terminal answers them
+    reply, deadline = b"", time.monotonic() + 1
+    while time.monotonic() < deadline and not re.search(rb"\x1b\[\?[0-9;]*c", reply):
+        reply += terminal.read(deadline - time.monotonic())
+    size = re.search(rb"\x1b\[6;(\d+);(\d+)t", reply)
+    if not size:
+        return None, None, False
+    height, width = int(size[1]), int(size[2])
+    return width, height, bool(re.search(rb"\x1b\[\?1016;[12]\$y", reply))
+
+
+def edit_in_box(smiles, title, terminal, graphics="direct", step=None):
+    """Run the editor on `smiles` in a box over the screen until it's done: the new SMILES, or None if it was cancelled."""
+    step = step or _edit_request
+    width, height, pixels = _ask_cells(terminal)
+    fields = {"smiles": smiles, "title": title[:200], "theme": vd.options.molterm_theme}
+    if width and height:
+        fields.update(cell_width=width, cell_height=height)
+    if pixels:
+        fields["pixels"] = 1
+    if graphics == "placeholders":
+        fields["placeholders"] = 1
+    terminal.write(b"\x1b[?25l\x1b[?1003h\x1b[?1006h" + (b"\x1b[?1016h" if pixels else b""))
+    events, drawn, outcome, output = b"", None, 0, ""
+    try:
+        while True:
+            size = terminal.size()
+            if events or size != drawn:
+                box = editor_box(*size)
+                outcome, state, output = step({**fields, "events": events.hex(), "rows": size[0], "cols": size[1],
+                                               "box": ",".join(map(str, box))})
+                fields.pop("smiles", None)
+                fields["state"] = state
+                drawn = size
+                if outcome:
+                    break
+                if output:
+                    terminal.write(output.encode("utf-8"))
+            events = terminal.read(1.0)
+    finally:
+        out = []
+        for image in EDITOR_IDS:
+            command = f"\x1b_Ga=d,d=I,i={image if graphics == 'direct' else (image // 255) << 24 | (image % 255 + 1)},q=2\x1b\\"
+            out.append(command if graphics == "direct" else "\x1bPtmux;" + command.replace("\x1b", "\x1b\x1b") + "\x1b\\")
+        out.append("\x1b[?1016l\x1b[?1003l")
+        terminal.write("".join(out).encode("ascii"))
+    if outcome == 2:
+        raise MoltermError(output.strip())
+    if outcome == 3:
+        return None
+    return output.strip()
+
+
+@Sheet.api
+def editMolecule(sheet):
+    """Draw the current row's molecule in molterm's editor, in a box over the sheet; Done puts the new SMILES in its cell."""
+    column = _source_column(sheet, prefer_structure=True)
+    row = sheet.cursorRow
+    if row is None:
+        vd.fail("no row to edit")
+    old = str(column.getValue(row) or "").strip()
+    try:
+        graphics = editor_graphics()
+    except MoltermError as error:
+        vd.fail(str(error))
+    label = next((str(c.getValue(row)) for c in sheet.visibleCols if c is not column and not isinstance(c, StructureColumn)), "")
+    pictures.hide()
+    terminal = Terminal()
+    try:
+        new = edit_in_box(old, label or column.name, terminal, graphics)
+    except MoltermError as error:
+        new = error
+    finally:
+        terminal.close()
+        # the screen as VisiData had it: its mouse reporting, a hidden cursor, and everything drawn again over the box
+        try:
+            curses.mousemask(0)
+            vd.enableMouse(bool(vd.options.mouse_interval))
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        vd.redraw()
+    if isinstance(new, MoltermError):
+        vd.fail(f"molterm: {new}")
+    if new is None:
+        vd.status("edit cancelled")
+    elif new == old:
+        vd.status("the molecule is unchanged")
+    else:
+        cached(("props", new))  # for the property columns, which read it once it comes
+        column.setValues([row], new)
+    return new
+
+
 Sheet.addCommand("Alt+m", "addcol-molecule", "addcolMolecule()", "add a column drawing the molecule of each row's SMILES in the current column")
 Sheet.addCommand("Alt+y", "addcol-molprops", "addcolMolprops()", "add columns of properties computed from the current column's SMILES")
 Sheet.addCommand("Alt+o", "open-molecule", "openMolecule()", "open the current row's molecule on its own sheet, large, with its properties")
+Sheet.addCommand("Alt+Shift+E", "edit-molecule", "editMolecule()", "draw the current row's molecule in molterm's editor; Done puts the new SMILES in its cell")
 Sheet.addCommand("Alt+t", "toggle-molterm-mode", "toggleMoltermMode()", "draw molecules as pictures or as Braille text")
 Sheet.addCommand("Alt+g", "plot-molecules", "plotMolecules()", "chart cLogP against MW, coloured by a category, with the molecule under the cursor")
 GraphSheet.addCommand("Alt+n", "go-next-molecule", "moltermStep(1)", "put the cursor on the next molecule's dot")
@@ -760,6 +949,7 @@ GraphSheet.addCommand("Alt+t", "toggle-molterm-mode", "toggleMoltermMode()", "dr
 vd.addMenuItems("""
     Column > Add column > molterm structure > addcol-molecule
     Column > Add column > molterm properties > addcol-molprops
+    Edit > molterm > edit molecule > edit-molecule
     View > molterm > open molecule > open-molecule
     View > molterm > pictures or text > toggle-molterm-mode
     Plot > molterm chart of cLogP against MW > plot-molecules

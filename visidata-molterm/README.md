@@ -24,6 +24,7 @@ Then open any file with a column of SMILES (`vd drugs.csv`), put the cursor on i
 | `Alt+m` | `addcol-molecule` | adds a structure column for the current column's SMILES, and shows every row at full height |
 | `Alt+y` | `addcol-molprops` | adds columns computed from the structures: formula, MW, cLogP, TPSA, HBD, HBA, RotB, QED, Ro5 violations, PAINS and Brenk alerts |
 | `Alt+o` | `open-molecule` | opens the current row's molecule on its own sheet, large, with its properties; `q` comes back |
+| `Alt+Shift+E` | `edit-molecule` | draws the current row's molecule in molterm's editor, in a box over the sheet; Done (`Ctrl+Q`) puts the new SMILES in its cell, Cancel (`Ctrl+C`) leaves it, and `U` undoes it |
 | `Alt+t` | `toggle-molterm-mode` | switches between pictures and Braille |
 | `Alt+g` | `plot-molecules` | charts cLogP against MW, a dot for each row, coloured by a category column (such as `series` or `class`) with a legend; adds the properties first if need be |
 | `Alt+n`, `Alt+b` | `go-next-molecule`, `go-prev-molecule` | on a chart, put the cursor on the next or previous dot, in the sheet's order |
@@ -37,8 +38,8 @@ On a chart, a card in the lower right shows the molecule under the cursor: its n
 y values, and how many more dots share the place. It follows the cursor however it moves, and `Enter` opens the rows under it as a sheet
 of their own, structures and all. This works on any VisiData chart of a sheet with a structure or SMILES column.
 
-They're also in the menus: Column > Add column > molterm, and View > molterm. `Alt+y` and `Alt+o` find the structure column from
-anywhere in the row. The structure column's value is its SMILES, so copying, saving and sorting by it work as for the SMILES column.
+They're also in the menus: Column > Add column > molterm, Edit > molterm and View > molterm. `Alt+y`, `Alt+o` and `Alt+Shift+E` find
+the structure column from anywhere in the row. The structure column's value is its SMILES, so copying, saving and sorting by it work as for the SMILES column.
 
 Options: `molterm_mode` (`auto`, `kitty` or `text`; auto picks pictures in Kitty or Ghostty outside tmux and screen), `molterm_rows`
 (7) and `molterm_cols` (26) for the structure column's size, `molterm_theme` for the pictures' colours (molterm's `-t` names:
@@ -48,6 +49,19 @@ file with a column named like SMILES, and `molterm_auto_props`, which then adds 
 After a resize or `Ctrl+L` the plugin sends its pictures again: a terminal may drop them when its window changes size, and VisiData's
 redraw clears the screen window by window, some of it after the pictures are placed. So it waits until the screen has settled
 (0.4 s) and then sends everything under new ids, removing the old ones only after the new are placed.
+
+### Editing a molecule
+
+`Alt+Shift+E` (`Alt+e` is VisiData's Edit menu) opens molterm's editor, the same one as `molterm edit`, in a box in the middle of the
+screen, up to 110 columns by 34 rows, titled with the row's first column. It edits the SMILES column the row's structure is drawn from,
+wherever the cursor is in the row; an empty cell opens an empty canvas. The structure, its picture and its properties follow the new
+SMILES straight away. The editor runs on the molterm server, as everything else does: while it's open the plugin reads the terminal
+itself, sends each key and mouse report to `/api/v1/edit` and prints the answer, as molterm's client does with `-b`, so it needs no
+client installed. Its pictures are removed when it closes, and VisiData redraws the screen and places its own pictures again.
+
+The editor needs Kitty graphics. Unlike the cells, it works inside tmux too, as Unicode placeholders, when the terminal outside is Kitty
+or Ghostty and tmux has `allow-passthrough on`; elsewhere the command says what's missing. The terminal needs at least 42 columns and
+14 rows.
 
 ### How it draws
 
@@ -154,7 +168,7 @@ network; `ENV=prod` uses `molterm-vd.localhost` and the production server.
 
 ## Verified
 
-- `make test`: 50 tests. The session tests run real VisiData 3.5 against the dev molterm server and read the screens back with a terminal
+- `make test`: 57 tests. The session tests run real VisiData 3.5 against the dev molterm server and read the screens back with a terminal
   emulator: pictures transmitted once and placed in their cells, Braille with labels, the molecule's sheet and `q` back. They skip when
   no server with the new endpoints is reachable.
 - The live tests open real sessions over a WebSocket: VisiData on the 1000 compounds; `=`, `g=`, `Ctrl+X`, `g Ctrl+X`, `Ctrl+S`, `o`,
@@ -173,6 +187,10 @@ network; `ENV=prod` uses `molterm-vd.localhost` and the production server.
   half a CPU, and back to nothing when they ended.
 - The demo was watched in Chrome: pictures in their cells following the cursor and the scroll, Braille, the properties and the sort, the
   molecule's sheet in both modes, with no console errors.
+- The editor was used in the live demo in Chrome: `Alt+Shift+E` on a row opened it over the sheet with the row's molecule, an O changed
+  to S was put back in the cell on Done with its picture, formula and properties, `U` undid it, Cancel left the cell as it was, and
+  VisiData's mouse and pictures came back afterwards. Against the dev server with a scripted terminal, everything it printed stayed
+  inside the box. Inside tmux it has only been tested with a stand-in for the server and tmux.
 - The production command (gunicorn) serves the page and its vendored files from the built image.
 
 ## Open issues
@@ -182,6 +200,7 @@ network; `ENV=prod` uses `molterm-vd.localhost` and the production server.
 - The production demo needs molterm released with the new endpoints first: the production server is v0.1.1, which lacks them.
 - The plugin replaces `visidata.sheets._splitcell`, an internal function, so a VisiData upgrade may need a change; it is pinned to 3.5.
 - Pictures assume cells twice as tall as wide, as molterm does, so they come out a little squeezed or stretched in other fonts.
+- The editor's box is fixed while it's open: it can't be moved or resized as in `molterm tui`, though it follows the terminal's size.
 - Kitty images placed by the plugin don't survive VisiData's suspend (`Ctrl+Z`) or a shell-out until the layout next changes.
 - Large sheets fetch a drawing for each row shown, as it's shown; there is no batch request for drawings, only for properties.
 - The live demo's lockdown is an allowlist over VisiData 3.5's commands and a block on the paths I found to code (expressions, processes,
