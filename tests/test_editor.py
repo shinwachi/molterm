@@ -581,7 +581,7 @@ def test_the_same_key_means_different_things_on_an_atom_and_a_bond():
     assert Session("CC").hover_bond(0, 1).keys("3").smiles == "C#C"
 
 
-@pytest.mark.parametrize("start, key", [(0, "r"), (0, "x"), (0, "d"), (0, "."), (0, "'"), (1, "d"), (1, "b"), (1, "B"), (1, "y"), (1, "H"), (1, "l"), (1, "c"), (1, "r"), (1, "f"), (1, "9")])
+@pytest.mark.parametrize("start, key", [(0, "'"), (1, "d"), (1, "b"), (1, "B"), (1, "H"), (1, "l"), (1, "c"), (1, "r"), (1, "f"), (1, "9")])
 def test_chemdraw_keys_for_what_this_editor_lacks_say_so_and_change_nothing(start, key):
     session = Session("CCC")
     (session.hover_bond(0, 1) if start else session.hover_atom(0)).keys(key)
@@ -597,7 +597,7 @@ def test_over_nothing_keys_choose_tools(key, action):
     assert editor._is_active(session.state, action) and session.smiles == "CC"
 
 
-@pytest.mark.parametrize("key", list("XTeEgGlLkK"))
+@pytest.mark.parametrize("key", list("TeEgGlLkK"))
 def test_tools_this_editor_lacks_say_so(key):
     assert "this editor doesn't" in Session().keys(key).state["message"]
 
@@ -1181,7 +1181,7 @@ def test_an_invalid_drawing_is_still_drawn_with_a_red_box():
 
 def test_details_the_editor_cant_keep_are_mentioned():
     state = editor.new_state()
-    assert editor.load_smiles(state, "[13CH4]") and "aren't kept" in state["message"]
+    assert editor.load_smiles(state, "[CH3:1]C") and "aren't kept" in state["message"]
 
 
 def test_status_shows_formula_and_weight():
@@ -1323,7 +1323,7 @@ def good():
     lambda s: s["atoms"][0].__setitem__(4, 99),
     lambda s: s["bonds"].append([1, 999, 1]),
     lambda s: s["bonds"].append([1, 1, 1]),
-    lambda s: s["bonds"][0].__setitem__(2, 9),
+    lambda s: s["bonds"][0].__setitem__(2, 99),
     lambda s: s["bonds"].append(list(s["bonds"][0])),
     lambda s: s.update(atoms=[[i + 1, "C", 0, 0, 0] for i in range(editor.MAX_ATOMS + 1)], bonds=[], next=editor.MAX_ATOMS + 2),
     lambda s: s.update(tool="shell"),

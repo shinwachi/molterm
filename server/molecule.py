@@ -1,10 +1,12 @@
 """Parse SMILES and molblocks into sanitized RDKit molecules with 2D coordinates."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rdkit import Chem, rdBase
 from rdkit.Chem import rdDepictor, rdMolDescriptors
 
-FORMATS = ("auto", "smiles", "molblock")
+import markush
+
+FORMATS = ("auto", "smiles", "molblock")  # a SMILES may also be a CXSMARTS, which a query with atom lists is written as
 
 # Layout time grows steeply with size (about 1 s at 500 ring atoms, 5 s at 1000), so size is capped before layout.
 MAX_ATOMS = 500
@@ -23,9 +25,12 @@ class ParseError(ValueError):
 
 @dataclass
 class Molecule:
-    mol: Chem.Mol  # sanitized, with exactly one 2D conformer
-    format: str  # "smiles" or "molblock"
+    mol: Chem.Mol  # sanitized, with exactly one 2D conformer; a Markush structure's R-group definitions are drawn beside its core
+    format: str  # "smiles", "smarts" or "molblock"
     coords: str  # "input" if the molblock's layout was kept, otherwise "computed"
+    core: Chem.Mol = None  # without the R-group definitions, which are kept as text in `rgroups`, with their logic
+    rgroups: dict = field(default_factory=dict)
+    logic: dict = field(default_factory=dict)
 
     def to_dict(self):
         conformer = self.mol.GetConformer()
@@ -108,8 +113,17 @@ def parse(text, fmt="auto"):
     if len(text) > limit:
         raise ParseError("too_large", f"The input is {len(text):,} characters; the limit is {limit:,}.")
 
+    definitions, logic = {}, {}
+    if fmt == "smiles":
+        try:
+            text, definitions, logic = markush.separate(text)
+        except markush.MarkushError as e:
+            raise ParseError("syntax", str(e)) from e
     with rdBase.BlockLogs():  # failures are reported through ParseError, not stderr
         mol = _read(text, fmt)
+        if mol is None and fmt == "smiles" and _read(text, fmt, sanitize=False) is None:
+            mol = _query(text)
+            fmt = "smarts" if mol is not None else fmt
         if mol is None:
             raise _rejection(text, fmt)
 
@@ -122,4 +136,21 @@ def parse(text, fmt="auto"):
     if not _has_usable_layout(mol):
         rdDepictor.Compute2DCoords(mol)
         coords = "computed"
-    return Molecule(mol=mol, format=fmt, coords=coords)
+    core = mol
+    if definitions:
+        try:
+            mol = markush.displayed(core, definitions)
+        except markush.MarkushError as e:
+            raise ParseError("syntax", str(e)) from e
+        coords = "computed"
+    return Molecule(mol=mol, format=fmt, coords=coords, core=core, rgroups=definitions, logic=logic)
+
+
+def _query(text):
+    """A SMARTS, as the editor writes a query with atom lists or query bonds: a molecule that can be drawn, or None."""
+    mol = Chem.MolFromSmarts(text)
+    if mol is None:
+        return None
+    mol.UpdatePropertyCache(strict=False)
+    Chem.FastFindRings(mol)
+    return mol

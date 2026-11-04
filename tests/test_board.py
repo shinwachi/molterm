@@ -328,7 +328,7 @@ def test_a_large_drawing_gives_up_old_undo_steps_rather_than_the_session():
     big = "".join(chr(ord("a") + i % 26) for i in range(4000))
     state = board.new_state([["n", "C", True, False, annotate.empty()]])
     drawing = editor.new_state()
-    drawing["undo"] = [[[[i, "C", float(i), float(i * j) / 7.0, 0] for i in range(1, 200)], [], 200, annotate.empty()] for j in range(30)]
+    drawing["undo"] = [[[[i, "C", float(i), float(i * j) / 7.0, 0] for i in range(1, 200)], [], 200, annotate.empty(), {}] for j in range(30)]
     state["editing"] = {"index": 0, "state": drawing, "start": "C", "box": [0, 0, 30, 100], "restore": None, "minimized": False, "drag": None}
     state["message"] = big
     text = board._encode(state)

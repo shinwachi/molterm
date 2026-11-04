@@ -16,6 +16,8 @@ from rdkit import Chem, rdBase
 from rdkit.Chem import rdCIPLabeler
 from rdkit.Chem.Draw import rdMolDraw2D
 
+import markush
+
 MAX_NOTE = 40
 MAX_NOTES = 400
 HIGHLIGHTS = {"yellow": (1.0, 0.82, 0.25), "green": (0.45, 0.82, 0.45), "blue": (0.45, 0.68, 1.0), "pink": (1.0, 0.55, 0.72)}
@@ -78,14 +80,17 @@ def _escape(text):
 
 
 def split(text):
-    """A SMILES that may carry a CXSMILES extension: (the SMILES as written, its notes). Raises ValueError if RDKit can't read it."""
+    """A SMILES that may carry a CXSMILES extension: (the SMILES with the rest of its extension, such as a Markush structure's, its
+    notes). Raises ValueError if RDKit can't read it."""
     text = text.strip()
-    smiles = text.split(None, 1)[0] if text else ""
+    smiles, fields = markush.split(text)  # a MarkushError is a ValueError
+    kept = markush.join(smiles, [f for f in fields if not f.startswith("atomProp:")])
+    core = markush.separate(text)[0]
     with rdBase.BlockLogs():
-        mol = Chem.MolFromSmiles(text)
+        mol = Chem.MolFromSmiles(core) or Chem.MolFromSmarts(core)
     if mol is None:
         raise ValueError(f"Not valid SMILES: {text[:60]}")
-    return smiles, read(mol)
+    return kept, read(mol)
 
 
 def read(mol):
@@ -119,7 +124,7 @@ def read(mol):
 
 
 def write(smiles, notes):
-    """The SMILES as it was written, with its notes as a CXSMILES extension if there are any."""
+    """The SMILES as it was written, with its notes in its CXSMILES extension if there are any."""
     props = []
     for index, highlight, note in notes["atoms"]:
         if note:
@@ -133,9 +138,13 @@ def write(smiles, notes):
             props.append((first, f"molterm_bond_{second}_note", note))
     if notes["show"]:
         props.append((0, _SHOW, " ".join(notes["show"])))
-    if not props:
-        return smiles
-    return f"{smiles} |atomProp:" + ":".join(f"{index}.{name}.{_escape(value)}" for index, name, value in sorted(props, key=lambda p: p[0])) + "|"
+    base, fields = markush.split(smiles)
+    if props:
+        field = "atomProp:" + ":".join(f"{index}.{name}.{_escape(value)}" for index, name, value in sorted(props, key=lambda p: p[0]))
+        # before the R-group definitions, which ChemAxon writes last
+        place = next((i for i, f in enumerate(fields) if f.startswith(("RG:", "LOG="))), len(fields))
+        fields = [*fields[:place], field, *fields[place:]]
+    return markush.join(base, fields)
 
 
 def renumber(notes, order):

@@ -89,7 +89,24 @@ def _charge(pen, plus):
         pen.line((0.5, 0.35), (0.5, 0.65))
 
 
-_ICONS = {"select": _select, "erase": _erase, "pan": _pan, "text": _text,
+def _chain(pen):
+    points = [(0.14, 0.62), (0.32, 0.38), (0.5, 0.62), (0.68, 0.38), (0.86, 0.62)]
+    for start, end in zip(points, points[1:]):
+        pen.line(start, end)
+
+
+def _rlabel(pen):
+    # an R, from straight strokes: the stem, the bowl's three sides and the leg
+    pen.line((0.3, 0.2), (0.3, 0.8))
+    pen.line((0.3, 0.2), (0.6, 0.2))
+    pen.line((0.6, 0.2), (0.7, 0.32))
+    pen.line((0.7, 0.32), (0.7, 0.4))
+    pen.line((0.7, 0.4), (0.6, 0.5))
+    pen.line((0.6, 0.5), (0.3, 0.5))
+    pen.line((0.5, 0.5), (0.74, 0.8))
+
+
+_ICONS = {"select": _select, "chain": _chain, "rlabel": _rlabel, "erase": _erase, "pan": _pan, "text": _text,
           "single": lambda pen: _parallel(pen, [0]), "double": lambda pen: _parallel(pen, [-0.07, 0.07]),
           "triple": lambda pen: _parallel(pen, [-0.12, 0, 0.12]), "wedge": _wedge, "hash": _hash,
           "plus": lambda pen: _charge(pen, True), "minus": lambda pen: _charge(pen, False),

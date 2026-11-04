@@ -219,6 +219,44 @@ changed are sent: hovering costs 1 to 9 KB, and a change to the molecule about 6
 plus `od`.
 
 ### Editing inside a text interface
+### Markush structures, queries and Ketcher's other tools
+
+The editor also has the small-molecule tools of EPAM's Ketcher that it lacked, macromolecules aside, with Markush structures first.
+Right-click an atom for **Properties and Markush**, a bond for **More Bonds and Queries**, and a selection for **Markush and Stereo**; the
+**Structure** menu has the rest.
+
+- **R-groups.** `r` on an atom (or the **R** tool in the palette) makes it the lowest free R-group, and again the next number; the label
+  box takes `R1` to `R32`. Draw a definition apart from the structure, select it and choose **R-group Definition...** with its number:
+  it's drawn with `R1 =` before it. `.` on an atom steps its attachment point through first, second and both, drawn as Ketcher draws
+  them, with a short bond ending in a wave; without one a definition attaches by its first atom. **Structure > R-group Logic...** takes
+  Ketcher's occurrence, rest-H and if-then, written as `R1 >0 H if R2`.
+- **Generic atoms and lists.** A, AH, Q, QH, X, XH, M, MH and `*` from the label box (`x` makes X), or the atom's menu; an atom list as
+  `C,N,O` and a NOT list as `!F,Cl` or `NOT F,Cl`.
+- **Variable attachment (position variation).** Select the atoms a substituent may go on, as in a ring, then right-click its bond to one
+  of them and choose **Attach to Selected Atoms**. The bond is drawn to the middle of them, which RDKit shades.
+- **Repeating units and link nodes.** **Repeating Unit...** on a selection brackets it with `n` or a range such as `1-3`; **Link Node...**
+  on an atom with two bonds repeats it, as `1-4`.
+- **Atoms and bonds.** Isotopes (`13C`, and `d` or `D` for deuterium), radicals, enhanced stereo groups (`abs`, `and1`, `or1`...), wavy
+  (`y`), aromatic, dative and crossed double bonds, and the query bonds any, single or double, single or aromatic, double or
+  aromatic, each in a ring or a chain.
+- **Tools and commands.** A chain tool (`X`), flips and a 90 degree turn of the selection or the drawing (a mirror image swaps its wedges, so
+  the stereochemistry stays), Aromatize and Dearomatize, adding and removing explicit hydrogens, Check Structure, Calculated Values
+  (formula, MW, exact mass and elemental analysis) and **File > Copy Molfile (V3000)**.
+
+It all travels as ChemAxon's extended SMILES, which RDKit reads and Marvin writes: `_R1` and `Q_e` labels on star atoms, `m:` for a
+variable attachment, `Sg:` for a repeating unit, `LN:` for a link node, `a:`/`&1:`/`o1:` for stereo groups, and the definitions and
+logic after `RG:` and `LOG=`, which `server/markush.py` adds and takes off, since RDKit doesn't read them:
+
+```sh
+./molterm edit '*C1CCCCC1* |$_R1;;;;;;;_R2$,RG:_R1={CCC},{N},_R2={O},LOG={_R1:;;>0._R2:_R1;H;0,1}|'
+./molterm edit 'Cl*.c1ccccc1 |m:1:2.3.4|'      # Cl on any of three ring atoms
+```
+
+A definition that bonds to the core twice marks its ends with atom maps 1 and 2, as `{[CH2:1]C[CH2:2]}`; ChemAxon's `_AP1` stars are read
+and written for attachment points outside a definition. An atom list or a query bond has no place in SMILES, so a drawing with one is
+written as CXSMARTS, such as `[#6]-,=[#6]-[#6,#7,#8]`, which the editor and the renderers read back. The renderers draw a Markush
+structure's definitions beside its core, and the list (`molterm tui`) keeps the text as it came.
+
 
 `molterm tui` is a text interface with structures in it: a grid of drawings, where hovering marks a tile and clicking an editable one opens
 the editor in a window over the rest. Done (or Ctrl-Q) puts the edit back in the list and redraws that tile, and Cancel (or Ctrl-C) leaves it as it was.
@@ -372,6 +410,13 @@ Their drawings were checked by eye: highlights, notes, atom numbers and an (S) l
 `/showcase` was watched in Chrome: a full run with no console errors, the side-by-side screens, the window opening over the list, the
 palette and hotspot in it, Done, the redrawn tile and the printed list. The edit's result, `CCOc1ccc(NC(C)=O)cc1F`, is checked by tests.
 Its fog frames, all three ways of copying and the pasted drawing were watched there too, with the page's Copy button checked for selecting the right text.
+The Markush and Ketcher features are checked by `tests/test_markush.py`: each kind of text read into the editor and written back as it came,
+the label box, the keys and the R-group tool, each menu and prompt, a variable attachment found where it's drawn, a definition made from a
+selection and its logic undone, the chain tool's length, the Structure commands, a flip keeping a stereocentre, Clean Up keeping the
+Markush parts, the renderers and the list, and tampered properties refused. The drawing of R-groups, attachment points, a repeating unit,
+a stereo group, a generic atom and a bridging definition was checked by eye, and in the live VisiData demo in Chrome the new palette icons,
+`r`, the bond menu, the atom's submenu, an atom list typed into the prompt and a dragged chain were used.
+
 The window being resized, moved, minimized into the top bar with every thumbnail of the list still showing, and brought back, was watched there as well,
 and so were the copy in all three formats with its PNG preview, the highlight and note in the editor and on the tile, and the printed CXSMILES.
 The themes frame, and the shell scene with its pictures kept in the scrollback while scrolling up to the first command and down to the prompt,
@@ -390,6 +435,13 @@ Open issues:
   resizing the window needs a reload. The hotspot stays light blue in its black-on-white theme, as it's what shows where the keys act.
 - restty paints cell backgrounds under the box's backing image, so grey bars and highlights inside the editor's box don't show there, only their text.
   Menus over a drawing show the drawing through them there, as they do over the list's tiles.
+- Markush: a definition's own annotations, generic atoms and lists are written as plain SMILES inside `RG:`, so they don't survive; Copy
+  Molfile leaves the definitions out (V3000 has RGROUP blocks for them); reactions, Ketcher's S-groups other than repeating units (data,
+  multiple, superatom) and its templates library aren't there. ChemAxon's syntax for two attachment points in a definition isn't
+  documented, so the atom maps are this editor's own. Markush drawing hasn't been seen in a real Kitty or Ghostty, only in restty.
+- The atom's and the selection's right-click menus are 19 lines each, so a box needs at least 23 rows, counting its border, to show them whole; the Markush
+  items are in submenus to keep them that short.
+
   The black-on-white theme's highlight is underlined for that reason. Real terminals aren't expected to do this.
 - restty keeps about 10 MB of decoded images and drops the oldest, so `/showcase` asks for images at 7 pixels per column, and the editor's are a
   little soft there. In a real terminal they're sharp.
