@@ -28,6 +28,8 @@ Then open any file with a column of SMILES (`vd drugs.csv`), put the cursor on i
 | `Alt+t` | `toggle-molterm-mode` | switches between pictures and Braille |
 | `Alt+g` | `plot-molecules` | charts cLogP against MW, a dot for each row, coloured by a category column (such as `series` or `class`) with a legend; adds the properties first if need be |
 | `Alt+n`, `Alt+b` | `go-next-molecule`, `go-prev-molecule` | on a chart, put the cursor on the next or previous dot, in the sheet's order |
+| `Alt+Shift+D` | `addcol-molecule-3d` | adds a column of the molecules in 3D, from a [molterm-3d](../molterm-3d/) server: put in 3D by molterm, drawn by Mol* in its illustrative style (Kitty graphics only) |
+| `Alt+Shift+V` | `view-molecule-3d` | opens the current row's molecule in molterm-3d's viewer, in a box over the sheet: drag to turn it, the wheel to zoom, `s`, `c` and `l` for styles, colours and lightings, `q` to close it |
 
 The chart opens below its sheet on a split screen (`molterm_chart_split`, 55 percent of it; 0 for a chart on its own), and the two
 cursors follow each other: the dot under the chart's cursor puts the sheet's on its row, and moving the sheet's cursor, after `Tab`,
@@ -63,6 +65,26 @@ The editor needs Kitty graphics. Unlike the cells, it works inside tmux too, as 
 or Ghostty and tmux has `allow-passthrough on`; elsewhere the command says what's missing. The terminal needs at least 42 columns and
 14 rows.
 
+### In 3D
+
+The 3D column and the viewer come from molterm-3d (`options.molterm3d_url` or `$MOLTERM3D_URL`, http://molterm-3d.localhost by
+default), which asks the molterm server for 3D coordinates and draws them with Mol*.
+
+molterm-3d is optional: nothing else in the plugin uses it. Without it (nothing answering, or a server without its endpoints) the 3D
+column's cells say "3D unavailable" and stay empty, molterm-3d isn't asked again for 30 s rather than once a row, and the viewer says
+it's unavailable without taking over the screen, having asked `/health` with a 3-second limit.
+
+The column's pictures fill their cells, with twice the pixels of a 2D picture, without hydrogens; `molterm3d_style` and
+`molterm3d_lighting` (illustrative by default) choose how. In Braille the column says it needs Kitty graphics. The viewer works as the editor does, by molterm-3d's `/api/v1/view` with `box=`, so
+it needs no client: the plugin reads the terminal while it's open and prints what comes back, inside a frame titled with the row's
+first column, up to 140 by 44 cells. From 0.4 s, a spinner on the frame says the server is drawing. Inside tmux it uses placeholders,
+as the editor does.
+
+Keys or mouse reports that arrive while the editor or the viewer is still asking the terminal its cell size are kept as their first
+input; they used to be dropped, so a drag started at once did nothing. And after either closes, the sheet's pictures come back without
+a key: VisiData stops drawing a second after the last key, and the pictures, placed again 0.4 s after a redraw, waited for the next one.
+The plugin now keeps VisiData drawing while pictures are still to come.
+
 ### How it draws
 
 - **Braille.** VisiData wraps each piece of a cell onto a line of its own, which would split a drawing's colours across lines, so the
@@ -91,7 +113,7 @@ runs VisiData with the plugin in a pseudo-terminal of 116 by 34 cells, against t
 `TERM=xterm-kitty`, and keeps the terminal's output between one key and the next. The page prints those frames back at that size, with
 the key and a caption. It shows `demo/drugs.csv` gaining structures, scrolling, Braille and back, properties, a sort by cLogP, a
 molecule on its own sheet, a chart of cLogP against MW coloured by class, stepping through its dots with the card naming each and the table following, `Tab` to the table and down it with the
-chart following, opening the rows under the chart's cursor, and Braille once more.
+chart following, opening the rows under the chart's cursor, the 3D column beside the SMILES, the 3D viewer turned by mouse reports, relit and restyled, and Braille once more.
 
 The service records the session when it starts, and again whenever the plugin, the script, the data or `demo/visidatarc` is newer than
 the recording (`data/recording.json`, git-ignored); the page waits meanwhile. `demo/visidatarc` turns off the help sidebar, uses `│`
@@ -169,9 +191,11 @@ network; `ENV=prod` uses `molterm-vd.localhost` and the production server.
 
 ## Verified
 
-- `make test`: 57 tests. The session tests run real VisiData 3.5 against the dev molterm server and read the screens back with a terminal
-  emulator: pictures transmitted once and placed in their cells, Braille with labels, the molecule's sheet and `q` back. They skip when
-  no server with the new endpoints is reachable.
+- `make test`: 65 tests, eight of them for 3D: without molterm-3d (a closed port) the column says "3D unavailable" and asks once, the
+  2D column still draws, and the viewer refuses without touching the screen; with it, the column's request and placement, the
+  viewer's box, frame, spinner, failures and command, and a press during the cell-size question kept as input. The session tests run real VisiData 3.5 against the dev molterm
+  server and read the screens back with a terminal emulator: pictures transmitted once and placed in their cells, Braille with
+  labels, the molecule's sheet and `q` back. They skip when no server with the new endpoints is reachable.
 - The live tests open real sessions over a WebSocket: VisiData on the 1000 compounds; `=`, `g=`, `Ctrl+X`, `g Ctrl+X`, `Ctrl+S`, `o`,
   `!`, `z|`, `Ctrl+Z` and `Ctrl+O` leave the sheet as it was, with anything they asked for answered by a command that would have
   created a file; the lockdown removes what it should and processes, expressions and a changed server address all fail; the session
@@ -193,6 +217,9 @@ network; `ENV=prod` uses `molterm-vd.localhost` and the production server.
   VisiData's mouse and pictures came back afterwards. Against the dev server with a scripted terminal, everything it printed stayed
   inside the box. Inside tmux it has only been tested with a stand-in for the server and tmux.
 - The production command (gunicorn) serves the page and its vendored files from the built image.
+- 3D, in the recorded demo (watched in Chrome): the 3D column beside the 2D one for the drugs, the viewer over the sheet turned by
+  mouse reports, relit and restyled, and the sheet's pictures back after `q`. In the live demo (Chrome, a real mouse): Alt+Shift+V
+  and the 3D viewer button opened the row's compound, a drag turned it, `q` closed it, and the 3D column button drew 13 compounds.
 
 ## Open issues
 
@@ -209,3 +236,7 @@ network; `ENV=prod` uses `molterm-vd.localhost` and the production server.
   the `traefik` network, so if something did break out it could reach the other stacks there.
 - An idle VisiData redraws all the time, about an eighth of a CPU per session.
 - Alt keys are only verified through the page's own handler with the browser tool's key events, not with every browser and keyboard.
+- 3D pictures sit small in their cells: molterm-3d fits a molecule's whole sphere to the cell's height, and a drug is long and flat.
+  Illustrative outlines are black, so on a dark sheet they don't show. The first click on the live page's 3D viewer button, while the
+  session was still adding its properties, opened VisiData's capture prompt instead; once loaded the button worked.
+- SMILES in 3D need molterm 0.1.3 on the server molterm-3d asks: production has 0.1.2 until it's deployed.

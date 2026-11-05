@@ -37,6 +37,8 @@
         <button class="btn" type="button" data-alt="n" title="Alt+n">Next dot</button>
         <button class="btn" type="button" data-alt="o" title="Alt+o">Open molecule</button>
         <button class="btn" type="button" data-alt="E" title="Alt+Shift+E">Edit molecule</button>
+        <button class="btn" type="button" data-alt="D" title="Alt+Shift+D">3D column</button>
+        <button class="btn" type="button" data-alt="V" title="Alt+Shift+V">3D viewer</button>
         <button class="btn" type="button" data-alt="t" title="Alt+t">Pictures or Braille</button>
         <span id="state" class="off">Starting…</span>
     </div>
@@ -48,7 +50,7 @@
         the cursor: <kbd>Alt+n</kbd> and <kbd>Alt+b</kbd> step from dot to dot and the table's cursor follows, <kbd>Tab</kbd> goes to the
         table, where moving the cursor moves the chart's to that row's dot, <kbd>Enter</kbd> on the chart opens the compounds under its
         cursor, and <kbd>q</kbd> closes the chart. On the sheet, <kbd>Alt+o</kbd> opens a molecule, <kbd>Alt+Shift+E</kbd> or Edit molecule draws it in molterm's
-        editor (<kbd>Ctrl+Q</kbd> puts it back, <kbd>Ctrl+C</kbd> cancels, <kbd>U</kbd> undoes), <kbd>Alt+t</kbd> switches to Braille. Move with the arrows or <kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd>, sort with <kbd>[</kbd> and <kbd>]</kbd>, search with
+        editor (<kbd>Ctrl+Q</kbd> puts it back, <kbd>Ctrl+C</kbd> cancels, <kbd>U</kbd> undoes), <kbd>Alt+Shift+D</kbd> or 3D column adds a column of the molecules in 3D, drawn by Mol* on the molterm-3d server, and <kbd>Alt+Shift+V</kbd> or 3D viewer opens the row's molecule in 3D: drag to turn it, the wheel to zoom, <kbd>s</kbd>, <kbd>c</kbd> and <kbd>l</kbd> for styles, colours and lightings, <kbd>q</kbd> to close it. <kbd>Alt+t</kbd> switches to Braille. Move with the arrows or <kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd>, sort with <kbd>[</kbd> and <kbd>]</kbd>, search with
         <kbd>/</kbd>, select with <kbd>s</kbd> or <kbd>|</kbd>, count with <kbd>Shift+F</kbd>, plot with <kbd>.</kbd>, and <kbd>q</kbd>
         to go back. This demo keeps to the sheet in memory: there is no Python, shell or file access, and the session ends after
         <span id="idle">10</span> minutes without a key, or <span id="longest">30</span> in all. <span id="capacity"></span>

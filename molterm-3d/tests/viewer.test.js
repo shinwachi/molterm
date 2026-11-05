@@ -140,6 +140,21 @@ test('a slow structure is drawn rough while a drag goes on, and in full when the
     assert.strictEqual(picture(dragging.output).readUInt32BE(16), 800);
 });
 
+test('in a box, everything goes inside it, with the title given', async () => {
+    const boxed = { ...size, cols: '120', rows: '40', box: '5,10,20,60', title: 'imatinib' };
+    const first = await viewer.step({ ...boxed, data: ETHANOL });
+    assert.ok(!first.output.includes('\x1b[2J') && !first.output.includes('\x1b[2K'), 'nothing outside the box is cleared');
+    const moves = [...first.output.matchAll(/\x1b\[(\d+);(\d+)H/g)].map((m) => [+m[1], +m[2]]);
+    assert.ok(moves.every(([row, col]) => row >= 6 && row <= 25 && col === 11), JSON.stringify(moves.slice(0, 4)));
+    assert.ok(first.output.includes('\x1b[6;11H' + ' '.repeat(60)), 'the box is cleared first');
+    assert.ok(first.output.includes('a=T,f=100,i=') && first.output.includes(',c=60,r=19,'), 'the picture fills the box above its status line');
+    assert.ok(first.output.includes('\x1b[25;11H\x1b[1mimatinib  9 atoms'), 'the status line at the bottom of the box, with the title');
+    const turned = await viewer.step({ ...boxed, state: first.state, events: hex('\x1b[C') });
+    assert.ok(!turned.output.includes(' '.repeat(60)), 'the box is cleared only when it changes');
+    const moved = await viewer.step({ ...boxed, box: '2,4,20,60', state: turned.state });
+    assert.ok(moved.output.startsWith('\x1b[3;5H' + ' '.repeat(60)), 'a moved box is cleared and drawn in again');
+});
+
 test('l steps through the lightings, from illustrative, and the status line says which', async () => {
     const wide = { ...size, cols: '140' }; // room on the status line for everything
     const first = await viewer.step({ ...wide, data: ETHANOL });

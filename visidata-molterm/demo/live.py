@@ -68,7 +68,8 @@ class Session:
         for folder in (".local/share/visidata", ".config/visidata", ".cache/visidata"):  # two of VisiData's threads race to make them
             os.makedirs(os.path.join(self.home, folder), exist_ok=True)
         environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": self.home, "TERM": "molterm-kitty", "LANG": "C.UTF-8",
-                       "MOLTERM_URL": os.environ.get("MOLTERM_URL", "http://molterm.localhost"), "EDITOR": "false",
+                       "MOLTERM_URL": os.environ.get("MOLTERM_URL", "http://molterm.localhost"),
+                       "MOLTERM3D_URL": os.environ.get("MOLTERM3D_URL", "http://molterm-3d.localhost"), "EDITOR": "false",
                        "VISUAL": "false", "PAGER": "false", "ESCDELAY": "25", "PYTHONDONTWRITEBYTECODE": "1"}
         self.process = subprocess.Popen([sys.executable, os.path.join(HERE, "sandbox.py"), LIBRARY], stdin=slave, stdout=slave,
                                         stderr=slave, cwd=self.home, env=environment, start_new_session=True, close_fds=True)

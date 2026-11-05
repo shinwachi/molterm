@@ -90,7 +90,7 @@ for (const button of document.querySelectorAll("button[data-alt]")) {
 }
 // restty takes keys through an input of its own, which a click on the canvas focuses; this covers the frame around it
 document.getElementById("screen").addEventListener("click", () => terminal.focus?.());
-// Alt and a letter, as terminals send it: Escape, then the letter. VisiData's molterm keys are Alt+m, Alt+y, Alt+o, Alt+t and Alt+Shift+E, and a
+// Alt and a letter, as terminals send it: Escape, then the letter. VisiData's molterm keys are Alt+m, Alt+y, Alt+o, Alt+t, Alt+Shift+E, Alt+Shift+D and Alt+Shift+V, and a
 // browser can otherwise hand restty the letter alone, or a character the Alt key composes.
 document.addEventListener("keydown", event => {
     if (!event.altKey || event.ctrlKey || event.metaKey || !element.contains(document.activeElement) || !/^Key[A-Z]$/.test(event.code)) return;

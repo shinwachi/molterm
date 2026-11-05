@@ -89,7 +89,7 @@ would get below it, in a chosen style, colour and turn.
 |---|---|
 | `GET /api/v1/structure?input=` | the structure's file; `X-Molterm-Format` (`mmcif`, `sdf`, ...) and `X-Molterm-Name` |
 | `GET /api/v1/render.png?input=&style=&colour=&lighting=&width=&height=&turn=&tilt=&background=RRGGBB&hydrogens=0` | a picture, transparent where empty |
-| `POST /api/v1/view` | one step of the terminal viewer (above) |
+| `POST /api/v1/view` | one step of the terminal viewer (above); with `box=row,col,rows,cols` it draws only there, as over a spreadsheet, and `title=` names it on the status line |
 | `GET`/`POST /api/v1/print?input=&style=&colour=&lighting=&rows=&cols=&cell_width=&cell_height=&turn=&tilt=&placeholders=1` | what `-p` prints, or 400 with the reason |
 | `GET /showcase` | the automated demo (below) |
 | `GET /api/v1/showcase?part=&cols=&rows=&cell_width=&cell_height=` | `frames` of one part of it (`caption`, `output`, `pointer`, `click`, `key`, `pause`, `scroll`) and `parts`; 400 below 90 by 30 |
@@ -152,7 +152,8 @@ at 3 GB, since software rendering can take a machine.
 - `/showcase` watched in Chrome from start to end: the viewer turned, zoomed, moved, relit, recoloured and restyled; the four lightings
   from the same side; streptavidin's styles; lysozyme without its water; imatinib; the printed pictures scrolling with the shell and
   still in its history on the way back. No console errors. The lighting choice on the main page draws.
-- 24 tests now, with a drag drawn rough and the release in full, and `EXT_frag_depth` offered and compiling.
+- 25 tests now, with a drag drawn rough and the release in full, `EXT_frag_depth` offered and compiling, and a viewer in a box
+  touching nothing outside it. The VisiData plugin uses the box for its 3D viewer (see `visidata-molterm/`).
 - With impostors, through the dev URL at 1.6 megapixels: 4HHB spacefill in full 0.58 s (1.3 s with meshes), rough 0.17 to 0.19 s;
   4HHB cartoon in full 0.41 to 0.49 s, rough 0.1 s; 1CRN cartoon in full 0.3 s, rough 0.09 s. At 800 by 480, 4HHB spacefill takes
   0.15 s in full (0.7 s with meshes). Impostor and half-resolution occlusion pictures compared by eye with the mesh ones: the same.

@@ -18,6 +18,7 @@ Each environment is its own compose project (`molterm-dev`, `molterm-prod`), so 
 cells, as Kitty pictures or coloured Braille, with a recorded demo at http://molterm-vd.localhost and a live one, where anyone
 can use VisiData on 1000 compounds in a locked-down session, at http://molterm-vd.localhost/live (dev: `molterm-vd-dev`). It has its own Makefile,
 containers and README, and uses this server's `/api/v1/render` (with `properties`), `/api/v1/properties` and `/api/v1/render.png`.
+With molterm-3d it also shows molecules in 3D: a column of them, drawn by Mol*, and a viewer over the sheet to turn one with the mouse.
 
 `molterm-3d/` is a second sub-project: structures in 3D, drawn by [Mol*](https://molstar.org/) running headless in Node, in the
 terminal (`molterm3d 1crn`: drag to turn, wheel to zoom, Kitty graphics, through tmux too) and on a web page with Mol*'s own viewer,

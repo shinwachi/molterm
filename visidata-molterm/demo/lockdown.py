@@ -21,7 +21,7 @@ ALLOWED_PREFIXES = (
     "aggregate-", "dup-", "delete-", "copy-", "cut-", "expand-", "contract-", "rename-", "setcol-precision-", "error",
 )
 ALLOWED = {
-    "addcol-molecule", "addcol-molprops", "open-molecule", "toggle-molterm-mode", "edit-molecule",
+    "addcol-molecule", "addcol-molprops", "open-molecule", "toggle-molterm-mode", "edit-molecule", "addcol-molecule-3d", "view-molecule-3d",
     "addcol-new", "addcol-incr", "addcol-incr-step", "addcol-split", "addcol-capture", "addcol-subst", "addcol-regex-subst",
     "addcol-aggregate", "addcol-rank-sheet", "addcol-histogram",
     "setcol-input", "setcol-fill", "setcol-incr", "setcol-subst", "setcol-subst-all", "setcol-regex-subst", "setcol-regex-subst-all",
@@ -81,5 +81,7 @@ for _name in ("system", "popen", "fork", "forkpty", "execv", "execve", "execvp",
 # and the drawings come from the one server the demo was given, whatever a visitor finds to change
 _SERVER = os.environ.get("MOLTERM_URL", "http://molterm.localhost")
 molterm_visidata.server_url = lambda: _SERVER
+_SERVER3D = os.environ.get("MOLTERM3D_URL", "http://molterm-3d.localhost")
+molterm_visidata.server3d_url = lambda: _SERVER3D
 
 REMOVED = apply()

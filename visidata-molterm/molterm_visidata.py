@@ -14,6 +14,8 @@ Commands (also in the Column menu, under molterm):
                                 tmux passing them on); Done puts the new SMILES in its cell, which U undoes
     Alt+y  addcol-molprops      add columns of properties: formula, MW, cLogP, TPSA, HBD, HBA, RotB, QED, Ro5, PAINS, Brenk
     Alt+t  toggle-molterm-mode  switch between pictures and Braille text
+    Alt+D  addcol-molecule-3d   add a column of the molecules in 3D, drawn by Mol* on a molterm-3d server (Kitty graphics)
+    Alt+V  view-molecule-3d     turn the current row's molecule in 3D with the mouse, in a box over the sheet (Kitty graphics)
 """
 import atexit
 import base64
@@ -47,6 +49,9 @@ vd.option("molterm_timeout", 15, "seconds to wait for the molterm server")
 vd.option("molterm_auto", False, "add a structure column as soon as a sheet loads with a column named like smiles")
 vd.option("molterm_auto_props", False, "with molterm_auto, add the property columns too")
 vd.option("molterm_chart_split", 55, "how much of the screen, in percent, a chart takes below its sheet; 0 for the whole screen")
+vd.option("molterm3d_url", os.environ.get("MOLTERM3D_URL", "http://molterm-3d.localhost"), "molterm-3d server that draws molecules in 3D")
+vd.option("molterm3d_style", "auto", "3D style: auto, ball-and-stick, spacefill, licorice, cartoon or surface")
+vd.option("molterm3d_lighting", "illustrative", "3D lighting: illustrative, standard, occlusion or outline")
 
 MODES = ("auto", "kitty", "text")
 CELL_PIXELS = 10  # a picture's pixels per column; the terminal scales it to the cells
@@ -65,6 +70,10 @@ class MoltermError(Exception):
     """The server couldn't draw it, or couldn't be reached."""
 
 
+class MoltermUnavailable(MoltermError):
+    """The server isn't there, or isn't one that has this: for molterm-3d, which is optional, 3D is then simply left out."""
+
+
 # The server
 
 
@@ -73,16 +82,29 @@ def server_url():
     return vd.options.molterm_url
 
 
+def server3d_url():
+    """Where the 3D pictures and the 3D viewer come from; the online demo pins it too."""
+    return vd.options.molterm3d_url
+
+
 def _request(path, params=None, body=None):
-    url = server_url().rstrip("/") + path + ("?" + urllib.parse.urlencode(params) if params else "")
+    return _http(server_url(), path, params, body, "it needs a newer molterm server")
+
+
+def _request3d(path, params=None, timeout=None):
+    return _http(server3d_url(), path, params, None, "is it a molterm-3d server?", timeout)
+
+
+def _http(base, path, params, body, missing, timeout=None):
+    url = base.rstrip("/") + path + ("?" + urllib.parse.urlencode(params) if params else "")
     data = json.dumps(body).encode() if body is not None else None
     request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"} if data else {})
     try:
-        with urllib.request.urlopen(request, timeout=vd.options.molterm_timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout or vd.options.molterm_timeout) as response:
             return response.read(), response.headers
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            raise MoltermError(f"{server_url()} has no {path}: it needs a newer molterm server") from None
+            raise MoltermUnavailable(f"{base} has no {path}: {missing}") from None
         text = error.read().decode("utf-8", "replace")
         try:
             text = json.loads(text)["error"]["message"]
@@ -90,7 +112,7 @@ def _request(path, params=None, body=None):
             pass
         raise MoltermError(text.strip() or f"the server answered {error.code}") from None
     except (urllib.error.URLError, OSError) as error:
-        raise MoltermError(f"can't reach {server_url()}: {getattr(error, 'reason', error)}") from None
+        raise MoltermUnavailable(f"can't reach {base}: {getattr(error, 'reason', error)}") from None
 
 
 def _drawing(smiles, cols, rows):
@@ -111,6 +133,39 @@ def _picture(smiles, cols, rows, theme, cell=CELL_PIXELS):
     return png, int(headers.get("X-Molterm-Cols") or cols), min(-(-height // (2 * cell)), rows), height
 
 
+def _picture3d(smiles, cols, rows, theme, style, lighting, cell=CELL_PIXELS * 2):
+    """The molecule in 3D, from molterm-3d: a transparent PNG of exactly cols by rows cells, with twice the pixels of a 2D picture,
+    as a 3D one has shading to show. Same shape of answer as _picture."""
+    if time.monotonic() < _down3d[0]:  # not there a moment ago: don't ask again for every row
+        raise MoltermUnavailable("molterm-3d isn't reachable")
+    try:
+        return _render3d(smiles, cols, rows, theme, style, lighting, cell)
+    except MoltermUnavailable:
+        _down3d[0] = time.monotonic() + DOWN_FOR
+        raise
+
+
+_down3d = [0.0]  # until when molterm-3d is taken to be away
+DOWN_FOR = 30  # seconds before asking a molterm-3d that wasn't there again
+
+
+def available3d():
+    """Whether molterm-3d answers, asked quickly: the viewer checks before taking over the screen."""
+    try:
+        _request3d("/health", timeout=3)
+        return True
+    except MoltermError:
+        _down3d[0] = time.monotonic() + DOWN_FOR
+        return False
+
+
+def _render3d(smiles, cols, rows, theme, style, lighting, cell):
+    width, height = cols * cell, rows * 2 * cell
+    png, _ = _request3d("/api/v1/render.png", {"input": smiles, "width": width, "height": height, "style": style, "lighting": lighting,
+                                               "hydrogens": 0, "background": "ffffff" if theme == "light" else "161615"})
+    return png, cols, rows, height
+
+
 def _properties_batch(smiles):
     """Properties for many SMILES in one request, into the cache: a sheet of a thousand takes a few seconds rather than minutes."""
     body, _ = _request("/api/v1/properties", body={"inputs": smiles})
@@ -124,7 +179,7 @@ def _properties(smiles):
     return _store[("props", smiles)]
 
 
-_FETCHERS = {"text": _drawing, "png": _picture, "props": _properties}
+_FETCHERS = {"text": _drawing, "png": _picture, "png3d": _picture3d, "props": _properties}
 _store, _pending, _lock = {}, set(), threading.Lock()
 _workers = threading.BoundedSemaphore(4)
 
@@ -229,13 +284,17 @@ class StructureColumn(Column):
     def calcValue(self, row):
         return str(self.source.getValue(row) or "").strip()
 
+    def picture_key(self, smiles, cols):
+        """What to fetch for a picture of `smiles` in a cell `cols` wide."""
+        return ("png", smiles, cols, self.height, vd.options.molterm_theme)
+
     def displayer_molterm(self, dw, width=None):
         smiles = str(dw.value or "").strip()
         if not smiles:
             return Drawing([], [])
         cols = (width or self.width or vd.options.molterm_cols) - 2
         if mode() == "kitty":
-            picture = cached(("png", smiles, cols, self.height, vd.options.molterm_theme))
+            picture = cached(self.picture_key(smiles, cols))
             if isinstance(picture, MoltermError):
                 return Drawing([["", smiles]], _note(str(picture), "color_error"))
             # blank under the picture, which is placed below the text
@@ -246,6 +305,24 @@ class StructureColumn(Column):
         if isinstance(result, MoltermError):
             return Drawing([["", smiles]], _note(str(result), "color_error"))
         return Drawing([["", smiles]], text_lines(result))
+
+
+class Structure3DColumn(StructureColumn):
+    """The molecule of each row's SMILES in 3D, put in 3D by molterm and drawn by Mol* on a molterm-3d server. Pictures only: 3D has
+    no Braille."""
+
+    def picture_key(self, smiles, cols):
+        return ("png3d", smiles, cols, self.height, vd.options.molterm_theme, vd.options.molterm3d_style, vd.options.molterm3d_lighting)
+
+    def displayer_molterm(self, dw, width=None):
+        smiles = str(dw.value or "").strip()
+        if mode() != "kitty" and smiles:
+            return Drawing([["", smiles]], _note("3D needs Kitty graphics"))
+        cols = (width or self.width or vd.options.molterm_cols) - 2
+        if smiles and isinstance(_store.get(self.picture_key(smiles, cols)), MoltermUnavailable):
+            # molterm-3d is optional: without it the column stays empty but for a quiet word, and everything else works as before
+            return Drawing([["", smiles]], _note("3D unavailable"))
+        return super().displayer_molterm(dw, width)
 
 
 def _source_column(sheet, prefer_structure=False):
@@ -280,6 +357,16 @@ def _add_structure(sheet, source, beside=False):
 @Sheet.api
 def addcolMolecule(sheet):
     return _add_structure(sheet, _source_column(sheet))
+
+
+@Sheet.api
+def addcolMolecule3d(sheet):
+    source = _source_column(sheet)
+    col = Structure3DColumn(f"{source.name}_3d", source)
+    sheet.addColumnAtCursor(col)
+    vd.options.set("disp_multiline_focus", False, sheet)
+    vd.status("in 3D, drawn by Mol* on the molterm-3d server: Alt+Shift+V turns the current row's molecule with the mouse")
+    return col
 
 
 @Sheet.after
@@ -645,7 +732,7 @@ class Pictures:
                 smiles = col.getValue(sheet.rows[rowidx])
                 if not smiles:
                     continue
-                key = ("png", smiles, width - 2, col.height, vd.options.molterm_theme)
+                key = col.picture_key(smiles, width - 2)
                 picture = cached(key)
                 if not isinstance(picture, tuple):
                     continue
@@ -657,6 +744,10 @@ class Pictures:
         return out
 
     def update(self, vd):
+        # VisiData stops drawing a second after the last key, until the next: keep it drawing while pictures are still to come, after
+        # a redraw (the viewer's or the editor's closing, Ctrl+L) or while drawings are fetched, or they'd wait for a key to show
+        if self.redrawn_at is not None or _pending:
+            vd.numTimeouts = 0
         if not self._settled():
             return
         wanted = self.wanted(vd)
@@ -793,20 +884,20 @@ def _run(command):
         return ""
 
 
-def editor_graphics():
+def editor_graphics(what="the editor"):
     """How the editor's pictures reach the terminal: "direct", or "placeholders" through tmux (see molterm's server/placeholders.py).
     Raises MoltermError, saying why, where they can't."""
     if os.environ.get("TMUX"):
         outer = _run(["tmux", "display", "-p", "#{client_termname} #{client_termtype}"])
         if not re.search(r"kitty|ghostty", outer, re.I):
-            raise MoltermError(f"the editor needs Kitty graphics, and tmux says the terminal outside it is '{outer.strip()}', not Kitty or Ghostty")
+            raise MoltermError(f"{what} needs Kitty graphics, and tmux says the terminal outside it is '{outer.strip()}', not Kitty or Ghostty")
         if not re.search(r"on|all", _run(["tmux", "show", "-Apv", "allow-passthrough"])):
-            raise MoltermError("the editor needs Kitty graphics, which tmux passes on only with: tmux set -g allow-passthrough on")
+            raise MoltermError(f"{what} needs Kitty graphics, which tmux passes on only with: tmux set -g allow-passthrough on")
         return "placeholders"
     if os.environ.get("STY"):
-        raise MoltermError("the editor needs Kitty graphics, which screen doesn't pass on")
+        raise MoltermError(f"{what} needs Kitty graphics, which screen doesn't pass on")
     if mode() != "kitty":
-        raise MoltermError("the editor needs Kitty graphics, as in Kitty or Ghostty (set options.molterm_mode to kitty if this terminal has them)")
+        raise MoltermError(f"{what} needs Kitty graphics, as in Kitty or Ghostty (set options.molterm_mode to kitty if this terminal has them)")
     return "direct"
 
 
@@ -841,22 +932,24 @@ class Terminal:
 
 
 def _ask_cells(terminal):
-    """The cell size in pixels, and whether the mouse can report in pixels, from the terminal's answers: (width, height, pixels)."""
+    """The cell size in pixels, and whether the mouse can report in pixels, from the terminal's answers: (width, height, pixels,
+    typed), `typed` being whatever else came meanwhile, such as a key or a mouse press, kept to be handled as input."""
     terminal.write(b"\x1b[16t\x1b[?1016$p\x1b[c")  # the device attributes come last, and every terminal answers them
     reply, deadline = b"", time.monotonic() + 1
     while time.monotonic() < deadline and not re.search(rb"\x1b\[\?[0-9;]*c", reply):
         reply += terminal.read(deadline - time.monotonic())
+    typed = re.sub(rb"\x1b\[6;\d+;\d+t|\x1b\[\?1016;\d\$y|\x1b\[\?[0-9;]*c", b"", reply)
     size = re.search(rb"\x1b\[6;(\d+);(\d+)t", reply)
     if not size:
-        return None, None, False
+        return None, None, False, typed
     height, width = int(size[1]), int(size[2])
-    return width, height, bool(re.search(rb"\x1b\[\?1016;[12]\$y", reply))
+    return width, height, bool(re.search(rb"\x1b\[\?1016;[12]\$y", reply)), typed
 
 
 def edit_in_box(smiles, title, terminal, graphics="direct", step=None):
     """Run the editor on `smiles` in a box over the screen until it's done: the new SMILES, or None if it was cancelled."""
     step = step or _edit_request
-    width, height, pixels = _ask_cells(terminal)
+    width, height, pixels, typed = _ask_cells(terminal)
     fields = {"smiles": smiles, "title": title[:200], "theme": vd.options.molterm_theme}
     if width and height:
         fields.update(cell_width=width, cell_height=height)
@@ -865,7 +958,7 @@ def edit_in_box(smiles, title, terminal, graphics="direct", step=None):
     if graphics == "placeholders":
         fields["placeholders"] = 1
     terminal.write(b"\x1b[?25l\x1b[?1003h\x1b[?1006h" + (b"\x1b[?1016h" if pixels else b""))
-    events, drawn, outcome, output = b"", None, 0, ""
+    events, drawn, outcome, output = typed, None, 0, ""
     try:
         while True:
             size = terminal.size()
@@ -936,6 +1029,165 @@ def editMolecule(sheet):
     return new
 
 
+# A molecule in 3D: molterm-3d's viewer in a box over the sheet, turned with the mouse. As with the editor, the server runs the viewer
+# (Mol*, on its own CPUs) and this passes it the terminal's raw input and prints what comes back, as molterm-3d's own client does.
+
+VIEWER_IDS = (3301, 3302)  # molterm-3d's picture ids, taken in turn
+VIEWER_LEAST = (30, 10)  # the smallest box, counting its frame
+VIEWER_MOST = (140, 44)
+
+
+def viewer_box(height, width):
+    """Where the viewer goes on a screen of this size: (row, col, rows, cols), counting its frame, in the middle below the top bar."""
+    cols, rows = min(width - 4, VIEWER_MOST[0]), min(height - 2, VIEWER_MOST[1])
+    if cols < VIEWER_LEAST[0] or rows < VIEWER_LEAST[1]:
+        raise MoltermError(f"the screen is too small for the 3D viewer, which needs {VIEWER_LEAST[0] + 4} columns and {VIEWER_LEAST[1] + 2} rows")
+    return 1 + (height - 2 - rows) // 2, (width - cols) // 2, rows, cols
+
+
+def _frame(row, col, rows, cols, title):
+    """The box's frame, titled, drawn around where the viewer draws."""
+    inner = cols - 2
+    title = f" {title[:inner - 6]} " if title else ""
+    out = [f"\x1b[{row + 1};{col + 1}H\x1b[2m╭─{title}{'─' * (inner - 1 - len(title))}╮"]
+    for y in range(1, rows - 1):
+        out.append(f"\x1b[{row + y + 1};{col + 1}H│\x1b[{row + y + 1};{col + cols}H│")
+    out.append(f"\x1b[{row + rows};{col + 1}H╰{'─' * inner}╯\x1b[22m")
+    return "".join(out).encode("utf-8")
+
+
+class _Spinner:
+    """A spinner on the frame's bottom edge while the server draws, from 0.4 s on, so that a slow picture doesn't look like a hang; the
+    edge is drawn again when the answer comes."""
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, terminal, row, col, width):
+        self.terminal, self.row, self.col, self.width = terminal, row, col, width
+        self.stop, self.shown = threading.Event(), False
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        if self.stop.wait(0.4):
+            return
+        frame = 0
+        while not self.stop.is_set():
+            self.shown = True
+            text = f" {self.FRAMES[frame % len(self.FRAMES)]} drawing "
+            self.terminal.write(f"\x1b7\x1b[{self.row + 1};{self.col + 1}H\x1b[2m{text}\x1b[22m\x1b8".encode("utf-8"))
+            frame += 1
+            self.stop.wait(0.1)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join()
+        if self.shown:
+            self.terminal.write(f"\x1b7\x1b[{self.row + 1};{self.col + 1}H\x1b[2m{'─' * self.width}\x1b[22m\x1b8".encode("utf-8"))
+
+
+def _view_request(fields):
+    """One step of molterm-3d's viewer: (outcome, state, output), the outcome 0 to go on, 1 finished, 2 failed."""
+    url = server3d_url().rstrip("/") + "/api/v1/view"
+    request = urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode())
+    try:
+        with urllib.request.urlopen(request, timeout=max(vd.options.molterm_timeout, 30)) as response:
+            text = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise MoltermError(f"{server3d_url()} has no 3D viewer: is it a molterm-3d server?") from None
+        raise MoltermError(error.read().decode("utf-8", "replace").strip() or f"the server answered {error.code}") from None
+    except (urllib.error.URLError, OSError) as error:
+        raise MoltermError(f"can't reach {server3d_url()}: {getattr(error, 'reason', error)}") from None
+    first, _, output = text.partition("\n")
+    outcome, _, state = first.partition(" ")
+    return int(outcome), state, output
+
+
+def view_in_box(smiles, title, terminal, graphics="direct", step=None):
+    """Turn `smiles` in 3D in a box over the screen until q: drag to turn, the wheel to zoom, s, c and l for styles, colours and
+    lightings, as in molterm-3d."""
+    step = step or _view_request
+    width, height, pixels, typed = _ask_cells(terminal)
+    fields = {"input": smiles, "title": title[:120], "theme": "light" if vd.options.molterm_theme == "light" else "dark",
+              "style": vd.options.molterm3d_style, "lighting": vd.options.molterm3d_lighting, "hydrogens": 0}
+    if width and height:
+        fields.update(cell_width=width, cell_height=height)
+    if pixels:
+        fields["pixels"] = 1
+    if graphics == "placeholders":
+        fields["placeholders"] = 1
+    terminal.write(b"\x1b[?25l\x1b[?1003h\x1b[?1006h" + (b"\x1b[?1016h" if pixels else b""))
+    events, drawn, outcome, output = typed, None, 0, ""
+    try:
+        while True:
+            size = terminal.size()
+            if events or size != drawn:
+                row, col, rows, cols = viewer_box(*size)
+                if size != drawn:
+                    terminal.write(_frame(row, col, rows, cols, title))
+                with _Spinner(terminal, row + rows - 1, col + cols - 14, 12):
+                    outcome, state, output = step({**fields, "events": events.hex(), "rows": size[0], "cols": size[1],
+                                                   "box": f"{row + 1},{col + 1},{rows - 2},{cols - 2}"})
+                fields.pop("input", None)
+                fields["state"] = state
+                drawn = size
+                if outcome:
+                    break
+                if output:
+                    terminal.write(output.encode("utf-8"))
+            events = terminal.read(1.0)
+    finally:
+        out = []
+        for image in VIEWER_IDS:
+            command = f"\x1b_Ga=d,d=I,i={image if graphics == 'direct' else (image // 255) << 24 | (image % 255 + 1)},q=2\x1b\\"
+            out.append(command if graphics == "direct" else "\x1bPtmux;" + command.replace("\x1b", "\x1b\x1b") + "\x1b\\")
+        out.append("\x1b[?1016l\x1b[?1003l")
+        terminal.write("".join(out).encode("ascii"))
+    if outcome == 2:
+        raise MoltermError(output.strip())
+
+
+@Sheet.api
+def viewMolecule3d(sheet):
+    """Turn the current row's molecule in 3D, in a box over the sheet, until q."""
+    column = _source_column(sheet, prefer_structure=True)
+    row = sheet.cursorRow
+    smiles = str(column.getValue(row) or "").strip() if row is not None else ""
+    if not smiles:
+        vd.fail("no SMILES in this row")
+    try:
+        graphics = editor_graphics("the 3D viewer")
+    except MoltermError as error:
+        vd.fail(str(error))
+    if not available3d():
+        vd.fail(f"3D is unavailable: no molterm-3d at {server3d_url()} (options.molterm3d_url)")
+    label = next((str(c.getValue(row)) for c in sheet.visibleCols if c is not column and not isinstance(c, StructureColumn)), "")
+    pictures.hide()
+    terminal = Terminal()
+    failure = None
+    try:
+        view_in_box(smiles, label or smiles, terminal, graphics)
+    except MoltermError as error:
+        failure = error
+    finally:
+        terminal.close()
+        try:
+            curses.mousemask(0)
+            vd.enableMouse(bool(vd.options.mouse_interval))
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        vd.redraw()
+    if failure:
+        vd.fail(f"molterm-3d: {failure}")
+
+
+Sheet.addCommand("Alt+Shift+D", "addcol-molecule-3d", "addcolMolecule3d()", "add a column of each row's molecule in 3D, drawn by Mol* on a molterm-3d server")
+Sheet.addCommand("Alt+Shift+V", "view-molecule-3d", "viewMolecule3d()", "turn the current row's molecule in 3D with the mouse, in a box over the sheet")
 Sheet.addCommand("Alt+m", "addcol-molecule", "addcolMolecule()", "add a column drawing the molecule of each row's SMILES in the current column")
 Sheet.addCommand("Alt+y", "addcol-molprops", "addcolMolprops()", "add columns of properties computed from the current column's SMILES")
 Sheet.addCommand("Alt+o", "open-molecule", "openMolecule()", "open the current row's molecule on its own sheet, large, with its properties")
@@ -949,6 +1201,8 @@ GraphSheet.addCommand("Alt+t", "toggle-molterm-mode", "toggleMoltermMode()", "dr
 vd.addMenuItems("""
     Column > Add column > molterm structure > addcol-molecule
     Column > Add column > molterm properties > addcol-molprops
+    Column > Add column > molterm 3D structure > addcol-molecule-3d
+    View > molterm > 3D viewer > view-molecule-3d
     Edit > molterm > edit molecule > edit-molecule
     View > molterm > open molecule > open-molecule
     View > molterm > pictures or text > toggle-molterm-mode

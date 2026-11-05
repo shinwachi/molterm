@@ -164,7 +164,8 @@ const HELP = 'drag turn · right-drag move · wheel zoom · arrows turn · s sty
 function statusLine(state, structure, info, cols) {
     // a PDB title can be long, and the facts matter more: what the keys have changed
     const label = structure.label && structure.label !== structure.name ? clip(structure.label, Math.max(12, Math.floor(cols / 4))) : '';
-    const what = [structure.name, label].filter(Boolean).join(' · ');
+    // a title the caller gave, such as a spreadsheet row's name, in place of a SMILES as the name
+    const what = state.t ? clip(state.t, Math.max(12, Math.floor(cols / 3))) : [structure.name, label].filter(Boolean).join(' · ');
     const facts = [`${info.atoms.toLocaleString()} atoms`, info.residues > 2 ? `${info.residues.toLocaleString()} residues` : '',
         state.s === 'auto' ? `auto (${info.style})` : info.style, `colour ${state.c}`, lighting(state),
         state.h ? 'H shown' : 'H hidden'].filter(Boolean).join(' · ');
@@ -180,12 +181,17 @@ function colourNumber(hex) {
 
 /**
  * One step. `form` has cols, rows, events (hex), state or input/data/format to begin, and optionally cell_width, cell_height, pixels
- * (mouse reports in pixels), placeholders (through tmux), background and theme. Returns { status, state, output }: status 0 to go on,
- * 1 finished, 2 failed (output is the reason).
+ * (mouse reports in pixels), placeholders (through tmux), background and theme; title, a name for the status line; and box,
+ * "row,col,rows,cols" (from 0), to draw within that part of the screen rather than all of it, as over a spreadsheet. Returns
+ * { status, state, output }: status 0 to go on, 1 finished, 2 failed (output is the reason).
  */
 async function step(form) {
-    const cols = Math.min(Math.max(parseInt(form.cols, 10) || 80, 20), 500);
-    const rows = Math.min(Math.max(parseInt(form.rows, 10) || 24, 5), 200);
+    // the area drawn in: the screen, or a box on it, whose top left is (top, left)
+    const box = /^\d+,\d+,\d+,\d+$/.test(form.box || '') ? form.box.split(',').map(Number) : null;
+    const [top, left] = box ? box : [0, 0];
+    const cols = Math.min(Math.max((box ? box[3] : parseInt(form.cols, 10)) || 80, 20), 500);
+    const rows = Math.min(Math.max((box ? box[2] : parseInt(form.rows, 10)) || 24, 5), 200);
+    const at = (row, col) => `\x1b[${top + row + 1};${left + col + 1}H`;
     const cellWidth = Math.min(Math.max(parseInt(form.cell_width, 10) || 10, 4), 100);
     const cellHeight = Math.min(Math.max(parseInt(form.cell_height, 10) || 20, 8), 200);
     const pixels = form.pixels === '1';
@@ -205,6 +211,7 @@ async function step(form) {
         state = { k: structure.key, q: [0, 0, 0, 1], z: 1, p: [0, 0], s: renderer.STYLES.includes(form.style) ? form.style : 'auto',
             c: renderer.COLOURS.includes(form.colour) ? form.colour : 'auto', h: form.hydrogens !== '0', f: 0, d: null, size: '',
             l: renderer.LIGHTINGS.includes(form.lighting) ? form.lighting : renderer.LIGHTINGS[0] };
+        if (form.title) state.t = String(form.title).slice(0, 120);
         if (structure.kind === 'molecule' && structure.input.length <= 2000) state.i = structure.input;
         first = true;
     }
@@ -226,7 +233,7 @@ async function step(form) {
     const size = pixels ? [width, height] : [cols, imageRows];
     const result = apply(state, info, events(raw), size);
     if (result === 'quit') return { status: 1, state: encode(state), output: '' };
-    const sized = `${cols}x${rows}`;
+    const sized = box ? `${form.box}` : `${cols}x${rows}`;
     // a rough picture, drawn while a drag went on, is drawn again in full once the button is up
     const settle = !!state.r && !state.d;
     if (!result && !first && !settle && state.size === sized) {
@@ -234,6 +241,7 @@ async function step(form) {
         const status = state.n ? at(rows - 1, 0) + statusLine(state, structure, { atoms: state.n[0], residues: state.n[1], style: state.n[2] }, cols) : '';
         return { status: 0, state: encode(state), output: status };
     }
+    const moved = state.size !== sized;
     state.size = sized;
     if (result || settle || !drawn) {
         drawn = await renderer.draw(structure, look(), view(), width, height, background, { rough: !!state.d && !first });
@@ -244,14 +252,17 @@ async function step(form) {
     const old = IDS[state.f];
     state.f = 1 - state.f;
     const id = IDS[state.f];
-    let output = first ? '\x1b[2J' : '';
+    // the first picture, or one in a box that has moved, on a clean area: a box's own, not the screen's, which has a spreadsheet on it
+    let output = '';
+    if (box && (first || moved)) output = Array.from({ length: rows }, (_, row) => at(row, 0) + ' '.repeat(cols)).join('');
+    else if (first) output = '\x1b[2J';
     if (through) {
         output += kitty.transmit(drawn.png, id, cols, imageRows) + kitty.cells(id, cols, imageRows, (row) => at(row, 0));
         output += kitty.remove(old, true);
     } else {
         output += kitty.remove(id, false) + at(0, 0) + kitty.place(drawn.png, id, cols, imageRows) + kitty.remove(old, false);
     }
-    output += at(rows - 1, 0) + '\x1b[2K' + statusLine(state, structure, drawn.info, cols);
+    output += at(rows - 1, 0) + (box ? '' : '\x1b[2K') + statusLine(state, structure, drawn.info, cols);
     return { status: 0, state: encode(state), output };
 }
 

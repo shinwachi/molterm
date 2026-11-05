@@ -14,6 +14,7 @@ services:
         user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
         environment:
             - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
+            - MOLTERM3D_URL=${MOLTERM3D_URL:-http://molterm-3d-prod-molterm-3d-1:8930}
         volumes:
             - ./data:/app/data
         labels:
@@ -35,6 +36,7 @@ services:
         command: ["python", "demo/live.py"]
         environment:
             - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
+            - MOLTERM3D_URL=${MOLTERM3D_URL:-http://molterm-3d-prod-molterm-3d-1:8930}
             - LIVE_MAX_SESSIONS=${LIVE_MAX_SESSIONS:-4}
         read_only: true
         tmpfs:

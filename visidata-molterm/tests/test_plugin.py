@@ -55,6 +55,8 @@ def server(monkeypatch):
     plugin._store.clear()
     plugin._pending.clear()
     plugin.pictures.placed, plugin.pictures.sent = [], {}
+    plugin.pictures.redrawn_at, plugin.pictures.stale = None, []  # not settling after an earlier test's redraw
+    plugin._down3d[0] = 0.0  # molterm-3d not taken to be away
     return stand_in
 
 
@@ -510,3 +512,144 @@ def test_done_puts_the_new_smiles_in_the_row_from_any_column_and_undo_takes_it_b
     assert sheet.editMolecule() is None
     vd.sync()
     assert sheet.columns[1].getValue(sheet.rows[0]) == "CC(=O)O"
+
+
+# molecules in 3D, from molterm-3d
+
+
+@pytest.fixture
+def server3d(monkeypatch):
+    asked = []
+
+    def answer(path, params=None, timeout=None):
+        asked.append((path, params))
+        if path == "/health":
+            return b"{}", {}
+        if params.get("input") == "bad":
+            raise plugin.MoltermError("Not valid SMILES")
+        return png(params["width"], params["height"]), {}
+    monkeypatch.setattr(plugin, "_request3d", answer)
+    return asked
+
+
+def test_a_3d_column_asks_molterm_3d_and_places_its_pictures_like_the_others(server, server3d, sheet, monkeypatch):
+    vd.options.molterm_mode = "kitty"
+    col = sheet.addcolMolecule3d()
+    assert isinstance(col, plugin.Structure3DColumn) and col.name == "smiles_3d" and col.source is sheet.columns[1]
+    try:
+        laid_out(sheet, col, {0: (2, col.height)})
+        # this sheet's pictures, whatever other sheets earlier tests left on screen
+        assert plugin.pictures._wanted_for(vd, sheet) == []  # asks for the picture; nothing to place yet
+        key = col.picture_key("CCO", 18)
+        assert key[0] == "png3d" and wait_for(key)[1:] == (18, col.height, col.height * 40)
+        path, params = server3d[0]
+        assert path == "/api/v1/render.png" and params["input"] == "CCO" and params["lighting"] == "illustrative"
+        assert (params["width"], params["height"], params["hydrogens"]) == (18 * 20, col.height * 40, 0), "twice a 2D picture's pixels"
+        # filling its cell: row 1 + 2 and column 40 + 1, from 0
+        assert [place[2:] for place in plugin.pictures._wanted_for(vd, sheet)] == [(3, 41, col.height)]
+        vd.options.molterm_mode = "text"
+        assert col.display(col.getCell(sheet.rows[0]), 20).lines == plugin._note("3D needs Kitty graphics")
+    finally:
+        vd.sheets.remove(sheet)
+
+
+class FakeViewer(FakeEditor):
+    """Finishes on q, and otherwise draws."""
+
+    def __call__(self, fields):
+        self.calls.append(dict(fields))
+        if b"q" in bytes.fromhex(fields["events"]):
+            return 1, "s", ""
+        return 0, f"s{len(self.calls)}", "<drawn>"
+
+
+def test_the_3d_viewer_draws_in_a_framed_box_until_q(server):
+    terminal = FakeTerminal([b"", b"\x1b[<0;30;10M\x1b[<32;40;10M", b"q"])
+    viewer = FakeViewer()
+    plugin.view_in_box("CCO", "ethanol", terminal, step=viewer)
+    first = viewer.calls[0]
+    assert first["input"] == "CCO" and first["title"] == "ethanol" and first["lighting"] == "illustrative" and first["hydrogens"] == 0
+    # the frame takes the box's edge, and the viewer the inside of it
+    assert plugin.viewer_box(40, 120) == (1, 2, 38, 116) and first["box"] == "2,3,36,114"
+    assert [c.get("state") for c in viewer.calls] == [None, "s1", "s2"] and "input" not in viewer.calls[1]
+    assert "╭─ ethanol ─".encode() in terminal.written and terminal.written.count(b"<drawn>") == 2
+    assert b"\x1b_Ga=d,d=I,i=3301,q=2\x1b\\" in terminal.written and terminal.written.endswith(b"\x1b[?1016l\x1b[?1003l")
+
+
+def test_the_3d_viewer_spins_on_its_frame_while_the_server_draws(server):
+    terminal = FakeTerminal([b"q"])
+
+    def slow(fields):
+        __import__("time").sleep(0.7)
+        return (1, "s", "") if b"q" in bytes.fromhex(fields["events"]) else (0, "s", "")
+    plugin.view_in_box("CCO", "x", terminal, step=slow)
+    assert "drawing ".encode() in terminal.written and "⠋".encode() in terminal.written
+    # and the edge drawn again over it
+    assert terminal.written.count(("─" * 12).encode()) >= 1
+
+
+def test_the_3d_viewer_says_what_failed(server):
+    with pytest.raises(plugin.MoltermError, match="Not valid"):
+        plugin.view_in_box("bad", "x", FakeTerminal([]), step=lambda fields: (2, "", "Not valid SMILES\n"))
+    with pytest.raises(plugin.MoltermError, match="too small"):
+        plugin.viewer_box(11, 120)
+
+
+def test_the_3d_viewer_opens_on_the_row_from_any_column(server, sheet, monkeypatch):
+    sheet.addcolMolecule()
+    sheet.cursorVisibleColIndex = 0
+    monkeypatch.setattr(plugin, "available3d", lambda: True)
+    monkeypatch.setattr(plugin, "editor_graphics", lambda what="": "direct")
+    monkeypatch.setattr(plugin, "Terminal", lambda: FakeTerminal([]))
+    asked = []
+    monkeypatch.setattr(plugin, "view_in_box", lambda smiles, title, terminal, graphics: asked.append((smiles, title, graphics)))
+    monkeypatch.setattr(plugin.curses, "mousemask", lambda mask: (mask, 0), raising=False)
+    monkeypatch.setattr(vd, "redraw", lambda: None)
+    sheet.viewMolecule3d()
+    assert asked == [("CCO", "ethanol", "direct")]
+
+
+def test_a_press_while_the_terminal_is_asked_its_cell_size_is_kept_as_the_first_input(server):
+    press = b"\x1b[<0;30;10M\x1b[<32;34;10M"
+    terminal = FakeTerminal([b"q"], answers=b"\x1b[6;20;10t" + press + b"\x1b[?62;22c")
+    viewer = FakeViewer()
+    plugin.view_in_box("CCO", "x", terminal, step=viewer)
+    assert bytes.fromhex(viewer.calls[0]["events"]) == press and viewer.calls[0]["cell_width"] == 10
+
+
+# without molterm-3d, which is optional: 3D is left out, and the rest works as before
+
+
+def test_without_molterm_3d_the_3d_column_says_so_quietly_and_asks_once(server, sheet, monkeypatch):
+    vd.options.molterm_mode = "kitty"
+    vd.options.molterm3d_url = "http://127.0.0.1:9"  # nothing listens there
+    try:
+        col3d, col2d = sheet.addcolMolecule3d(), sheet.addcolMolecule()
+        assert col3d.display(col3d.getCell(sheet.rows[0]), 20).lines == plugin._note("drawing…")
+        key = col3d.picture_key("CCO", 18)
+        assert isinstance(wait_for(key), plugin.MoltermUnavailable)
+        assert col3d.display(col3d.getCell(sheet.rows[0]), 20).lines == plugin._note("3D unavailable")
+        # another row isn't asked for while it's away, and the 2D column draws as ever
+        asked = []
+        monkeypatch.setattr(plugin, "_render3d", lambda *args: asked.append(args))
+        col3d.display(col3d.getCell(sheet.rows[1]), 20)
+        assert isinstance(wait_for(col3d.picture_key("bad", 18)), plugin.MoltermUnavailable) and asked == []
+        col2d.display(col2d.getCell(sheet.rows[0]), 20)
+        assert wait_for(("png", "CCO", 18, col2d.height, vd.options.molterm_theme))[1:] == (8, 4, 75)
+    finally:
+        vd.options.molterm3d_url = "http://molterm-3d.localhost"
+
+
+def test_without_molterm_3d_the_viewer_says_so_and_leaves_the_sheet_alone(server, sheet, monkeypatch):
+    vd.options.molterm3d_url = "http://127.0.0.1:9"
+    try:
+        assert plugin.available3d() is False
+        monkeypatch.setattr(plugin, "editor_graphics", lambda what="": "direct")
+        hidden = []
+        monkeypatch.setattr(plugin.pictures, "hide", lambda: hidden.append(1))
+        monkeypatch.setattr(plugin, "Terminal", lambda: pytest.fail("the terminal was taken"))
+        with pytest.raises(Exception, match="3D is unavailable: no molterm-3d at http://127.0.0.1:9"):
+            sheet.viewMolecule3d()
+        assert hidden == []
+    finally:
+        vd.options.molterm3d_url = "http://molterm-3d.localhost"

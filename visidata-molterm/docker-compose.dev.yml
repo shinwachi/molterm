@@ -4,6 +4,7 @@ services:
         restart: "no"
         environment:
             - MOLTERM_URL=http://molterm-dev-molterm-1:8910
+            - MOLTERM3D_URL=http://molterm-3d-dev-molterm-3d-1:8930
         volumes:
             - .:/app
         command: ["flask", "--app", "demo/app.py", "run", "--host", "0.0.0.0", "--port", "8920"]
@@ -12,5 +13,6 @@ services:
         restart: "no"
         environment:
             - MOLTERM_URL=http://molterm-dev-molterm-1:8910
+            - MOLTERM3D_URL=http://molterm-3d-dev-molterm-3d-1:8930
         volumes:
             - .:/app:ro

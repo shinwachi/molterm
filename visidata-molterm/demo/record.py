@@ -21,7 +21,20 @@ COLS, ROWS = 116, 34
 QUIET, LONGEST = 0.9, 20.0  # a step ends once the output has paused this long, or after the longest wait
 DOWN, UP, ENTER, ESC = "j", "k", "\r", "\x1b"
 
-# (keys to send, what the viewer sees pressed, caption, pause on the frame in ms)
+
+# the mouse, as SGR reports from a terminal (columns and rows from 1): the left button down, moved held down, and up
+def _press(x, y):
+    return f"\x1b[<0;{x};{y}M"
+
+
+def _drag(xs, y):
+    return "".join(f"\x1b[<32;{x};{y}M" for x in xs)
+
+
+def _release(x, y):
+    return f"\x1b[<0;{x};{y}m"
+
+# (keys to send, what the viewer sees pressed, caption, pause on the frame in ms[, seconds of quiet that end the step])
 STEPS = [
     (None, None, "VisiData, a spreadsheet for the terminal, has opened drugs.csv: names and SMILES, as plain text.", 3500),
     ("l", "l", "The cursor moves to the smiles column.", 1600),
@@ -46,7 +59,19 @@ STEPS = [
     ("\t", "Tab", "Tab goes back to the chart.", 2000),
     ("\r", "Enter", "Enter opens the rows under the chart's cursor as a sheet of their own, structures and all.", 4500),
     ("qq", "q q", "q twice closes it and the chart.", 2500),
-    ("\x1bt", "Alt+t", "In Braille once more, for the last look.", 3500),
+    ("ghl", "g h l", "Back to the smiles column.", 1500),
+    ("\x1bD", "Alt+Shift+D", "Alt+Shift+D adds the molecules in 3D: put in 3D by molterm, drawn by Mol* on the molterm-3d server, in its "
+     "illustrative style.", 6000, 2.5),
+    ("\x1bV", "Alt+Shift+V", "Alt+Shift+V opens the row's molecule in molterm-3d's viewer, in a box over the sheet.", 4500, 3.0),
+    (f"{_press(40, 16)}{_drag(range(42, 52, 2), 16)}", "drag", "Dragging turns it, as a trackball: the near side follows the "
+     "mouse...", 2500),
+    (f"{_drag(range(52, 60, 2), 17)}", "drag", "...each frame drawn by Mol* on the server as the mouse moves (a big "
+     "structure comes rough until the button is up)...", 2500),
+    (_release(58, 17), "release", "...and it stays as it was turned.", 2500),
+    ("l", "l", "l steps through the lightings: Mol*'s standard light, with shading...", 3500),
+    ("ss", "s s", "...and s through the styles: ball-and-stick, then spacefill.", 4000),
+    ("q", "q", "q closes the viewer, and the sheet is as it was.", 2500, 3.0),
+    ("\x1bt", "Alt+t", "In Braille once more, for the last look. 3D has no Braille: it needs Kitty graphics.", 4000),
     ("\x1bo", "Alt+o", "The molecule's sheet works in Braille as well, in colour.", 5000),
     ("q", "q", "That's the plugin: import molterm_visidata in ~/.visidatarc.", 4000),
 ]
@@ -104,11 +129,12 @@ def record(steps=STEPS, cols=COLS, rows=ROWS, csv=os.path.join(HERE, "drugs.csv"
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     frames = []
     try:
-        for keys, shown, caption, pause in steps:
+        for keys, shown, caption, pause, *wait in steps:
             if keys:
                 os.write(fd, keys.encode())
-            # the first screen waits for VisiData to start; later ones for the server's drawings too
-            output = _drain(fd, decoder, LONGEST)
+            # the first screen waits for VisiData to start; later ones for the server's drawings too, and a step can wait longer
+            # for quiet, as one that asks the terminal something no one here answers, and then draws
+            output = _drain(fd, decoder, LONGEST, *wait)
             frames.append({"caption": caption, "key": shown, "output": output, "pause": pause})
     finally:
         try:
