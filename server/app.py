@@ -7,6 +7,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
 import board
+import conformer
 import editor
 import graphics
 import placeholders
@@ -358,6 +359,20 @@ def properties_batch():
         results.append({"formula": parsed.to_dict()["formula"],
                         "properties": {**medchem.descriptors(parsed.mol), **medchem.alert_counts(parsed.mol)}})
     return jsonify(results=results)
+
+
+@app.route("/api/v1/conformer.sdf", methods=["GET", "POST"])
+def conformer_sdf():
+    """The structure in 3D, as an SDF record with hydrogens, for viewers such as molterm-3d: ?input=<SMILES or molblock>[&format=], or the
+    same as form fields. A molblock with 3D coordinates keeps them; anything else is embedded by RDKit (ETKDG, then MMFF94), the same way
+    each time."""
+    plain = {"Content-Type": "text/plain; charset=utf-8"}
+    values = request.values
+    try:
+        sdf = conformer.embed(values.get("input"), values.get("format", "auto"))
+    except (molecule.ParseError, conformer.ConformerError) as e:
+        return e.message + "\n", 400, plain
+    return sdf, 200, {"Content-Type": "chemical/x-mdl-sdfile; charset=utf-8", "Cache-Control": "max-age=3600"}
 
 
 @app.route("/api/v1/render.png")

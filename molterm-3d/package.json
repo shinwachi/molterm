@@ -1,0 +1,19 @@
+{
+  "name": "molterm-3d",
+  "version": "0.1.0",
+  "private": true,
+  "description": "molterm in 3D: Mol* drawing molecules and proteins in the terminal, and on a web page",
+  "author": "Shinichiro Wachi",
+  "license": "MIT",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js"
+  },
+  "dependencies": {
+    "gl": "8.1.6",
+    "jpeg-js": "0.4.4",
+    "molstar": "5.13.1",
+    "pngjs": "6.0.0"
+  }
+}

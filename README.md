@@ -15,9 +15,15 @@ Created 2026-10-31 from a Flask project template.
 Each environment is its own compose project (`molterm-dev`, `molterm-prod`), so they can run side by side.
 
 `visidata-molterm/` is a separate sub-project: a [VisiData](https://www.visidata.org/) plugin that draws molecules in a spreadsheet's
-cells, as Kitty pictures or coloured Braille, with a recorded demo at http://molterm-vd-dev.localhost and a live one, where anyone
-can use VisiData on 1000 compounds in a locked-down session, at http://molterm-vd-dev.localhost/live. It has its own Makefile,
+cells, as Kitty pictures or coloured Braille, with a recorded demo at http://molterm-vd.localhost and a live one, where anyone
+can use VisiData on 1000 compounds in a locked-down session, at http://molterm-vd.localhost/live (dev: `molterm-vd-dev`). It has its own Makefile,
 containers and README, and uses this server's `/api/v1/render` (with `properties`), `/api/v1/properties` and `/api/v1/render.png`.
+
+`molterm-3d/` is a second sub-project: structures in 3D, drawn by [Mol*](https://molstar.org/) running headless in Node, in the
+terminal (`molterm3d 1crn`: drag to turn, wheel to zoom, Kitty graphics, through tmux too) and on a web page with Mol*'s own viewer,
+at http://molterm-3d-dev.localhost (prod: `molterm-3d`). It puts SMILES and molblocks in 3D with this server's
+`/api/v1/conformer.sdf` (RDKit's ETKDG, then MMFF94, the same shape every time; a molblock already in 3D keeps its coordinates), and
+fetches PDB entries from RCSB itself. See its README.
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
 
 ## Status

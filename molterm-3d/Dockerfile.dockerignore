@@ -1,0 +1,11 @@
+# the build context is the repository root; keep the main app, the other sub-project and caches out of this image
+**/node_modules
+**/__pycache__
+molterm-3d/data
+data
+tests
+visidata-molterm
+server/*
+!server/static/house.css
+credentials_norepo.env
+molterm

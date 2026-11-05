@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>molterm 3D</title>
+    <link rel="stylesheet" href="/vendor/house.css">
+    <!-- Mol*'s own look, light or dark with the page -->
+    <link rel="stylesheet" href="/vendor/molstar/theme/light.css" media="(prefers-color-scheme: light)">
+    <link rel="stylesheet" href="/vendor/molstar/theme/dark.css" media="(prefers-color-scheme: dark)">
+    <style>
+        #controls { align-items: center; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+        #input { width: min(46ch, 100%); font-family: monospace; }
+        #message { color: var(--text-2); font-size: var(--fs-sm); min-height: 1.4em; margin: 0 0 var(--sp-2); }
+        #message.err { color: var(--err); }
+        #viewer { position: relative; height: min(68vh, 720px); border-radius: 4px; overflow: hidden; background: var(--surface); }
+        .about { max-width: 90ch; margin-top: var(--sp-4); }
+        .about pre { font-family: monospace; font-size: var(--fs-sm); background: var(--surface-2); padding: var(--sp-2) var(--sp-3);
+                     border-radius: 4px; overflow-x: auto; }
+        .about code { font-family: monospace; }
+        #picture { max-width: 100%; border-radius: 4px; background: var(--surface); }
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <span class="brand">molterm 3D</span>
+    <span class="spacer"></span>
+    <nav>
+        <a class="btn quiet" href="{{MOLTERM_URL}}">molterm</a>
+        <a class="btn quiet" href="/health">Health</a>
+    </nav>
+</header>
+<main>
+    <form class="toolbar" id="controls">
+        <input class="search" id="input" name="input" value="1crn" spellcheck="false" autocomplete="off"
+               aria-label="PDB id or SMILES" placeholder="PDB id or SMILES">
+        <button class="btn primary" type="submit">View</button>
+        <span class="faint">try</span>
+        <button class="btn quiet sample" type="button" data-input="4hhb">4hhb</button>
+        <button class="btn quiet sample" type="button" data-input="1stp">1stp</button>
+        <button class="btn quiet sample" type="button" data-input="CN1C=NC2=C1C(=O)N(C(=O)N2C)C">caffeine</button>
+        <button class="btn quiet sample" type="button" data-input="CC(=O)Oc1ccccc1C(=O)O">aspirin</button>
+        <button class="btn quiet sample" type="button" data-input="CC(C)Cc1ccc(cc1)[C@@H](C)C(=O)O">ibuprofen</button>
+    </form>
+    <p id="message" aria-live="polite">Loading Mol*…</p>
+    <div id="viewer"></div>
+
+    <section class="about">
+        <h2>In the terminal</h2>
+        <p>The same structures, drawn by Mol* on this server and shown in the terminal with Kitty graphics: in Kitty and Ghostty, and in
+        both inside tmux with <code>allow-passthrough on</code>. Drag to turn, right-drag to move, the wheel to zoom, <code>s</code> and
+        <code>c</code> for styles and colours, <code>h</code> for hydrogens, <code>q</code> to quit.</p>
+        <pre>curl -so molterm3d {{PUBLIC_URL}}/molterm3d &amp;&amp; chmod +x molterm3d
+./molterm3d 1crn
+./molterm3d 'CC(=O)Oc1ccccc1C(=O)O'
+./molterm3d -s spacefill ligand.sdf</pre>
+        <p>A picture of what the terminal gets, from <code>/api/v1/render.png</code>, in the style and colours chosen here:</p>
+        <div class="toolbar">
+            <label>style <select id="style">{{STYLES}}</select></label>
+            <label>colour <select id="colour">{{COLOURS}}</select></label>
+            <label>turn <input id="turn" type="range" min="-180" max="180" value="0"></label>
+        </div>
+        <p><img id="picture" alt="The structure as the terminal viewer draws it" width="600" height="450"></p>
+        <p class="faint">Structures: PDB entries from RCSB, kept here once fetched; SMILES and molblocks put in 3D by
+        <a href="{{MOLTERM_URL}}">molterm</a>'s RDKit (ETKDG, then MMFF94). Drawn by <a href="https://molstar.org/">Mol*</a>.</p>
+    </section>
+</main>
+<script src="/vendor/molstar/molstar.js"></script>
+<script src="/static/page.js"></script>
+</body>
+</html>

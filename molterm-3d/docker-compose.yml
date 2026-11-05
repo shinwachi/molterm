@@ -1,0 +1,34 @@
+# molterm-3d beside the main app: Mol* drawing structures for terminals and a web page. Built from the repository's root to share its
+# stylesheet. 3D coordinates for SMILES come from the molterm server at $MOLTERM_URL; PDB entries from RCSB, kept in data/.
+networks:
+    traefik:
+        external: true
+
+services:
+    molterm-3d:
+        image: molterm-3d:${APP_TAG:-latest}
+        build:
+            context: ..
+            dockerfile: molterm-3d/Dockerfile
+        restart: unless-stopped
+        # an init as PID 1: xvfb-run, there, never hears from Xvfb that the display is ready
+        init: true
+        user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+        environment:
+            - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
+            - PUBLIC_URL=http://${APP_HOST:-molterm-3d.localhost}
+            - APP_ENV=${APP_TAG:-prod}
+        volumes:
+            - ./data:/app/data
+        # software rendering is CPU-bound; keep it from taking the machine
+        cpus: 4
+        mem_limit: 3g
+        labels:
+            - traefik.enable=true
+            - traefik.docker.network=traefik
+            - traefik.http.routers.${ROUTER:-molterm-3d}.rule=Host(`${APP_HOST:-molterm-3d.localhost}`)
+            - traefik.http.routers.${ROUTER:-molterm-3d}.service=${ROUTER:-molterm-3d}
+            - traefik.http.routers.${ROUTER:-molterm-3d}.entrypoints=web
+            - traefik.http.services.${ROUTER:-molterm-3d}.loadbalancer.server.port=8930
+        networks:
+            - traefik

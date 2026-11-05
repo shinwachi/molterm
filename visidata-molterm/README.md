@@ -86,7 +86,7 @@ newer molterm server", and `Alt+y` falls back to one request per structure.
 
 ## The demo
 
-http://molterm-vd-dev.localhost (dev) plays a real VisiData session in a web terminal that shows Kitty graphics. `demo/record.py`
+http://molterm-vd.localhost (dev: http://molterm-vd-dev.localhost) plays a real VisiData session in a web terminal that shows Kitty graphics. `demo/record.py`
 runs VisiData with the plugin in a pseudo-terminal of 116 by 34 cells, against the molterm server, presses the keys in its script with
 `TERM=xterm-kitty`, and keeps the terminal's output between one key and the next. The page prints those frames back at that size, with
 the key and a caption. It shows `demo/drugs.csv` gaining structures, scrolling, Braille and back, properties, a sort by cLogP, a
@@ -106,7 +106,7 @@ time, and keeps the 24 most recent sizes in `data/`; it answers 503 while record
 
 ## The live demo
 
-http://molterm-vd-dev.localhost/live is VisiData itself, for anyone with a browser: each visitor gets their own VisiData with the
+http://molterm-vd.localhost/live is VisiData itself, for anyone with a browser: each visitor gets their own VisiData with the
 plugin, on a library of 1000 compounds, in the same web terminal. The library is every amide of 40 carboxylic acids and 25 amines
 (`demo/library.py`), made up but real structures, written to `/tmp` when the service starts.
 
@@ -143,7 +143,8 @@ VisiData can run Python and shell commands and read and write files, so a sessio
 Docker only, from this folder, with the main molterm dev service running:
 
 ```sh
-make dev        # build and start -> http://molterm-vd-dev.localhost
+make dev        # build and start -> http://molterm-vd-dev.localhost, against the dev molterm server
+make build up ENV=prod   # production -> http://molterm-vd.localhost, against http://molterm.localhost
 make test       # the tests, in the container
 make record     # record the demo again now
 make vd         # VisiData with the plugin on demo/drugs.csv, in this terminal (FILE=... for another)

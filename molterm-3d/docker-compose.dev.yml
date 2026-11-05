@@ -1,0 +1,10 @@
+# Layered on docker-compose.yml for ENV=dev: the sources bind-mounted over the image's, restarted by `node --watch` when they change.
+services:
+    molterm-3d:
+        restart: "no"
+        volumes:
+            - ./src:/app/src
+            - ./public:/app/public
+            - ./client:/app/client
+            - ./tests:/app/tests
+        command: ["xvfb-run", "-a", "-s", "-screen 0 1280x1024x24", "node", "--watch", "src/server.js"]
