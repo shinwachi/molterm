@@ -62,12 +62,20 @@ is removed, so nothing flickers. A drag costs about 0.1 s on this server for a s
 second, as Mol* builds its geometry. From 0.4 s on, a spinner turns at the end of the status line (and on the cursor's line for `-p`),
 so a slow picture doesn't look like a hang; the next answer writes the status line again over it.
 
-Speed. This OpenGL (llvmpipe, without `EXT_frag_depth`) can't use Mol*'s sphere impostors, so every atom is a mesh, and meshes go
-through one core: a structure's cost is mostly its triangles, not the picture's size. So while a drag goes on, a structure that took
-over 150 ms to draw is drawn rough, with Mol*'s low-quality meshes (made the first time they're needed) and a quarter of the pixels, and
-drawn again in full when the button is up. Keys, the wheel and printed pictures are always drawn in full. PNGs are written with one
-filter instead of pngjs trying five on every row (four times faster, a few percent larger), and llvmpipe is given as many threads as
-the container has CPUs (`LP_NUM_THREADS=4`), not the host's 128.
+Speed. Profiled by timing every WebGL call: nearly all of a frame is Mol*'s draw calls, inside Mesa's llvmpipe. Mesh vertices go
+through one core; pixels are shaded on all eight. headless-gl leaves `EXT_frag_depth` out of its list though the ANGLE under it has
+it, so Mol* drew every atom as a mesh (320 triangles each for 4HHB); the renderer passes the extension on (`gl()` in `renderer.js`),
+and Mol* now draws atoms and bonds as impostors, a quad each, shaded as a sphere or cylinder, which look the same. Occlusion is
+computed at half the width and height, blurred anyway. While a drag goes on, a structure that took over 150 ms to draw is drawn rough,
+with Mol*'s low-quality meshes (cartoons and surfaces are still meshes) and a quarter of the pixels, and in full when the button is up;
+keys, the wheel and printed pictures are always in full. PNGs are written with one filter instead of pngjs trying five on every row
+(four times faster, a few percent larger), and llvmpipe has as many threads as the container has CPUs (`LP_NUM_THREADS=8`), not the
+host's 128.
+
+What a full 1.6-megapixel frame of 4HHB spacefill, illustrative, costs now (0.6 s): shading, mostly per pixel, 0.45 s; reading the
+pixels back 0.06 s; the PNG 0.045 s; Mol*'s JavaScript, base64 and the shell client's handling of the 0.9 MB answer (0.03 s) the
+rest. A Rust PNG encoder would save about 0.03 s of it, not worth a native module; the rest is Mesa's. What would still pay: more CPUs
+(8 took that frame from 0.62 s to 0.42 s, so the cap is now 8), a smaller pixel cap than 1.6 megapixels, or a GPU.
 
 Three Mol* contexts are kept, each with one structure drawn one way; changing style or colour builds it again. Pictures are capped at
 1.6 megapixels and the terminal scales them up.
@@ -120,7 +128,7 @@ make build up ENV=prod   # production -> http://molterm-3d.localhost, against ht
 The image is built from the repository's root, to share the house stylesheet. Node 22 on Debian; headless-gl is compiled in a
 build stage, as it has no prebuilt binary for this Node. Versions are pinned in `package-lock.json`. The container runs `xvfb-run`
 under an init (`init: true`: as PID 1, xvfb-run never hears that the display is ready). Dev bind-mounts `src/`, `public/`, `client/`
-and `tests/` and restarts on changes (`node --watch`). PDB entries are kept in `data/pdb/` (git-ignored). CPU is capped at 4 and memory
+and `tests/` and restarts on changes (`node --watch`). PDB entries are kept in `data/pdb/` (git-ignored). CPU is capped at 8 and memory
 at 3 GB, since software rendering can take a machine.
 
 | path | job |
@@ -128,7 +136,7 @@ at 3 GB, since software rendering can take a machine.
 | `src/server.js` | routes, the page, health |
 | `src/viewer.js` | the terminal viewer's steps: input, the view, frames; and printed pictures |
 | `src/showcase.js`, `public/showcase.*` | the `/showcase` demo: the script, which drives the viewer as the client would, and the page that plays it |
-| `src/renderer.js` | Mol* contexts, styles and colours, the camera, PNGs |
+| `src/renderer.js` | Mol* contexts, styles and colours, the camera, PNGs; headless-gl with `EXT_frag_depth` |
 | `src/structures.js` | PDB ids, files, and SMILES via molterm |
 | `src/kitty.js` | Kitty graphics and tmux placeholders, as molterm's `server/placeholders.py` |
 | `client/molterm3d.sh` | the client |
@@ -144,11 +152,14 @@ at 3 GB, since software rendering can take a machine.
 - `/showcase` watched in Chrome from start to end: the viewer turned, zoomed, moved, relit, recoloured and restyled; the four lightings
   from the same side; streptavidin's styles; lysozyme without its water; imatinib; the printed pictures scrolling with the shell and
   still in its history on the way back. No console errors. The lighting choice on the main page draws.
-- 23 tests now, with a drag drawn rough and the release in full.
+- 24 tests now, with a drag drawn rough and the release in full, and `EXT_frag_depth` offered and compiling.
+- With impostors, through the dev URL at 1.6 megapixels: 4HHB spacefill in full 0.58 s (1.3 s with meshes), rough 0.17 to 0.19 s;
+  4HHB cartoon in full 0.41 to 0.49 s, rough 0.1 s; 1CRN cartoon in full 0.3 s, rough 0.09 s. At 800 by 480, 4HHB spacefill takes
+  0.15 s in full (0.7 s with meshes). Impostor and half-resolution occlusion pictures compared by eye with the mesh ones: the same.
 - A drag through the dev URL at 200 by 50 cells of 10 by 20 pixels (1.6 megapixels), 4HHB spacefill: 1.3 s a frame before, 0.15 to
   0.3 s rough, then 1.3 s for the full picture on release; 4HHB cartoon 0.15 to 0.3 s rough, 0.6 s in full. The spinner, run in a pty
   in the container, for the viewer and `-p`; the web page fades the picture and says "Drawing…" until it comes (Chrome, no errors).
-- Low quality looks the same as full for cartoons and sticks; spheres get visibly faceted, so it's kept for drags.
+- Low quality looks the same as full for cartoons and sticks; mesh spheres got visibly faceted, so it was kept for drags.
 - Time to draw each lighting on llvmpipe, 560 by 440: 1CRN cartoon 40 to 60 ms, 4HHB cartoon 180 to 210 ms, 4HHB spacefill 670 to 810 ms.
   Illustrative costs about 15% more than standard.
 - Through the dev URL: 1CRN first frame 0.78 s, a drag 0.13 s; a bad SMILES gives molterm's message.
@@ -160,8 +171,9 @@ at 3 GB, since software rendering can take a machine.
 - The showcase needs 90 columns by 30 rows at its smallest font, so it can't start on a phone, and it sizes itself once.
 - A state saved before lighting was added (none outlive a session) is drawn in standard light, as it was then.
 - SMILES in production need molterm 0.1.3 (with `/api/v1/conformer.sdf`) running there; PDB entries and files work without.
-- Full pictures of big structures in spacefill or surface still take a second or more at 1.6 megapixels: the 4-CPU cap and one core
-  for meshes are the limit. A GPU, or Mol*'s impostors (which need `EXT_frag_depth`, missing from headless-gl), would change that.
+- Full pictures at 1.6 megapixels still take about half a second for a structure like 4HHB, a surface more: the 8 CPUs are the limit.
+- The `EXT_frag_depth` shim reaches into headless-gl's `src/javascript/native-gl` to see what ANGLE offers; another version of `gl`
+  laid out otherwise falls back to meshes, slower but right.
 - A held button with no motion keeps the rough picture until it's released.
 - No spinning on its own: the client only asks when something is typed or the window changes.
 - One structure at a time per Mol* context and all drawing queued, so many viewers at once will wait on each other.

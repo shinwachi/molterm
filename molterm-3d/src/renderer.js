@@ -2,8 +2,32 @@
 // Mol* in Node: a few headless plugin contexts, each holding one structure drawn one way, rendering it from any angle to a PNG.
 // Rendering is software OpenGL on a virtual display (see the Dockerfile), so the work is queued: one picture at a time.
 
-const gl = require('gl');
+const headlessGl = require('gl');
 const pngjs = require('pngjs');
+
+/** headless-gl, with EXT_frag_depth passed on from the ANGLE under it. headless-gl lists only the extensions it wraps, and leaves this
+ * one out, though ANGLE has it and needs nothing more than the name: without it Mol* draws every atom and bond as a mesh, whose
+ * vertices llvmpipe works through on one core, and with it as an impostor, a quad shaded as a sphere or cylinder on all of them. A
+ * 4HHB spacefill at 800 by 480 takes 0.15 s instead of 0.7 s, and looks the same. */
+function gl(...args) {
+    const context = headlessGl(...args);
+    if (!context || !nativeExtensions(context).includes('GL_EXT_frag_depth')) return context;
+    const getExtension = context.getExtension.bind(context);
+    const getSupportedExtensions = context.getSupportedExtensions.bind(context);
+    const fragDepth = {}; // no constants: the extension is all in the shaders, which ANGLE compiles
+    context.getExtension = (name) => (String(name).toLowerCase() === 'ext_frag_depth' ? fragDepth : getExtension(name));
+    context.getSupportedExtensions = () => getSupportedExtensions().concat(['EXT_frag_depth']);
+    return context;
+}
+
+function nativeExtensions(context) {
+    try {
+        const { NativeWebGLRenderingContext } = require('gl/src/javascript/native-gl');
+        return NativeWebGLRenderingContext.prototype.getSupportedExtensions.call(context) || [];
+    } catch {
+        return []; // another headless-gl, laid out otherwise: meshes, as before
+    }
+}
 const { HeadlessPluginContext } = require('molstar/lib/commonjs/mol-plugin/headless-plugin-context');
 const { DefaultPluginSpec } = require('molstar/lib/commonjs/mol-plugin/spec');
 const { Vec3, Quat, Mat3 } = require('molstar/lib/commonjs/mol-math/linear-algebra');
@@ -20,9 +44,9 @@ const SCENES = 3; // contexts kept, each with its own GL context; the least rece
 const MAX_PIXELS = 1600 * 1000; // larger windows get a smaller picture, which the terminal scales up
 const FOV = Math.PI / 4; // narrower than the plugin's 90 degrees, so near atoms aren't swollen
 const CANVAS = { width: 640, height: 480 }; // the contexts' own canvas; pictures are drawn into targets of the size asked for
-// While a drag goes on, a structure that takes longer than this to draw is drawn rough: with Mol*'s low-quality meshes and a quarter of
-// the pixels. This OpenGL has no EXT_frag_depth, so Mol* can't use its sphere impostors and every atom is a mesh, drawn on one core;
-// low quality cuts a 4HHB spacefill from 0.7 s to 0.1 s. The picture is drawn again in full when the drag ends.
+// While a drag goes on, a structure that takes longer than this to draw is drawn rough: with Mol*'s low-quality meshes (cartoons and
+// surfaces are meshes, whose vertices llvmpipe works through on one core) and a quarter of the pixels (impostors and lighting are
+// shaded per pixel). The picture is drawn again in full when the drag ends.
 const ROUGH = { above: 150, scale: 0.5 }; // ms, and the scale of each side; tests change `above`
 
 // What `s`, `c` and `l` step through in the terminal, and the web page's choices
@@ -33,7 +57,8 @@ const LIGHTINGS = ['illustrative', 'standard', 'occlusion', 'outline'];
 
 const OUTLINE = { name: 'on', params: { scale: 1, color: Color(0x000000), threshold: 0.33, includeTransparent: true } };
 const OCCLUSION = { name: 'on', params: { multiScale: { name: 'off', params: {} }, radius: 5, bias: 0.8, blurKernelSize: 15,
-    blurDepthBias: 0.5, samples: 32, resolutionScale: 1, color: Color(0x000000), transparentThreshold: 0.4 } };
+    blurDepthBias: 0.5, samples: 32, resolutionScale: 0.5, color: Color(0x000000), transparentThreshold: 0.4 } };
+// occlusion at half the picture's width and height, blurred anyway: about 0.1 s less a frame at 1.6 megapixels, and looks the same
 const OFF = { name: 'off', params: {} };
 const POSTPROCESSING = {
     illustrative: { outline: OUTLINE, occlusion: OCCLUSION, shadow: OFF },
@@ -242,4 +267,4 @@ function draw(structure, look, view, width, height, background, options = {}) {
     });
 }
 
-module.exports = { draw, fit, STYLES, COLOURS, LIGHTINGS, ROUGH };
+module.exports = { draw, fit, gl, STYLES, COLOURS, LIGHTINGS, ROUGH };
