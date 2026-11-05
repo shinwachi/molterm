@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Showcase · molterm 3D</title>
+    <link rel="stylesheet" href="/vendor/house.css">
+    <style>
+        #controls { margin-bottom: var(--sp-2); align-items: center; }
+        #caption { margin: 0 0 var(--sp-2); min-height: 3em; max-width: 90ch; }
+        #progress { color: var(--text-2); font-size: var(--fs-sm); }
+        /* black on white whatever the page's theme, since that's what this demo is showing */
+        #screen { background: #ffffff; border-radius: 4px; padding: var(--sp-2); height: calc(100vh - 220px); min-height: 480px; overflow: hidden; }
+        #frame { position: relative; height: 100%; }
+        #terminal { position: absolute; left: 0; top: 0; }
+        #pointer { position: absolute; left: 0; top: 0; width: 18px; height: 24px; pointer-events: none; display: none; transition: transform 600ms ease-in-out; z-index: 2; }
+        #pointer.quick { transition-duration: 110ms; transition-timing-function: linear; }
+        #pointer svg { display: block; }
+        #pointer.clicking svg { transform: scale(0.8); transform-origin: 0 0; }
+        #keycap { position: absolute; left: 0; top: 0; display: none; z-index: 2; padding: 2px 9px; background: #000000; color: #ffffff; border-radius: 4px; font: bold 15px monospace; }
+        .about { max-width: 90ch; margin-top: var(--sp-3); color: var(--text-2); font-size: var(--fs-sm); }
+        .about code { font-family: monospace; }
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <span class="brand">molterm 3D</span>
+    <span class="spacer"></span>
+    <nav>
+        <a class="btn quiet" href="/">Viewer</a>
+        <a class="btn quiet" href="/showcase" aria-current="page">Showcase</a>
+        <a class="btn quiet" href="{{MOLTERM_URL}}">molterm</a>
+        <a class="btn quiet" href="/health">Health</a>
+    </nav>
+</header>
+<main>
+    <div class="toolbar" id="controls">
+        <button class="btn primary" id="play" type="button">Stop</button>
+        <button class="btn" id="restart" type="button">Start again</button>
+        <span id="progress"></span>
+    </div>
+    <p id="caption" aria-live="polite">Loading the terminal…</p>
+    <div id="screen"><div id="frame">
+        <div id="terminal"></div>
+        <div id="pointer"><svg width="18" height="24" viewBox="0 0 18 24" aria-hidden="true"><path d="M1 1 L1 19 L6 15 L9.5 23 L13 21.5 L9.5 14 L16 14 Z" fill="#000000" stroke="#ffffff" stroke-width="1.5"/></svg></div>
+        <div id="keycap"></div>
+    </div></div>
+    <p class="about">Every frame is real output: the server drives the viewer with the same mouse reports and keys the
+    <code>molterm3d</code> client sends, and Mol* draws each view on the server. The page only prints the frames into
+    <a href="https://github.com/wiedymi/restty">restty</a>, a web terminal with Kitty graphics, and moves a pointer to show where the input went.</p>
+</main>
+<script type="module" src="/static/showcase.js"></script>
+</body>
+</html>

@@ -56,3 +56,20 @@ test('the viewer answers in the editor\'s shape', async () => {
     const failed = await fetch(`${base}/api/v1/view`, { method: 'POST', body: new URLSearchParams({ input: 'C1CC', cols: 80, rows: 24 }) });
     assert.match(await failed.text(), /^2 \n.+SMILES/);
 });
+
+test('a picture to print comes as Kitty graphics, or the reason it can\'t', async () => {
+    const answer = await fetch(`${base}/api/v1/print?input=CCO&rows=6&cols=80`);
+    assert.strictEqual(answer.status, 200);
+    assert.ok((await answer.text()).startsWith('\x1b_Ga=T,f=100,'));
+    const failed = await fetch(`${base}/api/v1/print`, { method: 'POST', body: new URLSearchParams({ input: 'C1CC' }) });
+    assert.strictEqual(failed.status, 400);
+});
+
+test('the showcase is served from here, and says what size it needs', async () => {
+    const page = await (await fetch(`${base}/showcase`)).text();
+    assert.ok(page.includes('/static/showcase.js') && !page.includes('{{') && !/https?:\/\/cdn/.test(page));
+    for (const file of ['restty.esm.js', 'DejaVuSansMono.ttf']) assert.strictEqual((await fetch(`${base}/vendor/${file}`)).status, 200, file);
+    const small = await fetch(`${base}/api/v1/showcase?part=0&cols=40&rows=20&cell_width=7&cell_height=15`);
+    assert.strictEqual(small.status, 400);
+    assert.match((await small.json()).error.message, /at least 90 columns/);
+});

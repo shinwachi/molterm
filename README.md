@@ -23,7 +23,9 @@ containers and README, and uses this server's `/api/v1/render` (with `properties
 terminal (`molterm3d 1crn`: drag to turn, wheel to zoom, Kitty graphics, through tmux too) and on a web page with Mol*'s own viewer,
 at http://molterm-3d-dev.localhost (prod: `molterm-3d`). It puts SMILES and molblocks in 3D with this server's
 `/api/v1/conformer.sdf` (RDKit's ETKDG, then MMFF94, the same shape every time; a molblock already in 3D keeps its coordinates), and
-fetches PDB entries from RCSB itself. See its README.
+fetches PDB entries from RCSB itself. Mol*'s illustrative lighting is its default, and `molterm3d -p` prints a picture into the shell
+that scrolls with the text. http://molterm-3d-dev.localhost/showcase is an automated demo of it in the same web terminal as
+`/showcase` here. See its README.
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
 
 ## Status

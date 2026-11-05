@@ -4,7 +4,9 @@
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const zlib = require('zlib');
 const renderer = require('./renderer');
+const showcase = require('./showcase');
 const structures = require('./structures');
 const viewer = require('./viewer');
 
@@ -23,7 +25,7 @@ const FILES = {
     '/vendor/': path.join(ROOT, 'vendor'),
 };
 const TYPES = { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.png': 'image/png', '.ico': 'image/x-icon',
-    '.svg': 'image/svg+xml', '.json': 'application/json', '.map': 'application/json' };
+    '.svg': 'image/svg+xml', '.json': 'application/json', '.map': 'application/json', '.ttf': 'font/ttf' };
 
 // The health check draws a small molecule once at start, so a container whose OpenGL doesn't work is reported as such
 let health = { status: 'starting' };
@@ -87,15 +89,17 @@ function serveFile(res, prefix, rest) {
     const base = FILES[prefix];
     const file = path.normalize(path.join(base, rest));
     if (!file.startsWith(base + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return send(res, 404, 'Not found.\n');
+    // the page's own files change with the page, so they are checked each time; the vendored libraries are pinned
     send(res, 200, fs.readFileSync(file), { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
-        'Cache-Control': 'max-age=3600' });
+        'Cache-Control': prefix === '/static/' ? 'no-cache' : 'max-age=3600' });
 }
 
 function page(name) {
     return fs.readFileSync(path.join(ROOT, 'public', name), 'utf8')
         .replaceAll('{{PUBLIC_URL}}', PUBLIC_URL).replaceAll('{{MOLTERM_URL}}', MOLTERM_URL)
         .replaceAll('{{STYLES}}', renderer.STYLES.map((s) => `<option>${s}</option>`).join(''))
-        .replaceAll('{{COLOURS}}', renderer.COLOURS.map((c) => `<option>${c}</option>`).join(''));
+        .replaceAll('{{COLOURS}}', renderer.COLOURS.map((c) => `<option>${c}</option>`).join(''))
+        .replaceAll('{{LIGHTINGS}}', renderer.LIGHTINGS.map((l) => `<option>${l}</option>`).join(''));
 }
 
 function failure(res, e) {
@@ -133,10 +137,40 @@ const routes = {
         const height = Math.min(Math.max(parseInt(values.height, 10) || 450, 16), 2000);
         const radians = (name) => (parseFloat(values[name]) || 0) * Math.PI / 180;
         const look = { style: renderer.STYLES.includes(values.style) ? values.style : 'auto',
-            colour: renderer.COLOURS.includes(values.colour) ? values.colour : 'auto', hydrogens: values.hydrogens !== '0' };
+            colour: renderer.COLOURS.includes(values.colour) ? values.colour : 'auto', hydrogens: values.hydrogens !== '0',
+            lighting: values.lighting };
         const background = /^[0-9a-fA-F]{6}$/.test(values.background || '') ? parseInt(values.background, 16) : undefined;
         const { png } = await renderer.draw(structure, look, { turn: radians('turn'), tilt: radians('tilt'), z: 1, p: [0, 0] }, width, height, background);
         send(res, 200, png, { 'Content-Type': 'image/png', 'Cache-Control': 'max-age=3600' });
+    },
+
+    // A picture to print into the shell, for molterm3d -p: ?input=&style=&colour=&lighting=&rows=&cols=&cell_width=&cell_height=
+    // &turn=&tilt=&placeholders=1&background=. 200 with the text to print, or 400 with the reason.
+    'GET /api/v1/print': async (req, res, url) => {
+        send(res, 200, await viewer.print(await form(req, url)));
+    },
+    'POST /api/v1/print': (...args) => routes['GET /api/v1/print'](...args),
+
+    'GET /showcase': (req, res) => send(res, 200, page('showcase.html'), { 'Content-Type': 'text/html; charset=utf-8' }),
+
+    // The automated demo's frames, for a window of ?cols=&rows=&cell_width=&cell_height=, in parts (?part=0 to parts - 1)
+    'GET /api/v1/showcase': async (req, res, url) => {
+        const values = Object.fromEntries(url.searchParams);
+        const number = (name) => Math.min(Math.max(parseInt(values[name], 10) || 0, 0), 1000);
+        const grid = { cols: number('cols'), rows: number('rows'), cellWidth: Math.max(number('cell_width'), 4), cellHeight: Math.max(number('cell_height'), 8) };
+        try {
+            const frames = await showcase.part(grid, parseInt(values.part, 10) || 0);
+            const body = JSON.stringify({ frames, parts: showcase.PARTS.length });
+            // the pictures are base64, which gzip takes back most of the way to their own size
+            if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+                send(res, 200, zlib.gzipSync(body, { level: 6 }), { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+            } else {
+                send(res, 200, body, { 'Content-Type': 'application/json' });
+            }
+        } catch (e) {
+            if (!(e instanceof showcase.ShowcaseError || e instanceof structures.StructureError)) throw e;
+            json(res, 400, { error: { message: e.message } });
+        }
     },
 
     // One step of the terminal viewer. First line: "<0 go on, 1 finished, 2 failed> <state>"; then what to print.

@@ -82,6 +82,11 @@ function zoom(state, factor) {
     state.z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, state.z * factor));
 }
 
+/** The state's lighting: states from before there was a choice have none, and were drawn in Mol*'s standard light. */
+function lighting(state) {
+    return renderer.LIGHTINGS.includes(state.l) ? state.l : 'standard';
+}
+
 function cycle(list, value, by) {
     return list[(list.indexOf(value) + by + list.length) % list.length];
 }
@@ -103,6 +108,7 @@ function apply(state, info, list, size) {
             else if (key === '-' || key === '_') zoom(state, 1 / ZOOM);
             else if (key === 's' || key === 'S') state.s = cycle(renderer.STYLES, state.s, key === 's' ? 1 : -1);
             else if (key === 'c' || key === 'C') state.c = cycle(renderer.COLOURS, state.c, key === 'c' ? 1 : -1);
+            else if (key === 'l' || key === 'L') state.l = cycle(renderer.LIGHTINGS, lighting(state), key === 'l' ? 1 : -1);
             else if (key === 'h' || key === 'H') state.h = !state.h;
             else if (key === 'r' || key === 'R') Object.assign(state, { q: [0, 0, 0, 1], z: 1, p: [0, 0] });
             else if (key === '?') state.help = !state.help;
@@ -153,12 +159,15 @@ function clip(text, width) {
     return [...text].length > width ? [...text].slice(0, Math.max(0, width - 1)).join('') + '…' : text;
 }
 
-const HELP = 'drag turn · right-drag move · wheel zoom · arrows turn · s style · c colour · h hydrogens · r reset · q quit';
+const HELP = 'drag turn · right-drag move · wheel zoom · arrows turn · s style · c colour · l lighting · h hydrogens · r reset · q quit';
 
 function statusLine(state, structure, info, cols) {
-    const what = [structure.name, structure.label && structure.label !== structure.name ? structure.label : ''].filter(Boolean).join(' · ');
+    // a PDB title can be long, and the facts matter more: what the keys have changed
+    const label = structure.label && structure.label !== structure.name ? clip(structure.label, Math.max(12, Math.floor(cols / 4))) : '';
+    const what = [structure.name, label].filter(Boolean).join(' · ');
     const facts = [`${info.atoms.toLocaleString()} atoms`, info.residues > 2 ? `${info.residues.toLocaleString()} residues` : '',
-        state.s === 'auto' ? `auto (${info.style})` : info.style, `colour ${state.c}`, state.h ? 'H shown' : 'H hidden'].filter(Boolean).join(' · ');
+        state.s === 'auto' ? `auto (${info.style})` : info.style, `colour ${state.c}`, lighting(state),
+        state.h ? 'H shown' : 'H hidden'].filter(Boolean).join(' · ');
     const hint = state.help ? HELP : '? keys · q quit';
     const left = clip(`${what}  ${facts}`, Math.max(0, cols - [...hint].length - 2));
     const gap = Math.max(1, cols - [...left].length - [...hint].length);
@@ -194,13 +203,14 @@ async function step(form) {
     } else {
         structure = await structures.resolve({ input: form.input || '', data: form.data || '', format: form.format || '' });
         state = { k: structure.key, q: [0, 0, 0, 1], z: 1, p: [0, 0], s: renderer.STYLES.includes(form.style) ? form.style : 'auto',
-            c: renderer.COLOURS.includes(form.colour) ? form.colour : 'auto', h: form.hydrogens !== '0', f: 0, d: null, size: '' };
+            c: renderer.COLOURS.includes(form.colour) ? form.colour : 'auto', h: form.hydrogens !== '0', f: 0, d: null, size: '',
+            l: renderer.LIGHTINGS.includes(form.lighting) ? form.lighting : renderer.LIGHTINGS[0] };
         if (structure.kind === 'molecule' && structure.input.length <= 2000) state.i = structure.input;
         first = true;
     }
 
     const imageRows = rows - 1;
-    const look = () => ({ style: state.s, colour: state.c, hydrogens: state.h });
+    const look = () => ({ style: state.s, colour: state.c, hydrogens: state.h, lighting: lighting(state) });
     const view = () => ({ q: state.q, z: state.z, p: state.p, ...(state.home ? { u: state.home.u, d: state.home.d } : {}) });
     const background = colourNumber(form.background) ?? (form.theme === 'dark' ? 0x161615 : 0xffffff);
     const width = cols * cellWidth;
@@ -235,4 +245,31 @@ async function step(form) {
     return { status: 0, state: encode(state), output };
 }
 
-module.exports = { step, events, apply, encode, decode, statusLine, StateError, IDS };
+const PRINT_ROWS = 16;
+const PRINT_ASPECT = 4 / 3; // a printed picture's shape, in pixels, when the terminal is wide enough
+
+/**
+ * A picture to print into the shell, for `molterm3d -p`: `form` has input/data/format, style, colour, lighting, hydrogens, turn and tilt
+ * (degrees), rows (the picture's height), cols (the terminal's width), cell_width, cell_height, placeholders and background. The picture
+ * goes at the cursor and the cursor below it, so pictures printed one after another scroll with the text. Returns the text to print.
+ */
+async function print(form) {
+    const number = (name, fallback, low, high) => Math.min(Math.max(parseInt(form[name], 10) || fallback, low), high);
+    const cols = number('cols', 80, 10, 500);
+    const rows = number('rows', PRINT_ROWS, 2, kitty.MAX_CELLS);
+    const cellWidth = number('cell_width', 10, 4, 100);
+    const cellHeight = number('cell_height', 20, 8, 200);
+    const structure = await structures.resolve({ input: form.input || '', data: form.data || '', format: form.format || '' });
+    const look = { style: renderer.STYLES.includes(form.style) ? form.style : 'auto',
+        colour: renderer.COLOURS.includes(form.colour) ? form.colour : 'auto', hydrogens: form.hydrogens !== '0',
+        lighting: renderer.LIGHTINGS.includes(form.lighting) ? form.lighting : renderer.LIGHTINGS[0] };
+    const radians = (name) => (parseFloat(form[name]) || 0) * Math.PI / 180;
+    const pictureCols = Math.max(1, Math.min(cols, kitty.MAX_CELLS, Math.round(rows * cellHeight * PRINT_ASPECT / cellWidth)));
+    const background = colourNumber(form.background) ?? (form.theme === 'dark' ? 0x161615 : 0xffffff);
+    const { png } = await renderer.draw(structure, look, { turn: radians('turn'), tilt: radians('tilt'), z: 1, p: [0, 0] },
+        pictureCols * cellWidth, rows * cellHeight, background);
+    if (form.placeholders === '1') return kitty.lines(png, 256 + Math.floor(Math.random() * (255 * 297 - 257)), pictureCols, rows);
+    return kitty.inline(png, pictureCols, rows);
+}
+
+module.exports = { step, print, events, apply, encode, decode, statusLine, StateError, IDS };

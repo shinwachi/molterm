@@ -5,31 +5,37 @@
 #   molterm3d 'CC(=O)Oc1ccccc1C(=O)O'    anything molterm reads, put in 3D by RDKit
 #   molterm3d ligand.sdf                 a file: PDB, mmCIF, SDF or MOL, MOL2 or XYZ
 #   molterm3d -s spacefill -c element 4hhb
+#   molterm3d -p -l standard 1crn        one picture printed into the shell, where it scrolls with the text, instead of the viewer
 #
 # In the viewer: drag to turn, right-drag (or Shift-drag) to move, the wheel or middle-drag to zoom, arrows to turn a step,
-# s and c to step through styles and colours, h for hydrogens, r to reset, ? for the keys, q to quit.
+# s, c and l to step through styles, colours and lightings, h for hydrogens, r to reset, ? for the keys, q to quit.
 # Needs Kitty graphics (Kitty, Ghostty, and both inside tmux with allow-passthrough on), and only sh, curl, stty, dd and od.
 set -u
 url=${MOLTERM3D_URL:-@@URL@@}
-style=""; colour=""; theme=""; hydrogens=""; force=0
+style=""; colour=""; lighting=""; theme=""; hydrogens=""; force=0; print=0; rows=""
 
 usage() {
     cat <<USAGE
-usage: molterm3d [-s style] [-c colour] [-H] [-t light|dark] [-k] <PDB id | SMILES | file>
+usage: molterm3d [-s style] [-c colour] [-l lighting] [-H] [-t light|dark] [-k] [-p [-r rows]] <PDB id | SMILES | file>
   -s  auto, ball-and-stick, spacefill, licorice, cartoon or surface (default auto: cartoon for proteins, else ball-and-stick)
-  -c  auto, element, chain, secondary, rainbow, residue or b-factor
+  -c  auto, element, chain, secondary, rainbow, residue, b-factor or illustrative
+  -l  illustrative (the default: flat colour, outlines and ambient occlusion), standard, occlusion or outline
   -H  start with hydrogens hidden
+  -p  print one picture into the shell instead of opening the viewer; -r its height in rows (default 16)
   -t  light or dark, when the terminal doesn't say which it is
   -k  use Kitty graphics even if the terminal doesn't seem to have them
 The server is $url (or \$MOLTERM3D_URL).
 USAGE
 }
 
-while getopts s:c:t:Hkh option; do
+while getopts s:c:l:t:r:Hkph option; do
     case $option in
         s) style=$OPTARG ;;
         c) colour=$OPTARG ;;
+        l) lighting=$OPTARG ;;
         t) theme=$OPTARG ;;
+        r) rows=$OPTARG ;;
+        p) print=1 ;;
         H) hydrogens=0 ;;
         k) force=1 ;;
         h) usage; exit 0 ;;
@@ -111,6 +117,27 @@ kitty_command() {
     if [ $placeholders = 1 ]; then printf '\033Ptmux;\033\033_G%s\033\033\\\033\\' "$1"; else printf '\033_G%s\033\\' "$1"; fi
 }
 
+# -p: one picture, printed where the cursor is, with the cursor left below it, so that it scrolls with the shell's text
+if [ $print = 1 ]; then
+    size=$(stty size </dev/tty 2>/dev/null)
+    [ -n "$size" ] || size="24 80"
+    set -- -sS --data-urlencode "cols=${size#* }"
+    if [ -f "$input" ]; then set -- "$@" --data-urlencode "data@$input"; else set -- "$@" --data-urlencode "input=$input"; fi
+    for pair in "style=$style" "colour=$colour" "lighting=$lighting" "hydrogens=$hydrogens" "theme=$theme" "background=$background" \
+            "rows=$rows" "cell_width=$cell_width" "cell_height=$cell_height"; do
+        [ -n "${pair#*=}" ] && set -- "$@" --data-urlencode "$pair"
+    done
+    [ $placeholders = 1 ] && set -- "$@" --data-urlencode "placeholders=1"
+    answer=$(curl "$@" -w '\n%{http_code}' "$url/api/v1/print" 2>&1) || { printf 'molterm3d: the server did not answer: %s\n' "$answer" >&2; exit 1; }
+    status=${answer##*
+}
+    answer=${answer%
+*}
+    if [ "$status" != 200 ]; then printf 'molterm3d: %s\n' "$answer" >&2; exit 1; fi
+    printf '%s' "$answer"  # the picture ends with its own line break
+    exit 0
+fi
+
 viewing=0
 leave() {
     [ $viewing = 1 ] || return 0
@@ -135,6 +162,7 @@ step() {
     fi
     [ -n "$style" ] && set -- "$@" --data-urlencode "style=$style"
     [ -n "$colour" ] && set -- "$@" --data-urlencode "colour=$colour"
+    [ -n "$lighting" ] && set -- "$@" --data-urlencode "lighting=$lighting"
     [ -n "$hydrogens" ] && set -- "$@" --data-urlencode "hydrogens=$hydrogens"
     [ -n "$theme" ] && set -- "$@" --data-urlencode "theme=$theme"
     [ -n "$background" ] && set -- "$@" --data-urlencode "background=$background"

@@ -89,4 +89,20 @@ function cells(id, cols, rows, at) {
     return out;
 }
 
-module.exports = { PLACEHOLDER, DIACRITICS, MAX_CELLS, wireId, wrap, place, remove, transmit, colour, cells };
+/** A picture printed into the shell at the cursor, with no id, over cols by rows cells. The cursor goes to the line below it, so
+ * the picture scrolls with the text, into the terminal's history. */
+function inline(png, cols, rows) {
+    const parts = chunks(png);
+    return parts.map((chunk, index) => {
+        const keys = index === 0 ? `a=T,f=100,c=${cols},r=${rows},q=2,` : 'q=2,';
+        return `\x1b_G${keys}m=${index < parts.length - 1 ? 1 : 0};${chunk}\x1b\\`;
+    }).join('') + '\r\n';
+}
+
+/** The same through tmux: lines of placeholders, which tmux keeps as text, so they scroll in its history too. `number` should differ
+ * from one picture to the next, as each keeps its id for as long as it can be scrolled back to. */
+function lines(png, number, cols, rows) {
+    return transmit(png, number, cols, rows) + cells(number, cols, rows, (row) => (row ? '\r\n' : '')) + '\r\n';
+}
+
+module.exports = { PLACEHOLDER, DIACRITICS, MAX_CELLS, wireId, wrap, place, remove, transmit, colour, cells, inline, lines };

@@ -4,7 +4,7 @@
     const message = document.getElementById('message');
     const field = document.getElementById('input');
     const picture = document.getElementById('picture');
-    const choices = ['style', 'colour', 'turn'].map((id) => document.getElementById(id));
+    const choices = ['style', 'colour', 'lighting', 'turn'].map((id) => document.getElementById(id));
     const say = (text, error) => { message.textContent = text; message.classList.toggle('err', !!error); };
 
     let viewer;
@@ -22,9 +22,9 @@
     function showPicture() {
         const input = field.value.trim();
         if (!input) return;
-        const [style, colour, turn] = choices.map((c) => c.value);
+        const [style, colour, lighting, turn] = choices.map((c) => c.value);
         const dark = matchMedia('(prefers-color-scheme: dark)').matches;
-        picture.src = '/api/v1/render.png?' + new URLSearchParams({ input, style, colour, turn, width: 600, height: 450,
+        picture.src = '/api/v1/render.png?' + new URLSearchParams({ input, style, colour, lighting, turn, width: 600, height: 450,
             background: dark ? '1f1f1e' : 'ffffff' });
     }
 

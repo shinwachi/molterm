@@ -111,6 +111,34 @@ test('a file opens, draws, turns, changes style and quits', async () => {
     assert.strictEqual((await viewer.step({ ...size, state: answer.state, events: hex('q') })).status, 1);
 });
 
+test('l steps through the lightings, from illustrative, and the status line says which', async () => {
+    const wide = { ...size, cols: '140' }; // room on the status line for everything
+    const first = await viewer.step({ ...wide, data: ETHANOL });
+    assert.ok(first.output.includes(' · illustrative · '), 'illustrative is the default');
+    const next = await viewer.step({ ...wide, state: first.state, events: hex('l') });
+    assert.ok(next.output.includes(' · standard · '));
+    const back = await viewer.step({ ...wide, state: next.state, events: hex('L') });
+    assert.ok(back.output.includes(' · illustrative · '));
+    // a state from before there was a choice was drawn in Mol*'s standard light, and stays so
+    const old = viewer.decode(first.state);
+    delete old.l;
+    const kept = await viewer.step({ ...wide, state: viewer.encode(old), cols: '150' });
+    assert.ok(kept.output.includes(' · standard · '));
+});
+
+test('a printed picture goes at the cursor, which goes below it, so that it scrolls with the text', async () => {
+    const text = await viewer.print({ data: ETHANOL, rows: '10', cols: '200', cell_width: '10', cell_height: '20', lighting: 'outline' });
+    // 10 rows of 20 pixels, 4:3, in 10-pixel columns
+    assert.ok(text.startsWith('\x1b_Ga=T,f=100,c=27,r=10,q=2,m='), text.slice(0, 40));
+    assert.ok(!text.includes('C=1') && !text.includes(',i=') && text.endsWith('\x1b\\\r\n'));
+    const narrow = await viewer.print({ data: ETHANOL, rows: '10', cols: '12' });
+    assert.ok(narrow.includes('c=12,r=10,'), 'never wider than the terminal');
+    const through = await viewer.print({ data: ETHANOL, rows: '3', cols: '80', placeholders: '1' });
+    assert.ok(through.startsWith('\x1bPtmux;') && through.endsWith('\x1b[39m\r\n'));
+    assert.strictEqual(through.split(kitty.PLACEHOLDER).length - 1, 3 * Math.round(3 * 20 * 4 / 3 / 10), 'a cell for each of rows by cols');
+    assert.strictEqual(through.split('\r\n').length, 4, 'one line for each row');
+});
+
 test('a window of another size is drawn again to fit it', async () => {
     const first = await viewer.step({ ...size, data: ETHANOL });
     const resized = await viewer.step({ ...size, cols: '120', rows: '40', state: first.state });

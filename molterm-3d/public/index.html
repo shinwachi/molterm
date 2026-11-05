@@ -26,6 +26,8 @@
     <span class="brand">molterm 3D</span>
     <span class="spacer"></span>
     <nav>
+        <a class="btn quiet" href="/" aria-current="page">Viewer</a>
+        <a class="btn quiet" href="/showcase">Showcase</a>
         <a class="btn quiet" href="{{MOLTERM_URL}}">molterm</a>
         <a class="btn quiet" href="/health">Health</a>
     </nav>
@@ -49,15 +51,18 @@
         <h2>In the terminal</h2>
         <p>The same structures, drawn by Mol* on this server and shown in the terminal with Kitty graphics: in Kitty and Ghostty, and in
         both inside tmux with <code>allow-passthrough on</code>. Drag to turn, right-drag to move, the wheel to zoom, <code>s</code> and
-        <code>c</code> for styles and colours, <code>h</code> for hydrogens, <code>q</code> to quit.</p>
+        <code>c</code> for styles and colours, <code>l</code> for the lighting, <code>h</code> for hydrogens, <code>q</code> to quit.
+        <code>-p</code> prints a picture into the shell instead. <a href="/showcase">The showcase</a> plays it all in a web terminal.</p>
         <pre>curl -so molterm3d {{PUBLIC_URL}}/molterm3d &amp;&amp; chmod +x molterm3d
 ./molterm3d 1crn
 ./molterm3d 'CC(=O)Oc1ccccc1C(=O)O'
-./molterm3d -s spacefill ligand.sdf</pre>
+./molterm3d -s spacefill ligand.sdf
+./molterm3d -p -s spacefill -l illustrative 4hhb</pre>
         <p>A picture of what the terminal gets, from <code>/api/v1/render.png</code>, in the style and colours chosen here:</p>
         <div class="toolbar">
             <label>style <select id="style">{{STYLES}}</select></label>
             <label>colour <select id="colour">{{COLOURS}}</select></label>
+            <label>lighting <select id="lighting">{{LIGHTINGS}}</select></label>
             <label>turn <input id="turn" type="range" min="-180" max="180" value="0"></label>
         </div>
         <p><img id="picture" alt="The structure as the terminal viewer draws it" width="600" height="450"></p>
