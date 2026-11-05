@@ -113,6 +113,30 @@ cell_height=$(printf '%s' "$reply" | sed -n 's/.*\[6;\([0-9]*\);[0-9]*t.*/\1/p')
 pixels=0
 case $reply in *'[?1016;1$y'*|*'[?1016;2$y'*) [ -n "$cell_height" ] && pixels=1 ;; esac
 
+# A spinner while the server draws, so that a slow picture doesn't look like a hang: from 0.4 s on, where the sequence $1 moves the
+# cursor, with the words $2 after it, the cursor put back each time. In a subshell, stopped when the answer comes.
+esc=$(printf '\033')
+spinner=""
+spin_start() {
+    (
+        trap 'exit 0' TERM
+        sleep 0.4
+        while :; do
+            for c in ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏; do
+                printf '%s%s\033[2m%s %s\033[22m%s' "${esc}7" "$1" "$c" "$2" "${esc}8" >/dev/tty
+                sleep 0.1
+            done
+        done
+    ) &
+    spinner=$!
+}
+spin_stop() {
+    [ -n "$spinner" ] || return 0
+    kill "$spinner" 2>/dev/null
+    wait "$spinner" 2>/dev/null
+    spinner=""
+}
+
 kitty_command() {
     if [ $placeholders = 1 ]; then printf '\033Ptmux;\033\033_G%s\033\033\\\033\\' "$1"; else printf '\033_G%s\033\\' "$1"; fi
 }
@@ -128,7 +152,15 @@ if [ $print = 1 ]; then
         [ -n "${pair#*=}" ] && set -- "$@" --data-urlencode "$pair"
     done
     [ $placeholders = 1 ] && set -- "$@" --data-urlencode "placeholders=1"
-    answer=$(curl "$@" -w '\n%{http_code}' "$url/api/v1/print" 2>&1) || { printf 'molterm3d: the server did not answer: %s\n' "$answer" >&2; exit 1; }
+    # the spinner on the cursor's line, wiped before the picture goes there
+    spin_start "$(printf '\r')" "drawing $input"
+    trap 'spin_stop; printf "\r\033[K" >/dev/tty; exit 130' INT TERM HUP
+    answer=$(curl "$@" -w '\n%{http_code}' "$url/api/v1/print" 2>&1)
+    failed=$?
+    spin_stop
+    trap - INT TERM HUP
+    printf '\r\033[K' >/dev/tty
+    [ $failed = 0 ] || { printf 'molterm3d: the server did not answer: %s\n' "$answer" >&2; exit 1; }
     status=${answer##*
 }
     answer=${answer%
@@ -140,6 +172,7 @@ fi
 
 viewing=0
 leave() {
+    spin_stop
     [ $viewing = 1 ] || return 0
     viewing=0
     for id in 3301 3302; do
@@ -200,7 +233,12 @@ while :; do
     size=$(stty size </dev/tty 2>/dev/null)
     [ -n "$size" ] || size="24 80"
     if [ -n "$events" ] || [ "$size" != "$drawn" ]; then
-        step "$events" "$size" || break
+        # at the status line's end, over its hint, which the answer writes again
+        column=$(( ${size#* } - 9 )); [ $column -ge 1 ] || column=1
+        spin_start "$(printf '\033[%s;%sH' "${size%% *}" "$column")" "drawing"
+        step "$events" "$size"; stepped=$?
+        spin_stop
+        [ $stepped = 0 ] || break
         drawn=$size
         [ "$outcome" = 0 ] || break
         [ -z "$output" ] || printf '%s' "$output" >/dev/tty

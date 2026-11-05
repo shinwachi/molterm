@@ -26,7 +26,16 @@
         const dark = matchMedia('(prefers-color-scheme: dark)').matches;
         picture.src = '/api/v1/render.png?' + new URLSearchParams({ input, style, colour, lighting, turn, width: 600, height: 450,
             background: dark ? '1f1f1e' : 'ffffff' });
+        waiting(true);
     }
+
+    // while the server draws: the old picture faded and a note beside the choices
+    const drawing = document.getElementById('drawing');
+    function waiting(on) {
+        drawing.hidden = !on;
+        picture.classList.toggle('waiting', on);
+    }
+    picture.addEventListener('load', () => waiting(false));
 
     async function show(input) {
         input = input.trim();
@@ -49,7 +58,7 @@
         button.addEventListener('click', () => { field.value = button.dataset.input; show(field.value); });
     }
     for (const choice of choices) choice.addEventListener('change', showPicture);
-    picture.addEventListener('error', () => say('The picture could not be drawn.', true));
+    picture.addEventListener('error', () => { waiting(false); say('The picture could not be drawn.', true); });
     const start = new URLSearchParams(location.search).get('input');
     if (start) field.value = start;
     show(field.value);

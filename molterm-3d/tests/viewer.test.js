@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const { Quat, Vec3 } = require('molstar/lib/commonjs/mol-math/linear-algebra');
 const kitty = require('../src/kitty');
 const viewer = require('../src/viewer');
+const renderer = require('../src/renderer');
 
 // Ethanol in 3D, as molterm's /api/v1/conformer.sdf gives it, so these need no other service
 const ETHANOL = `CCO
@@ -101,7 +102,8 @@ test('a file opens, draws, turns, changes style and quits', async () => {
         'the old picture goes after the new one is up');
 
     const still = await viewer.step({ ...size, state: answer.state, events: hex('\x1b[I') });
-    assert.strictEqual(still.output, '', 'nothing changed, nothing printed');
+    assert.ok(!still.output.includes('\x1b_G'), 'nothing changed, no picture');
+    assert.ok(still.output.startsWith('\x1b[24;1H') && still.output.includes('9 atoms'), 'the status line again, over the spinner');
 
     answer = await viewer.step({ ...size, state: answer.state, events: hex('ss'), placeholders: '1' }); // auto, ball-and-stick, spacefill
     assert.ok(answer.output.includes('spacefill'));
@@ -109,6 +111,33 @@ test('a file opens, draws, turns, changes style and quits', async () => {
     assert.ok(!answer.output.replace(/\x1bPtmux;[\s\S]*?\x1b\\(?!\\)/g, '').includes('\x1b_G'), 'every picture command wrapped');
 
     assert.strictEqual((await viewer.step({ ...size, state: answer.state, events: hex('q') })).status, 1);
+});
+
+/** The PNG a step's output sends, from its Kitty payloads. */
+function picture(output) {
+    return Buffer.from([...output.matchAll(/\x1b_G[^;\x1b]*;([A-Za-z0-9+/=]*)\x1b\\/g)].map((m) => m[1]).join(''), 'base64');
+}
+
+test('a slow structure is drawn rough while a drag goes on, and in full when the button is up', async () => {
+    const above = renderer.ROUGH.above;
+    renderer.ROUGH.above = -1; // every structure counts as slow
+    try {
+        const width = (answer) => picture(answer.output).readUInt32BE(16); // from the PNG's header
+        const first = await viewer.step({ ...size, data: ETHANOL });
+        assert.strictEqual(width(first), 800, 'the first picture in full');
+        const dragging = await viewer.step({ ...size, state: first.state, events: hex('\x1b[<0;30;10M\x1b[<32;40;10M') });
+        assert.strictEqual(width(dragging), 400, 'rough while the button is down');
+        const up = await viewer.step({ ...size, state: dragging.state, events: hex('\x1b[<0;40;10m') });
+        assert.strictEqual(width(up), 800, 'in full once it is up, though the view did not change');
+        const key = await viewer.step({ ...size, state: up.state, events: hex('+') });
+        assert.strictEqual(width(key), 800, 'keys are drawn in full');
+    } finally {
+        renderer.ROUGH.above = above;
+    }
+    // a quick structure is never drawn rough
+    const first = await viewer.step({ ...size, data: ETHANOL, style: 'licorice' });
+    const dragging = await viewer.step({ ...size, state: first.state, events: hex('\x1b[<0;30;10M\x1b[<32;40;10M') });
+    assert.strictEqual(picture(dragging.output).readUInt32BE(16), 800);
 });
 
 test('l steps through the lightings, from illustrative, and the status line says which', async () => {

@@ -59,7 +59,15 @@ to `POST /api/v1/view` with the state from the last answer. The server applies t
 view, a zoom and a shift, all in the state), draws the structure at the window's size in pixels with Mol*, and answers
 `<0 go on, 1 finished, 2 failed> <state>` and what to print. Pictures alternate between two ids, the new one placed before the old one
 is removed, so nothing flickers. A drag costs about 0.1 s on this server for a small protein; the first view of a structure about a
-second, as Mol* builds its geometry.
+second, as Mol* builds its geometry. From 0.4 s on, a spinner turns at the end of the status line (and on the cursor's line for `-p`),
+so a slow picture doesn't look like a hang; the next answer writes the status line again over it.
+
+Speed. This OpenGL (llvmpipe, without `EXT_frag_depth`) can't use Mol*'s sphere impostors, so every atom is a mesh, and meshes go
+through one core: a structure's cost is mostly its triangles, not the picture's size. So while a drag goes on, a structure that took
+over 150 ms to draw is drawn rough, with Mol*'s low-quality meshes (made the first time they're needed) and a quarter of the pixels, and
+drawn again in full when the button is up. Keys, the wheel and printed pictures are always drawn in full. PNGs are written with one
+filter instead of pngjs trying five on every row (four times faster, a few percent larger), and llvmpipe is given as many threads as
+the container has CPUs (`LP_NUM_THREADS=4`), not the host's 128.
 
 Three Mol* contexts are kept, each with one structure drawn one way; changing style or colour builds it again. Pictures are capped at
 1.6 megapixels and the terminal scales them up.
@@ -128,7 +136,7 @@ at 3 GB, since software rendering can take a machine.
 
 ## Verified
 
-- 22 tests (`make test`): Kitty sequences and ids match molterm's; keys, mouse reports, which way drags and arrows turn, zoom bounds and quitting; a file
+- 22 tests then (`make test`): Kitty sequences and ids match molterm's; keys, mouse reports, which way drags and arrows turn, zoom bounds and quitting; a file
   opened, drawn, turned, restyled through tmux placeholders and closed; resizing; the lightings and the default; printed pictures, direct
   and through tmux; health, the served client, page and showcase, SMILES through molterm, PNG sizes, failures.
 - `molterm3d -p` run in a container's terminal (with `-k`, as nothing answers the probes there): the picture's sequence and line break,
@@ -136,6 +144,11 @@ at 3 GB, since software rendering can take a machine.
 - `/showcase` watched in Chrome from start to end: the viewer turned, zoomed, moved, relit, recoloured and restyled; the four lightings
   from the same side; streptavidin's styles; lysozyme without its water; imatinib; the printed pictures scrolling with the shell and
   still in its history on the way back. No console errors. The lighting choice on the main page draws.
+- 23 tests now, with a drag drawn rough and the release in full.
+- A drag through the dev URL at 200 by 50 cells of 10 by 20 pixels (1.6 megapixels), 4HHB spacefill: 1.3 s a frame before, 0.15 to
+  0.3 s rough, then 1.3 s for the full picture on release; 4HHB cartoon 0.15 to 0.3 s rough, 0.6 s in full. The spinner, run in a pty
+  in the container, for the viewer and `-p`; the web page fades the picture and says "Drawing…" until it comes (Chrome, no errors).
+- Low quality looks the same as full for cartoons and sticks; spheres get visibly faceted, so it's kept for drags.
 - Time to draw each lighting on llvmpipe, 560 by 440: 1CRN cartoon 40 to 60 ms, 4HHB cartoon 180 to 210 ms, 4HHB spacefill 670 to 810 ms.
   Illustrative costs about 15% more than standard.
 - Through the dev URL: 1CRN first frame 0.78 s, a drag 0.13 s; a bad SMILES gives molterm's message.
@@ -146,6 +159,9 @@ at 3 GB, since software rendering can take a machine.
 - Not yet tried in a real Kitty or Ghostty window, only through the protocol, its tests and restty.
 - The showcase needs 90 columns by 30 rows at its smallest font, so it can't start on a phone, and it sizes itself once.
 - A state saved before lighting was added (none outlive a session) is drawn in standard light, as it was then.
-- Production needs a molterm release with `/api/v1/conformer.sdf` (added after 0.1.2) for SMILES; PDB entries and files work without.
+- SMILES in production need molterm 0.1.3 (with `/api/v1/conformer.sdf`) running there; PDB entries and files work without.
+- Full pictures of big structures in spacefill or surface still take a second or more at 1.6 megapixels: the 4-CPU cap and one core
+  for meshes are the limit. A GPU, or Mol*'s impostors (which need `EXT_frag_depth`, missing from headless-gl), would change that.
+- A held button with no motion keeps the rough picture until it's released.
 - No spinning on its own: the client only asks when something is typed or the window changes.
 - One structure at a time per Mol* context and all drawing queued, so many viewers at once will wait on each other.

@@ -20,6 +20,10 @@ const SCENES = 3; // contexts kept, each with its own GL context; the least rece
 const MAX_PIXELS = 1600 * 1000; // larger windows get a smaller picture, which the terminal scales up
 const FOV = Math.PI / 4; // narrower than the plugin's 90 degrees, so near atoms aren't swollen
 const CANVAS = { width: 640, height: 480 }; // the contexts' own canvas; pictures are drawn into targets of the size asked for
+// While a drag goes on, a structure that takes longer than this to draw is drawn rough: with Mol*'s low-quality meshes and a quarter of
+// the pixels. This OpenGL has no EXT_frag_depth, so Mol* can't use its sphere impostors and every atom is a mesh, drawn on one core;
+// low quality cuts a 4HHB spacefill from 0.7 s to 0.1 s. The picture is drawn again in full when the drag ends.
+const ROUGH = { above: 150, scale: 0.5 }; // ms, and the scale of each side; tests change `above`
 
 // What `s`, `c` and `l` step through in the terminal, and the web page's choices
 const STYLES = ['auto', 'ball-and-stick', 'spacefill', 'licorice', 'cartoon', 'surface'];
@@ -62,6 +66,24 @@ class Scene {
         this.key = null; // structure key + style + colour + hydrogens, of what's built
         this.used = 0;
         this.info = null;
+        this.plan = []; // what build added: [component, props], to add again at low quality for rough pictures
+        this.full = []; // the representations, as built
+        this.rough = null; // their low-quality twins, made at the first rough picture
+        this.cost = 0; // ms the last full picture took
+    }
+
+    /** Show the full representations or their rough twins, making the twins the first time. */
+    async show(rough) {
+        if (rough && !this.rough) {
+            this.rough = [];
+            for (const [component, props] of this.plan) {
+                this.rough.push(await this.plugin.builders.structure.representation.addRepresentation(component,
+                    { ...props, typeParams: { ...props.typeParams, quality: 'low' } }));
+            }
+        }
+        for (const [list, visible] of [[this.full, !rough], [this.rough || [], rough]]) {
+            for (const selector of list) selector?.cell?.obj?.data.repr.setState({ visible });
+        }
     }
 
     async init() {
@@ -76,6 +98,10 @@ class Scene {
         const key = `${structure.key}|${look.style}|${look.colour}|${look.hydrogens ? 1 : 0}|${flat ? 1 : 0}`;
         if (this.key === key) return this.info;
         this.key = null;
+        this.plan = [];
+        this.full = [];
+        this.rough = null;
+        this.cost = 0;
         const plugin = this.plugin;
         await plugin.clear();
         const builders = plugin.builders.structure;
@@ -87,8 +113,12 @@ class Scene {
         const polymer = await builders.tryCreateComponentStatic(whole, 'polymer');
         const atoms = { ignoreHydrogens: !look.hydrogens };
         const colour = (fallback) => COLOUR_THEMES[look.colour === 'auto' ? fallback : look.colour] || {};
-        const add = (component, type, typeParams, fallback) => component && builders.representation.addRepresentation(component,
-            { type, typeParams: { ...typeParams, ignoreLight: flat }, ...colour(fallback) });
+        const add = async (component, type, typeParams, fallback) => {
+            if (!component) return;
+            const props = { type, typeParams: { ...typeParams, ignoreLight: flat }, ...colour(fallback) };
+            this.plan.push([component, props]);
+            this.full.push(await builders.representation.addRepresentation(component, props));
+        };
         let drawn = null; // the component the picture is fitted to
         let style = look.style;
         if (style === 'auto') style = polymer && stats.polymerResidueCount > 2 ? 'cartoon' : 'ball-and-stick';
@@ -170,7 +200,8 @@ class Scene {
         const raw = await this.plugin.getImageRaw({ width, height }, POSTPROCESSING[view.lighting] || POSTPROCESSING.illustrative);
         const png = new pngjs.PNG({ width, height });
         png.data = Buffer.from(raw.data.buffer, raw.data.byteOffset, raw.data.byteLength);
-        return pngjs.PNG.sync.write(png, { deflateLevel: 1 });
+        // one filter (sub) rather than pngjs's trying all five on every row: four times faster, a few percent larger
+        return pngjs.PNG.sync.write(png, { deflateLevel: 1, filterType: 1 });
     }
 }
 
@@ -194,15 +225,21 @@ function fit(width, height) {
     return [Math.max(16, Math.round(width * scale)), Math.max(16, Math.round(height * scale))];
 }
 
-/** Draw a structure: { png, info }. `look` is { style, colour, hydrogens, lighting }, `view` as Scene.render takes it. */
-function draw(structure, look, view, width, height, background) {
+/** Draw a structure: { png, info, rough }. `look` is { style, colour, hydrogens, lighting }, `view` as Scene.render takes it. With
+ * `options.rough`, a structure that's slow to draw is drawn rough (see ROUGH), and `rough` in the answer says whether it was. */
+function draw(structure, look, view, width, height, background, options = {}) {
     look = { ...look, lighting: LIGHTINGS.includes(look.lighting) ? look.lighting : LIGHTINGS[0] };
     return serial(async () => {
         const scene = await sceneFor(structure);
         const info = await scene.build(structure, look);
-        const [w, h] = fit(width, height);
-        return { png: await scene.render({ ...view, lighting: look.lighting }, w, h, background), info };
+        const rough = !!options.rough && scene.cost > ROUGH.above;
+        await scene.show(rough);
+        const [w, h] = fit(width, height).map((n) => (rough ? Math.max(16, Math.round(n * ROUGH.scale)) : n));
+        const start = performance.now();
+        const png = await scene.render({ ...view, lighting: look.lighting }, w, h, background);
+        if (!rough) scene.cost = performance.now() - start;
+        return { png, info, rough };
     });
 }
 
-module.exports = { draw, fit, STYLES, COLOURS, LIGHTINGS };
+module.exports = { draw, fit, STYLES, COLOURS, LIGHTINGS, ROUGH };

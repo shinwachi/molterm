@@ -227,9 +227,19 @@ async function step(form) {
     const result = apply(state, info, events(raw), size);
     if (result === 'quit') return { status: 1, state: encode(state), output: '' };
     const sized = `${cols}x${rows}`;
-    if (!result && !first && state.size === sized) return { status: 0, state: encode(state), output: '' };
+    // a rough picture, drawn while a drag went on, is drawn again in full once the button is up
+    const settle = !!state.r && !state.d;
+    if (!result && !first && !settle && state.size === sized) {
+        // nothing to draw: the status line again, as the client may have put its spinner over it
+        const status = state.n ? at(rows - 1, 0) + statusLine(state, structure, { atoms: state.n[0], residues: state.n[1], style: state.n[2] }, cols) : '';
+        return { status: 0, state: encode(state), output: status };
+    }
     state.size = sized;
-    if (result || !drawn) drawn = await renderer.draw(structure, look(), view(), width, height, background);
+    if (result || settle || !drawn) {
+        drawn = await renderer.draw(structure, look(), view(), width, height, background, { rough: !!state.d && !first });
+    }
+    state.r = drawn.rough ? 1 : 0;
+    state.n = [drawn.info.atoms, drawn.info.residues, drawn.info.style];
 
     const old = IDS[state.f];
     state.f = 1 - state.f;

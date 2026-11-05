@@ -18,6 +18,8 @@ services:
             - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
             - PUBLIC_URL=http://${APP_HOST:-molterm-3d.localhost}
             - APP_ENV=${APP_TAG:-prod}
+            # llvmpipe's threads, as many as the CPUs below: it counts the host's (128) otherwise, and they fight over 4
+            - LP_NUM_THREADS=4
         volumes:
             - ./data:/app/data
         # software rendering is CPU-bound; keep it from taking the machine

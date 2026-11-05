@@ -18,7 +18,8 @@
         .about pre { font-family: monospace; font-size: var(--fs-sm); background: var(--surface-2); padding: var(--sp-2) var(--sp-3);
                      border-radius: 4px; overflow-x: auto; }
         .about code { font-family: monospace; }
-        #picture { max-width: 100%; border-radius: 4px; background: var(--surface); }
+        #picture { max-width: 100%; border-radius: 4px; background: var(--surface); transition: opacity 0.2s; }
+        #picture.waiting { opacity: 0.5; }
     </style>
 </head>
 <body>
@@ -64,6 +65,7 @@
             <label>colour <select id="colour">{{COLOURS}}</select></label>
             <label>lighting <select id="lighting">{{LIGHTINGS}}</select></label>
             <label>turn <input id="turn" type="range" min="-180" max="180" value="0"></label>
+            <span class="faint" id="drawing" aria-live="polite" hidden>Drawing…</span>
         </div>
         <p><img id="picture" alt="The structure as the terminal viewer draws it" width="600" height="450"></p>
         <p class="faint">Structures: PDB entries from RCSB, kept here once fetched; SMILES and molblocks put in 3D by
