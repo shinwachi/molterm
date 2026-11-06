@@ -566,3 +566,8 @@ Open issues:
 `make help` lists them: `logs`, `login`, `test`, `ps`, `down`, ...
 
 Secrets go in `credentials_norepo.env` (created from `credentials_norepo.env.example` by `make init`, never committed).
+
+## License
+
+Copyright 2026 Shinichiro Wachi. Licensed under the [Apache License, Version 2.0](LICENSE); see also [NOTICE](NOTICE). The libraries
+fetched into the images at build time (RDKit, Pyodide, restty, xterm.js, the DejaVu fonts, ...) keep their own licences.

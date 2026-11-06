@@ -4,7 +4,7 @@
   "private": true,
   "description": "molterm in 3D: Mol* drawing molecules and proteins in the terminal, and on a web page",
   "author": "Shinichiro Wachi",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
