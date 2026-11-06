@@ -4,7 +4,9 @@ It streams its replies word by word, uses a server-side tool (the molterm server
 tools: `tui.show` puts a drawing in the transcript, and `tui.ask` asks the user a question and waits for the answer. A real agent would
 make the same calls with the same events; only the deciding would differ.
 """
+import base64
 import itertools
+import math
 import re
 import time
 
@@ -18,11 +20,19 @@ SAMPLES = {
 }
 _SMILES = re.compile(r"^[A-Za-z0-9@+\-\[\]()=#$%/\\.:*]+$")
 _ELEMENTS = re.compile(r"Cl|Br|[BCNOSPFI]|[cnosp]")
+# the page's terminal colours, for molterm to fit its picture to, and the pixels a picture gets per column (a cell is twice as tall)
+TERMINAL = {"background": "161615", "foreground": "f0efec"}
+CELL_PIXELS = 16
+PICTURE_ROWS = 16
 # the tools this agent can call, as a real agent's tool list would describe them
 TOOLS = [
-    {"name": "molterm.render", "where": "server", "description": "Draw a molecule (SMILES) as coloured Braille text."},
+    {"name": "molterm.render", "where": "server",
+     "description": "Draw a molecule (SMILES): as a picture for the Kitty graphics protocol (mode kitty, the default), or as coloured "
+                    "Braille text (mode braille)."},
     {"name": "molterm.properties", "where": "server", "description": "Compute a molecule's MW, cLogP, TPSA, H-bond donors and acceptors, QED."},
-    {"name": "tui.show", "where": "client", "description": "Show a panel (title, body with ANSI colours) in the user's terminal."},
+    {"name": "tui.show", "where": "client",
+     "description": "Show a panel in the user's terminal: a title, and a picture (image: png, cols, rows) and/or text (body, ANSI "
+                    "colours allowed)."},
     {"name": "tui.ask", "where": "client", "description": "Ask the user to pick one of some options; returns their choice."},
 ]
 
@@ -41,7 +51,19 @@ class Molterm:
     def __init__(self, url, timeout=20):
         self.url, self.timeout = url.rstrip("/"), timeout
 
+    def picture(self, smiles, cols, rows=PICTURE_ROWS):
+        """The drawing as a PNG fitted to the page's terminal: {"png": base64, "cols", "rows"}, the cells it takes."""
+        response = requests.get(f"{self.url}/api/v1/render.png", params={"input": smiles, "cols": max(min(cols, 100), 20), "rows": rows,
+                                                                          "cell_width": CELL_PIXELS, **TERMINAL}, timeout=self.timeout)
+        if response.status_code != 200:
+            raise ValueError(response.text.strip() or f"molterm answered {response.status_code}")
+        png = response.content
+        height = int.from_bytes(png[20:24], "big")  # the PNG's IHDR: width, then height
+        return {"png": base64.b64encode(png).decode("ascii"), "cols": int(response.headers.get("X-Molterm-Cols", cols)),
+                "rows": max(math.ceil(height / (2 * CELL_PIXELS)), 1)}
+
     def render(self, smiles, cols):
+        """The drawing as coloured Braille text."""
         response = requests.get(f"{self.url}/api/v1/render.txt", params={"input": smiles, "color": "1", "mode": "braille",
                                                                           "cols": max(min(cols, 120), 20), "rows": 24}, timeout=self.timeout)
         if response.status_code != 200:
@@ -127,6 +149,8 @@ class EmulatedAgent:
 
     @staticmethod
     def summary(name, output):
+        if name == "molterm.render" and isinstance(output, dict):
+            return f"Drew it as a picture, {output['cols']} by {output['rows']} cells"
         if name == "molterm.render":
             lines = output.split("\n")
             return f"Drew it in {len(lines)} lines of Braille"
@@ -167,12 +191,13 @@ class EmulatedAgent:
 
     def draw(self, smiles, name, cols):
         self.say(f"I'll draw {name or 'that'} with molterm.")
-        drawing = self.use_server_tool("molterm.render", {"smiles": smiles}, lambda: self.molterm.render(smiles, cols), "Drawing")
-        if drawing is None:
+        picture = self.use_server_tool("molterm.render", {"smiles": smiles, "mode": "kitty"}, lambda: self.molterm.picture(smiles, cols),
+                                       "Drawing")
+        if picture is None:
             self.say("molterm couldn't draw it. If that was a SMILES, check it for typos; otherwise the molterm server may be down.")
             return
-        self.use_tui("tui.show", {"title": name or smiles, "body": drawing}, "Showing")
-        self.say("There it is, in coloured Braille: oxygen red, nitrogen blue.")
+        self.use_tui("tui.show", {"title": name or smiles, "image": picture}, "Showing")
+        self.say("There it is, drawn by RDKit and shown with the Kitty graphics protocol: oxygen red, nitrogen blue.")
         answer = self.use_tui("tui.ask", {"question": f"Do you want the properties of {name or 'this molecule'} too?",
                                           "options": ["Yes", "No"]}, "Waiting for you")
         if answer.get("index") != 0:

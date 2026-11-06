@@ -16,6 +16,11 @@ class FakeMolterm:
             raise ValueError("Not valid SMILES")
         return "\x1b[31mO\x1b[0m⠒⠒\n⠉⠉"
 
+    def picture(self, smiles, cols):
+        if smiles == "C1CC":
+            raise ValueError("Not valid SMILES")
+        return {"png": "iVBORw0KGgo=", "cols": 7, "rows": 2}
+
     def properties(self, smiles):
         return {"formula": "C2H6O", "mw": 46.07, "logp": -0.0014, "tpsa": 20.23, "hbd": 1, "hba": 1, "qed": 0.41, "ro5": 0}
 
@@ -94,8 +99,10 @@ def test_a_smiles_is_drawn_shown_in_the_tui_and_its_properties_offered(client):
     tools = [(e["name"], e["input"].get("title") or e["input"].get("smiles") or e["input"].get("question")) for e in events if e["type"] == "tool_use"]
     assert tools == [("molterm.render", "CCO"), ("tui.show", "CCO"), ("tui.ask", "Do you want the properties of this molecule too?"),
                      ("molterm.properties", "CCO"), ("tui.show", "Properties of CCO")]
+    render = next(e for e in events if e["type"] == "tool_use" and e["name"] == "molterm.render")
+    assert render["input"]["mode"] == "kitty"  # a picture by default
     shown = next(e for e in events if e["type"] == "tool_use" and e["name"] == "tui.show")
-    assert "⠒⠒" in shown["input"]["body"]
+    assert shown["input"]["image"] == {"png": "iVBORw0KGgo=", "cols": 7, "rows": 2}
 
 
 def test_asking_for_a_drug_goes_through_a_question(client):

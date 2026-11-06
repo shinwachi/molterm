@@ -96,6 +96,25 @@ def test_tui_show_puts_a_panel_in_the_transcript_and_answers(app):
     assert app.bridge.results == [("t2", {"shown": True, "lines": 2})]
 
 
+def test_tui_show_sends_a_picture_once_and_prints_its_placeholders(app):
+    from molterm_tui import kitty
+    image = {"png": "A" * 5000, "cols": 3, "rows": 2}
+    app.bridge.written.clear()
+    app.event({"type": "tool_use", "id": "t9", "name": "tui.show", "input": {"title": "Ethanol", "image": image}})
+    sent = "".join(app.bridge.written)
+    assert sent.count("\x1b_G") == 1 + 2  # a delete of the id, then the picture in two chunks
+    assert "a=T,f=100,U=1,i=1,c=3,r=2,q=2,m=1;" + "A" * 4096 in sent
+    assert app.bridge.results == [("t9", {"shown": True, "lines": 2})]
+    lines, _ = app.lines()
+    cells = [line for line in lines if kitty.PLACEHOLDER in line]
+    assert len(cells) == 2 and all(strip(line).count(kitty.PLACEHOLDER) == 3 for line in cells)
+    assert kitty.colour(1) in cells[0] and kitty.DIACRITICS[1] + kitty.DIACRITICS[2] in cells[1]  # row 1, column 2
+    assert all(width(line) <= 80 for line in lines)
+    app.bridge.written.clear()
+    app.draw()
+    assert "\x1b_G" not in "".join(app.bridge.written)  # frames don't send it again
+
+
 def test_tui_ask_takes_over_the_input_until_answered(app):
     app.event({"type": "tool_use", "id": "t3", "name": "tui.ask", "input": {"question": "Which drug?", "options": ["Aspirin", "Caffeine"]}})
     text = screen(app)

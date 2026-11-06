@@ -5,7 +5,8 @@ back through: `write(text)` prints to the terminal, `post_message(text, cols)` s
 answers one of the agent's TUI tools, and `interrupt()` stops the agent's turn. The app redraws the whole screen after each change.
 
 The agent can use the interface as tools:
-  tui.show {title, body}           puts a panel in the transcript (body may carry ANSI colours, such as a molterm drawing)
+  tui.show {title, image, body}    puts a panel in the transcript: a picture (`image`: {png (base64), cols, rows}), drawn with the
+                                   Kitty graphics protocol, and/or text (`body`, which may carry ANSI colours, such as a Braille drawing)
   tui.ask  {question, options}     asks the user to pick one; the answer goes back to the agent as the tool's result
 """
 import json
@@ -13,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import keys as keyboard
+from . import kitty
 from .screen import (ACCENT, BOLD, DIM, GREEN, GREY, ITALIC, RED, RESET, USER_BG, pad, style, truncate, width, wrap)
 
 SPINNER = "·✢✳✶✻✽✻✶✳✢"
@@ -61,6 +63,7 @@ class App:
         self.scroll = 0  # lines scrolled back from the bottom
         self.frame = 0
         self.started = False
+        self.images = 0  # the Kitty pictures sent, numbered from 1
 
     # -- from the page ----------------------------------------------------------------------------------------------------------------
 
@@ -142,8 +145,15 @@ class App:
     # -- the TUI's own tools ----------------------------------------------------------------------------------------------------------
 
     def _show(self, block):
-        body = str(block.input.get("body", ""))
-        block.panel = body.split("\n")
+        image, body = block.input.get("image"), block.input.get("body")
+        block.panel = []
+        if isinstance(image, dict) and image.get("png"):
+            cols, rows = int(image.get("cols") or 1), int(image.get("rows") or 1)
+            self.images += 1
+            self.bridge.write(kitty.transmit(str(image["png"]), self.images, cols, rows))
+            block.panel += kitty.lines(self.images, cols, rows)
+        if body:
+            block.panel += str(body).split("\n")
         block.state = "done"
         self.bridge.post_tool_result(block.tool_id, json.dumps({"shown": True, "lines": len(block.panel)}))
 
@@ -257,6 +267,7 @@ class App:
             return
         if text == "/clear":
             self.blocks = [Block("banner")]
+            self.bridge.write("".join(kitty.delete(n) for n in range(1, self.images + 1)))  # the pictures go with their placeholders
             return
         self.history.append(text)
         self.blocks.append(Block("user", text))
@@ -274,7 +285,7 @@ class App:
             border = style("╭" + "─" * (cols - 2) + "╮", ACCENT)
             return [border, *(style("│ ", ACCENT) + pad(row, inner) + style(" │", ACCENT) for row in rows),
                     style("╰" + "─" * (cols - 2) + "╯", ACCENT), "",
-                    style(" Tips: type a SMILES, such as CC(=O)Oc1ccccc1C(=O)O, or ask for one. /help for help.", GREY), ""]
+                    style(truncate(" Tips: type a SMILES, such as CC(=O)Oc1ccccc1C(=O)O, or ask for one. /help for help.", cols), GREY), ""]
         if block.kind == "user":
             lines = wrap(block.text, cols - 4)
             return [style(pad(("> " if i == 0 else "  ") + line, cols - 2), USER_BG, GREY) for i, line in enumerate(lines)] + [""]

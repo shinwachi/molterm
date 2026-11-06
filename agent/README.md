@@ -4,7 +4,8 @@ A Claude Code-like terminal interface for an agent that runs on the server, one 
 (`tui/molterm_tui`), run in the browser by [Pyodide](https://pyodide.org/) and drawn in [restty](https://github.com/wiedymi/restty); the
 server is Flask. The agent uses the interface as one of its tools: it can put a panel in the user's transcript, and ask the user a
 question and wait for the answer. For now the agent is an emulation, a script that behaves like a model would, to show the pieces
-working: it draws molecules with the molterm server and shows them, and asks before showing their properties.
+working: it draws molecules with the molterm server and shows them as pictures (the Kitty graphics protocol, which restty draws), and
+asks before showing their properties.
 
 ## Run it
 
@@ -43,15 +44,21 @@ The TUI tools, which run in the browser:
 
 | tool | input | result |
 |---|---|---|
-| `tui.show` | `title`, `body` (text, ANSI colours allowed) | `{"shown": true, "lines"}` |
+| `tui.show` | `title`, and `image` (`png` as base64, `cols`, `rows`) and/or `body` (text, ANSI colours allowed) | `{"shown": true, "lines"}` |
 | `tui.ask` | `question`, `options` | `{"choice", "index"}`, or `{"choice": null, "skipped": true}` on Esc |
 
 Tools whose names don't start with `tui.` run on the server, and the page only shows their result. `GET /api/v1/tools` lists them all.
+
+A picture is sent to the terminal once, as a Kitty virtual placement, and its cells are printed as Unicode placeholders (U+10EEEE with
+combining marks for row and column, in a colour that names the picture). They are ordinary text in the TUI's lines, so the picture
+scrolls, crops and redraws with the transcript although the TUI repaints the whole screen each frame. `molterm.render` draws with
+`/api/v1/render.png`, fitted to the terminal's colours (`Molterm.render` still draws coloured Braille, for a terminal without Kitty graphics).
 
 | path | job |
 |---|---|
 | `tui/molterm_tui/app.py` | the interface: transcript, tool calls, spinner, input box, questions; keys and events in, frames out |
 | `tui/molterm_tui/keys.py`, `screen.py` | the terminal's key sequences; measuring, wrapping and styling text |
+| `tui/molterm_tui/kitty.py` | Kitty pictures: sending one, and its placeholder lines |
 | `server/app.py` | Flask: the page, the TUI's files for Pyodide, sessions and their streams |
 | `server/sessions.py` | a session: event log, inbox, tool results, interrupts |
 | `server/agent.py` | the emulated agent and its molterm tools |
@@ -62,10 +69,10 @@ into the same `use_tui` and `use_server_tool` calls: the events, the page and th
 
 ## Status
 
-Verified (2026-11-05): `make test`, 24 tests (the TUI driven by keys and events; the server's sessions, stream, tool answers, interrupts
+Verified (2026-11-06): `make test`, 25 tests (the TUI driven by keys and events; the server's sessions, stream, tool answers, interrupts
 and the agent's script, with molterm stubbed). In Chrome: the page starts Pyodide and a session, the greeting streams in, "show me a
 drug" brings up the agent's question in place of the input, the chosen drug is drawn by molterm on the server and shown in the
-transcript in coloured Braille, and the properties come as a second panel after a yes.
+transcript as a Kitty picture (it stays put as later frames redraw, and a second one beside it), and the properties come as a second panel after a yes.
 
 ## Open issues
 
