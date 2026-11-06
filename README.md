@@ -16,6 +16,8 @@ TUI renderer for chemical structures using RDKit and advanced text graphics
 | ![VisiData with a column of structures beside their SMILES](docs/images/visidata.png) | ![VisiData with a molecule open in 3D, drawn by Mol* on molterm-3d](docs/images/visidata-3d.png) |
 | The VisiData plugin: structures in a spreadsheet | ...and a molecule in 3D, turned with the mouse |
 
+![molterm-3d: haemoglobin drawn by Mol* in each of its four lightings](docs/images/molterm-3d-lightings.png)
+
 ![molterm in the browser: RDKit as WebAssembly, no server](docs/images/web.png)
 
 The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium.
