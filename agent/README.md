@@ -72,8 +72,9 @@ into the same `use_tui` and `use_server_tool` calls: the events, the page and th
 Verified (2026-11-06): `make test`, 25 tests (the TUI driven by keys and events; the server's sessions, stream, tool answers, interrupts
 and the agent's script, with molterm stubbed). In Chrome: the page starts Pyodide and a session, the greeting streams in, "show me a
 drug" brings up the agent's question in place of the input, the chosen drug is drawn by molterm on the server and shown in the
-transcript as a Kitty picture (it stays put as later frames redraw, and a second one beside it), the terminal refits its grid when the box or the zoom changes (a zoom simulated by
-overriding `devicePixelRatio`: 1.19 to 2.6 and back, filling the box each time), and the properties come as a second panel after a yes.
+transcript as a Kitty picture (it stays put as later frames redraw, and a second one beside it), and the properties come as a second
+panel after a yes. The terminal refits its grid when its box or the zoom changes: a narrower box, and a zoom simulated by overriding
+`devicePixelRatio` (1.19 to 2.6 and back), each fill the box afterwards.
 
 ## Open issues
 
