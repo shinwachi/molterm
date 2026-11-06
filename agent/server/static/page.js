@@ -6,7 +6,8 @@ import { loadPyodide } from "/vendor/pyodide/pyodide.mjs";
 
 const box = document.getElementById("terminal"), state = document.getElementById("state");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-let terminal = null, pane = null, app = null, session = null, cell = null;
+let terminal = null, pane = null, app = null, session = null;
+let cell = null, grid = null;  // a cell's size in device pixels, at cell.ratio, and the grid the terminal has
 
 function show(text, tone = "") {
     state.lastChild.textContent = text;
@@ -33,10 +34,35 @@ async function settled(cols, rows) {
     }
 }
 
-function gridFor() {
+async function resize(cols, rows) {
+    pane.resize(cols, rows);
+    await settled(cols, rows);
+    grid = { cols, rows };
+    cell = { width: pane.canvas.width / cols, height: pane.canvas.height / rows, ratio: window.devicePixelRatio || 1 };
+}
+
+// The grid that fills the box. A cell's size in device pixels follows the zoom (devicePixelRatio), so when that has changed since the
+// cell was measured, the current grid is drawn again at the new ratio first, to measure it afresh.
+async function fit() {
     const ratio = window.devicePixelRatio || 1;
-    return { cols: Math.max(40, Math.floor(box.clientWidth * ratio / cell.width)),
-             rows: Math.max(12, Math.floor(box.clientHeight * ratio / cell.height)) };
+    if (ratio !== cell.ratio) await resize(grid.cols, grid.rows);
+    const cols = Math.max(40, Math.floor(box.clientWidth * ratio / cell.width));
+    const rows = Math.max(12, Math.floor(box.clientHeight * ratio / cell.height));
+    if (cols !== grid.cols || rows !== grid.rows) await resize(cols, rows);
+    return grid;
+}
+
+// one fit at a time; a change during a fit gets one more after it
+let fitting = null, again = false;
+function refit() {
+    if (fitting) { again = true; return; }
+    fitting = (async () => {
+        do {
+            again = false;
+            const { cols, rows } = await fit();
+            app?.resize(cols, rows);
+        } while (again);
+    })().catch(error => console.error(error)).finally(() => { fitting = null; });
 }
 
 async function startTerminal() {
@@ -44,7 +70,8 @@ async function startTerminal() {
         root: box,
         surface: { shortcuts: false, searchUi: false, defaultContextMenu: false },
         terminal: {
-            fontSize: 14, ligatures: false, showResizeOverlay: false,
+            // the page sizes the terminal (fit), so that the TUI and the terminal always agree on the grid
+            fontSize: 14, ligatures: false, showResizeOverlay: false, autoResize: false,
             theme: parseGhosttyTheme("background = #161615\nforeground = #f0efec\ncursor-color = #f0efec\n"),
             fonts: [{ url: "/vendor/DejaVuSansMono.ttf", name: "DejaVu Sans Mono" },
                     { url: "/vendor/DejaVuSansMono-Bold.ttf", name: "DejaVu Sans Mono Bold", weight: 700 }],
@@ -65,13 +92,8 @@ async function startTerminal() {
     while (!["ready", "failed"].includes(runtime.lifecycle.state())) await sleep(30);
     if (runtime.lifecycle.state() !== "ready") throw new Error("this browser could not start the terminal (it needs WebGL2 or WebGPU)");
     await document.fonts?.ready;
-    pane.resize(100, 40);
-    await settled(100, 40);
-    cell = { width: pane.canvas.width / 100, height: pane.canvas.height / 40 };
-    const { cols, rows } = gridFor();
-    pane.resize(cols, rows);
-    await settled(cols, rows);
-    return { cols, rows };
+    await resize(100, 40);
+    return fit();
 }
 
 async function startPython() {
@@ -113,11 +135,8 @@ try {
     app.start();
     listen();
     setInterval(() => app.tick(), 120);
-    new ResizeObserver(async () => {
-        const { cols, rows } = gridFor();
-        pane.resize(cols, rows);
-        app.resize(cols, rows);
-    }).observe(box);
+    new ResizeObserver(refit).observe(box);
+    window.addEventListener("resize", refit);  // a zoom changes the ratio, and not always the box
     terminal.focus?.();
     box.addEventListener("click", () => terminal.focus?.());
 } catch (error) {
