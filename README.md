@@ -2,6 +2,8 @@
 
 TUI renderer for chemical structures using RDKit and advanced text graphics
 
+**Try it in your browser: https://shinwachi.github.io/molterm-web/** (RDKit as WebAssembly, nothing to install, no server)
+
 ![A text interface of structures, drawn as Kitty graphics](docs/images/molterm-tui.png)
 
 | | |
@@ -48,7 +50,7 @@ fetches PDB entries from RCSB itself. Mol*'s illustrative lighting is its defaul
 that scrolls with the text. http://molterm-3d-dev.localhost/showcase is an automated demo of it in the same web terminal as
 `/showcase` here. See its README.
 
-`web/` is a third: molterm in the browser with no server behind it, at http://molterm-web-dev.localhost (prod: `molterm-web`). RDKit
+`web/` is a third: molterm in the browser with no server behind it, live at https://shinwachi.github.io/molterm-web/ (GitHub Pages, published by `make -C web pages`), and locally at http://molterm-web-dev.localhost (prod: `molterm-web`). RDKit
 compiled to WebAssembly (RDKit.js, the same RDKit release as this server) lays out and draws the molecule, and this server's text
 renderer, ported to JavaScript, turns the drawing into Braille or ASCII, or shows RDKit's picture through Kitty graphics, in restty.
 nginx only serves the files, and `make -C web export` writes them out for any static host. Its ASCII matches this server's character for

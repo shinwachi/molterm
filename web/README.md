@@ -1,5 +1,7 @@
 # molterm in the browser
 
+**Live: https://shinwachi.github.io/molterm-web/**
+
 ![molterm in the browser: imatinib as RDKit's picture and in Braille](../docs/images/web.png)
 
 A static page that draws molecules the way molterm does, with no server behind it. RDKit, compiled to WebAssembly
@@ -17,6 +19,7 @@ make dev        # build and start -> http://molterm-web-dev.localhost, the page 
 make test       # the renderer's tests, in Node, against the server's own output
 make fixtures   # record that output again from the dev molterm server (site/check.json)
 make export     # the whole site as plain files in data/site, for any static host (GitHub Pages, a bucket, ...)
+make pages      # publish it to GitHub Pages (github.com/shinwachi/molterm-web, public, the built files only)
 make build up ENV=prod   # production -> http://molterm-web.localhost
 ```
 
@@ -54,4 +57,4 @@ three displays, Kitty pictures included, in 10 to 90 ms.
 
 - Octants are in the renderer but not on the page: restty's font (DejaVu Sans Mono) has no Unicode 16 octant glyphs.
 - No Markush (R-group) structures, editor, themes or fog: only the drawing itself is ported.
-- The repository is private, so `make export` makes the files, but nothing publishes them yet.
+- The live copy on GitHub Pages is updated by hand, with `make pages`: it doesn't follow commits here by itself.

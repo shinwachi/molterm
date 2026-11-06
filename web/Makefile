@@ -4,6 +4,7 @@
 #   make test              the renderer's tests, in Node, against the server's own output
 #   make fixtures          record that output again from the dev molterm server (site/check.json)
 #   make export            the whole site as plain files in data/site, to put on any static host
+#   make pages             publish it to GitHub Pages: https://shinwachi.github.io/molterm-web/
 #   make <target> ENV=prod          against env/prod.env
 APP     := molterm-web
 SERVICE := molterm-web
@@ -13,7 +14,7 @@ COMPOSE := docker compose -p $(APP)-$(ENV) --env-file env/$(ENV).env $(if $(wild
 TESTER  := docker build -q --target test -t $(APP)-test -f Dockerfile .. >/dev/null && docker run --rm --user $$(id -u):$$(id -g) -v $(CURDIR)/site:/web/site -v $(CURDIR)/tests:/web/tests $(APP)-test
 MOLTERM_URL ?= http://molterm-dev-molterm-1:8910
 
-.PHONY: help build up down restart logs ps test fixtures export dev
+.PHONY: help build up down restart logs ps test fixtures export pages dev
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  %-9s %s\n",$$1,$$2}'
@@ -53,3 +54,12 @@ export: ## the site as plain files in data/site (the page and its libraries), fo
 
 dev: ## build + run the dev environment
 	$(MAKE) build up ENV=dev
+
+PAGES := data/pages
+pages: export ## publish the exported site to GitHub Pages (github.com/shinwachi/molterm-web, a clone kept in data/pages)
+	test -d $(PAGES)/.git || git clone git@github.com:shinwachi/molterm-web.git $(PAGES)
+	cd $(PAGES) && git pull -q --ff-only
+	find $(PAGES) -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+	cp -r data/site/. $(PAGES)/ && cp pages-README.md $(PAGES)/README.md && touch $(PAGES)/.nojekyll
+	cd $(PAGES) && git add -A && (git diff --cached --quiet || git commit -q -m "Update the site from molterm $$(git -C $(CURDIR) rev-parse --short HEAD)") && git push -q
+	@echo "-> https://shinwachi.github.io/molterm-web/"
