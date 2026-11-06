@@ -1,0 +1,6 @@
+# Layered on docker-compose.yml for ENV=dev: the page's files bind-mounted over the image's, so an edit shows on reload.
+services:
+    molterm-web:
+        restart: "no"
+        volumes:
+            - ./site:/srv/site:ro

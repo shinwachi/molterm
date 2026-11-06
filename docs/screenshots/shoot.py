@@ -1,0 +1,83 @@
+"""Take the README's hero screenshots from the running dev services, in headless Chromium: `make screenshots` (Playwright's image, on the
+traefik network, so the pages are reached by container name and no hostname appears in them).
+
+The showcases and the VisiData demo are recordings that play by themselves, so each shot waits for a caption, lets the frame settle,
+and photographs the terminal alone.
+"""
+import os
+import sys
+
+from playwright.sync_api import sync_playwright
+
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images")
+MOLTERM = os.environ.get("MOLTERM", "http://molterm-dev-molterm-1:8910")
+VD = os.environ.get("MOLTERM_VD", "http://molterm-vd-dev-molterm-vd-1:8920")
+M3D = os.environ.get("MOLTERM_3D", "http://molterm-3d-dev-molterm-3d-1:8930")
+WEB = os.environ.get("MOLTERM_WEB", "http://molterm-web-dev-molterm-web-1:8940")
+
+# (page, [(words in the caption, milliseconds to let the frame settle, file)]), in the order the recording plays them
+RECORDED = [
+    (f"{MOLTERM}/showcase", [
+        ("The same molecule both ways", 1500, "molterm-ascii.png"),
+        ("A larger drug, imatinib", 1500, "molterm-braille.png"),
+        ("A text interface with structures in it", 1800, "molterm-tui.png"),
+        ("The prompt waits below the last one", 1200, "molterm-shell.png"),
+    ]),
+    (VD, [
+        ("the sheet scrolls, the pictures with it", 1500, "visidata.png"),
+        ("Alt+g charts cLogP against MW", 2500, "visidata-chart.png"),
+        ("Alt+Shift+V opens the row's molecule", 2500, "visidata-3d.png"),
+    ]),
+    (f"{M3D}/showcase", [
+        ("The four lightings side by side", 2500, "molterm-3d-lightings.png"),
+    ]),
+]
+LONGEST = 8 * 60 * 1000  # a recording can take minutes to reach its last shot
+
+
+def shoot_recording(page, url, shots, only):
+    page.goto(url)
+    for words, settle, name in shots:
+        if only and name not in only:
+            continue
+        print(f"{url}: waiting for '{words}'", flush=True)
+        page.wait_for_function("words => document.getElementById('caption').textContent.includes(words)", arg=words,
+                               timeout=LONGEST, polling=100)
+        page.wait_for_timeout(settle)
+        page.locator("#frame").screenshot(path=os.path.join(OUT, name))
+        print(f"  -> {name}", flush=True)
+
+
+def shoot_web(page, only):
+    """The browser page: one drug as RDKit's picture and in Braille, one after the other, as a visitor would draw them."""
+    if only and "web.png" not in only:
+        return
+    page.goto(f"{WEB}/#" + "smiles=Cn1cnc2c1c(%3DO)n(C)c(%3DO)n2C&mode=picture")
+    page.wait_for_function("document.getElementById('status').textContent.startsWith('Drawn')", timeout=60_000)
+    page.click("#clear")
+    imatinib = "Cc1ccc(NC(=O)c2ccc(CN3CCN(C)CC3)cc2)cc1Nc1nccc(-c2cccnc2)n1"
+    for smiles, mode in ((imatinib, "picture"), (imatinib, "braille")):
+        page.fill("#input", smiles)
+        page.click(f"#modes button[data-mode={mode}]")
+        page.wait_for_timeout(1200)
+    page.wait_for_timeout(1000)
+    page.locator("main .layout").screenshot(path=os.path.join(OUT, "web.png"))
+    print("  -> web.png", flush=True)
+
+
+def main(only):
+    os.makedirs(OUT, exist_ok=True)
+    with sync_playwright() as playwright:
+        # restty draws with WebGL2, which headless Chromium has from SwiftShader
+        browser = playwright.chromium.launch(args=["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"])
+        context = browser.new_context(viewport={"width": 1280, "height": 1050}, device_scale_factor=2, color_scheme="light")
+        shoot_web(context.new_page(), only)
+        for url, shots in RECORDED:
+            if only and not any(name in only for *_, name in shots):
+                continue
+            shoot_recording(context.new_page(), url, shots, only)
+        browser.close()
+
+
+if __name__ == "__main__":
+    main(set(sys.argv[1:]))

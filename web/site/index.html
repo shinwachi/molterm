@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>molterm in the browser</title>
+    <meta name="description" content="Chemical structures drawn as text and terminal pictures, by RDKit compiled to WebAssembly. No server.">
+    <link rel="stylesheet" href="vendor/house.css">
+    <link rel="stylesheet" href="site.css">
+    <link rel="preload" href="vendor/RDKit_minimal.wasm" as="fetch" type="application/wasm" crossorigin>
+    <script>
+        try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    </script>
+</head>
+<body>
+<header class="topbar">
+    <span class="brand">molterm</span>
+    <span class="chip" id="engine"><i></i>loading RDKit…</span>
+    <span class="spacer"></span>
+    <a class="btn quiet" href="check.html" title="This renderer against the molterm server's own output">Check</a>
+    <button class="btn quiet" id="theme" title="Theme: auto, light or dark">auto</button>
+</header>
+<main>
+    <p class="lede muted">Chemical structures as text, for terminals: coloured Braille, plain ASCII, or a picture through the Kitty
+        graphics protocol. Everything here runs in your browser: RDKit, compiled to WebAssembly, reads the SMILES and lays out and draws
+        the molecule, and molterm's renderer turns the drawing into characters. Nothing is sent anywhere.</p>
+    <div class="layout">
+        <section>
+            <form id="form">
+                <input id="input" aria-label="SMILES or molblock" placeholder="SMILES, such as CCO" spellcheck="false"
+                       autocapitalize="off" autocomplete="off" autocorrect="off">
+                <button class="btn primary" type="submit">Draw</button>
+            </form>
+            <div class="toolbar">
+                <div class="segmented" role="radiogroup" aria-label="Display" id="modes">
+                    <button type="button" role="radio" data-mode="braille" aria-checked="true">Braille</button>
+                    <button type="button" role="radio" data-mode="ascii" aria-checked="false">ASCII</button>
+                    <button type="button" role="radio" data-mode="picture" aria-checked="false"
+                            title="RDKit's picture, through the Kitty graphics protocol">Picture</button>
+                </div>
+                <label class="muted" for="size">Fit in</label>
+                <select id="size">
+                    <option value="40">40 columns</option>
+                    <option value="60" selected>60 columns</option>
+                    <option value="80">80 columns</option>
+                </select>
+                <span class="spacer"></span>
+                <button class="btn quiet" type="button" id="copy" disabled>Copy text</button>
+                <button class="btn quiet" type="button" id="clear">Clear</button>
+            </div>
+            <div id="frame"><div id="terminal"></div></div>
+            <p id="status" class="muted" role="status"></p>
+        </section>
+        <table class="list compact" id="samples" aria-label="Samples"></table>
+    </div>
+    <h2>How it works</h2>
+    <ol class="how muted">
+        <li>RDKit.js reads the SMILES (or molblock) and computes a 2D layout, as the molterm server does with RDKit in Python.</li>
+        <li>RDKit draws the bonds on a canvas with no labels, each element in a pure colour, at four pixels per dot.</li>
+        <li>Each two-by-four block of dots becomes one Braille character; the element whose ink covers most of a cell colours it,
+            with the terminal's own colours, so the drawing follows its theme.</li>
+        <li>Atom labels are set as real letters, with hydrogens, charges and isotopes, on the side away from the bonds.</li>
+    </ol>
+    <p class="faint">The terminal is <a href="https://github.com/wiedymi/restty">restty</a>, which shows Kitty graphics in the browser.
+        RDKit <span id="rdkit-version"></span> (BSD licence). Fonts: DejaVu Sans Mono.</p>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

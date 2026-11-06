@@ -1,0 +1,22 @@
+# molterm in the browser: a static page, served by nginx. RDKit runs in the visitor's browser as WebAssembly; nothing else runs here.
+# Built from the repository's root to share its stylesheet.
+networks:
+    traefik:
+        external: true
+
+services:
+    molterm-web:
+        image: molterm-web:${APP_TAG:-latest}
+        build:
+            context: ..
+            dockerfile: web/Dockerfile
+        restart: unless-stopped
+        labels:
+            - traefik.enable=true
+            - traefik.docker.network=traefik
+            - traefik.http.routers.${ROUTER:-molterm-web}.rule=Host(`${APP_HOST:-molterm-web.localhost}`)
+            - traefik.http.routers.${ROUTER:-molterm-web}.service=${ROUTER:-molterm-web}
+            - traefik.http.routers.${ROUTER:-molterm-web}.entrypoints=web
+            - traefik.http.services.${ROUTER:-molterm-web}.loadbalancer.server.port=8940
+        networks:
+            - traefik

@@ -3,6 +3,7 @@
 #   make dev               run the dev environment   -> http://molterm-dev.localhost
 #   make prod              run VERSION in production -> http://molterm.localhost
 #   make release [BUMP=minor|major]   bump VERSION, commit, tag vX.Y.Z, build the prod image
+#   make screenshots       the README's hero shots, from the dev services
 #   make <target> ENV=<env>           any target against env/<env>.env (+ docker-compose.<env>.yml if present)
 APP     := molterm
 SERVICE := molterm
@@ -14,7 +15,7 @@ BUMP    ?= patch
 export APP_TAG := $(if $(filter prod,$(ENV)),$(VERSION),$(ENV))
 COMPOSE := docker compose -p $(APP)-$(ENV) --env-file env/$(ENV).env $(if $(wildcard env/$(ENV).local.env),--env-file env/$(ENV).local.env) -f docker-compose.yml $(if $(wildcard docker-compose.$(ENV).yml),-f docker-compose.$(ENV).yml)
 
-.PHONY: help init build up down restart logs ps login test dev prod release
+.PHONY: help init build up down restart logs ps login test dev prod release screenshots
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  %-9s %s\n",$$1,$$2}'
@@ -60,3 +61,8 @@ release: ## bump VERSION, commit, tag, build the prod image (clean tree only)
 	@v=$$(awk -F. -v b=$(BUMP) '{ if (b=="major") {$$1++; $$2=0; $$3=0} else if (b=="minor") {$$2++; $$3=0} else {$$3++}; print $$1"."$$2"."$$3 }' VERSION); \
 	    echo $$v > VERSION; git commit -q -am "v$$v"; git tag -a v$$v -m "v$$v"; echo "released v$$v (git push --follow-tags to publish)"
 	$(MAKE) build ENV=prod
+
+PLAYWRIGHT := mcr.microsoft.com/playwright/python:v1.49.1-noble
+screenshots: ## the README's hero shots in docs/images, from the running dev services (SHOTS="a.png b.png" for some)
+	docker run --rm --network traefik --user $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/docs:/docs $(PLAYWRIGHT) \
+		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 && PYTHONPATH=/tmp/pw python /docs/screenshots/shoot.py $(SHOTS)'

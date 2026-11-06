@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>molterm check</title>
+    <link rel="stylesheet" href="vendor/house.css">
+    <link rel="stylesheet" href="site.css">
+    <style>@font-face { font-family: "DejaVu Sans Mono"; src: url("vendor/DejaVuSansMono.ttf"); }</style>
+</head>
+<body>
+<header class="topbar">
+    <a class="brand" href="./">molterm</a>
+    <span class="chip" id="summary"><i></i>checking…</span>
+</header>
+<main>
+    <p class="muted">Every sample, drawn here and by the molterm server (recorded in <code>check.json</code>), from the same molblock. ASCII
+        must match character for character. Braille is rasterized by this browser rather than by Cairo, so a few dots may differ along
+        the edges of a stroke; the share of matching characters is given for each.</p>
+    <table class="list compact" id="results">
+        <thead><tr><th>molecule</th><th>display</th><th>size</th><th class="num">matching characters</th></tr></thead>
+        <tbody></tbody>
+    </table>
+    <div id="mismatches"></div>
+</main>
+<script type="module" src="check.js"></script>
+</body>
+</html>

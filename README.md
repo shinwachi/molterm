@@ -2,6 +2,17 @@
 
 TUI renderer for chemical structures using RDKit and advanced text graphics
 
+![A text interface of structures, drawn as Kitty graphics](docs/images/molterm-tui.png)
+
+| | |
+|---|---|
+| ![Imatinib as a Kitty picture beside the same drawing in Braille](docs/images/molterm-braille.png) | ![Caffeine as a Kitty picture beside plain ASCII](docs/images/molterm-ascii.png) |
+| Kitty graphics and coloured Braille | Kitty graphics and plain ASCII, for anywhere text goes |
+
+![molterm in the browser: RDKit as WebAssembly, no server](docs/images/web.png)
+
+The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium.
+
 Created 2026-10-31 from a Flask project template.
 
 ## Environments
@@ -27,6 +38,13 @@ at http://molterm-3d-dev.localhost (prod: `molterm-3d`). It puts SMILES and molb
 fetches PDB entries from RCSB itself. Mol*'s illustrative lighting is its default, and `molterm3d -p` prints a picture into the shell
 that scrolls with the text. http://molterm-3d-dev.localhost/showcase is an automated demo of it in the same web terminal as
 `/showcase` here. See its README.
+
+`web/` is a third: molterm in the browser with no server behind it, at http://molterm-web-dev.localhost (prod: `molterm-web`). RDKit
+compiled to WebAssembly (RDKit.js, the same RDKit release as this server) lays out and draws the molecule, and this server's text
+renderer, ported to JavaScript, turns the drawing into Braille or ASCII, or shows RDKit's picture through Kitty graphics, in restty.
+nginx only serves the files, and `make -C web export` writes them out for any static host. Its ASCII matches this server's character for
+character; its Braille differs only by single dots where the browser's antialiasing differs from Cairo's (`/check.html`). See its README.
+
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
 
 Every service is published through a Traefik on the external `traefik` Docker network, by container labels. The hosts in `env/*.env`
