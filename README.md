@@ -29,6 +29,12 @@ that scrolls with the text. http://molterm-3d-dev.localhost/showcase is an autom
 `/showcase` here. See its README.
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
 
+Every service is published through a Traefik on the external `traefik` Docker network, by container labels. The hosts in `env/*.env`
+are `*.localhost` names, which browsers send to this machine. To serve your own domain, put the settings that differ in a git-ignored
+`env/<name>.local.env` next to the tracked one (in this folder, `molterm-3d/` and `visidata-molterm/` alike): the Makefiles load it
+after `env/<name>.env`, so it wins. For example, `APP_HOST=molterm.example.org`, and for the VisiData demo also
+`MOLTERM_PUBLIC_URL=http://molterm.example.org`, where its page links to molterm.
+
 ## Status
 
 **Done: environment, molecule parser, rendering as Braille, octants and terminal graphics, and the guided session in web and real terminals.** RDKit and Flask are installed

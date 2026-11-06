@@ -15,6 +15,8 @@ services:
         environment:
             - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
             - MOLTERM3D_URL=${MOLTERM3D_URL:-http://molterm-3d-prod-molterm-3d-1:8930}
+            # where the page sends visitors to see molterm itself
+            - MOLTERM_PUBLIC_URL=${MOLTERM_PUBLIC_URL:-http://molterm.localhost}
         volumes:
             - ./data:/app/data
         labels:

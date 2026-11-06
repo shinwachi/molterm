@@ -10,7 +10,7 @@ ENV     ?= dev
 export APP_TAG := $(ENV)
 export HOST_UID := $(shell id -u)
 export HOST_GID := $(shell id -g)
-COMPOSE := docker compose -p $(APP)-$(ENV) --env-file env/$(ENV).env -f docker-compose.yml $(if $(wildcard docker-compose.$(ENV).yml),-f docker-compose.$(ENV).yml)
+COMPOSE := docker compose -p $(APP)-$(ENV) --env-file env/$(ENV).env $(if $(wildcard env/$(ENV).local.env),--env-file env/$(ENV).local.env) -f docker-compose.yml $(if $(wildcard docker-compose.$(ENV).yml),-f docker-compose.$(ENV).yml)
 
 .PHONY: help build up down restart logs ps login test view dev
 
@@ -24,7 +24,7 @@ build: ## build the image for ENV
 up: ## start ENV in the background
 	@mkdir -p data
 	$(COMPOSE) up -d
-	@echo "-> http://$$(grep ^APP_HOST env/$(ENV).env | cut -d= -f2)"
+	@echo "-> http://$$(grep -h ^APP_HOST env/$(ENV).env $(wildcard env/$(ENV).local.env) | tail -1 | cut -d= -f2)"
 
 down: ## stop and remove ENV's containers
 	$(COMPOSE) down
@@ -48,4 +48,4 @@ dev: ## build + run the dev environment
 	$(MAKE) build up ENV=dev
 
 view: ## view INPUT (a SMILES, a PDB id, ...) in this terminal, through ENV's server
-	MOLTERM3D_URL=http://$$(grep ^APP_HOST env/$(ENV).env | cut -d= -f2) sh client/molterm3d.sh '$(INPUT)'
+	MOLTERM3D_URL=http://$$(grep -h ^APP_HOST env/$(ENV).env $(wildcard env/$(ENV).local.env) | tail -1 | cut -d= -f2) sh client/molterm3d.sh '$(INPUT)'

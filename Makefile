@@ -12,7 +12,7 @@ BUMP    ?= patch
 
 # prod runs the image built for the current VERSION; other environments use a moving tag
 export APP_TAG := $(if $(filter prod,$(ENV)),$(VERSION),$(ENV))
-COMPOSE := docker compose -p $(APP)-$(ENV) --env-file env/$(ENV).env -f docker-compose.yml $(if $(wildcard docker-compose.$(ENV).yml),-f docker-compose.$(ENV).yml)
+COMPOSE := docker compose -p $(APP)-$(ENV) --env-file env/$(ENV).env $(if $(wildcard env/$(ENV).local.env),--env-file env/$(ENV).local.env) -f docker-compose.yml $(if $(wildcard docker-compose.$(ENV).yml),-f docker-compose.$(ENV).yml)
 
 .PHONY: help init build up down restart logs ps login test dev prod release
 
@@ -28,7 +28,7 @@ build: init ## build the image for ENV
 
 up: init ## start ENV in the background
 	$(COMPOSE) up -d
-	@echo "-> http://$$(grep ^APP_HOST env/$(ENV).env | cut -d= -f2)"
+	@echo "-> http://$$(grep -h ^APP_HOST env/$(ENV).env $(wildcard env/$(ENV).local.env) | tail -1 | cut -d= -f2)"
 
 down: ## stop and remove ENV's containers
 	$(COMPOSE) down
