@@ -9,6 +9,13 @@ TUI renderer for chemical structures using RDKit and advanced text graphics
 | ![Imatinib as a Kitty picture beside the same drawing in Braille](docs/images/molterm-braille.png) | ![Caffeine as a Kitty picture beside plain ASCII](docs/images/molterm-ascii.png) |
 | Kitty graphics and coloured Braille | Kitty graphics and plain ASCII, for anywhere text goes |
 
+![molterm in a shell: each command's picture prints below it and scrolls with the text](docs/images/molterm-shell.png)
+
+| | |
+|---|---|
+| ![VisiData with a column of structures beside their SMILES](docs/images/visidata.png) | ![VisiData with a molecule open in 3D, drawn by Mol* on molterm-3d](docs/images/visidata-3d.png) |
+| The VisiData plugin: structures in a spreadsheet | ...and a molecule in 3D, turned with the mouse |
+
 ![molterm in the browser: RDKit as WebAssembly, no server](docs/images/web.png)
 
 The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium.

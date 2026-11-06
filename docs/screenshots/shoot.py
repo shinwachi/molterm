@@ -25,7 +25,6 @@ RECORDED = [
     ]),
     (VD, [
         ("the sheet scrolls, the pictures with it", 1500, "visidata.png"),
-        ("Alt+g charts cLogP against MW", 2500, "visidata-chart.png"),
         ("Alt+Shift+V opens the row's molecule", 2500, "visidata-3d.png"),
     ]),
     (f"{M3D}/showcase", [
