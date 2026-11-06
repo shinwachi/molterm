@@ -60,6 +60,6 @@ pages: export ## publish the exported site to GitHub Pages (github.com/shinwachi
 	test -d $(PAGES)/.git || git clone git@github.com:shinwachi/molterm-web.git $(PAGES)
 	cd $(PAGES) && git pull -q --ff-only
 	find $(PAGES) -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-	cp -r data/site/. $(PAGES)/ && cp pages-README.md $(PAGES)/README.md && touch $(PAGES)/.nojekyll
+	cp -r data/site/. $(PAGES)/ && cp pages-README.md $(PAGES)/README.md && cp ../LICENSE ../NOTICE $(PAGES)/ && touch $(PAGES)/.nojekyll
 	cd $(PAGES) && git add -A && (git diff --cached --quiet || git commit -q -m "Update the site from molterm $$(git -C $(CURDIR) rev-parse --short HEAD)") && git push -q
 	@echo "-> https://shinwachi.github.io/molterm-web/"
