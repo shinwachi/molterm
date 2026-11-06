@@ -1,5 +1,8 @@
 """Sessions: one per browser tab, each with its own agent, an event log the page reads as a stream, and the TUI tools' answers.
 
+The agent runs in this process (a thread per session), or elsewhere: a session made for an agent of its own has a token, with which
+that agent reaches it over HTTP (app.py's /agent routes, and sdk/tuiagent/remote.py).
+
 Kept in memory, in one process (gunicorn runs one worker with threads), so a restart ends every session.
 """
 import secrets
@@ -29,10 +32,13 @@ class Session:
     closed: bool = False
     inbox: list = field(default_factory=list)  # the user's messages, oldest first, for the agent's thread
     changed: threading.Condition = field(default_factory=threading.Condition)
+    token: str = ""  # for a session whose agent runs elsewhere: what that agent sends to reach it
 
     def emit(self, type_, **data):
         """Add an event to the log and wake whoever is waiting: the page's stream, or the agent."""
         with self.changed:
+            if type_ == "turn_start":
+                self.interrupted = False  # an interrupt ends the turn it came in, not the next one
             self.events.append({"seq": len(self.events), "type": type_, **data})
             self.changed.notify_all()
 
@@ -89,14 +95,17 @@ class Sessions:
         self.lock = threading.Lock()
         self.sessions = {}
 
-    def create(self):
+    def create(self, external=False):
+        """A new session, its agent started in a thread; or, if `external`, one with a token, for an agent that runs elsewhere."""
         self.reap()
         with self.lock:
             if len(self.sessions) >= MAX_SESSIONS:
                 raise SessionError("busy", "Too many sessions are open; try again in a few minutes.", 503)
-            session = Session(secrets.token_hex(8))
+            session = Session(secrets.token_hex(8), token=secrets.token_urlsafe(24) if external else "")
             self.sessions[session.id] = session
         session.emit("session", id=session.id)
+        if external:
+            return session
         threading.Thread(target=self.agent_factory(session), name=f"agent-{session.id}", daemon=True).start()
         return session
 

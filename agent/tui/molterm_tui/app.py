@@ -279,13 +279,13 @@ class App:
         if block.kind == "banner":
             inner = cols - 4
             rows = [style("✻ ", ACCENT) + style("Welcome to the molterm agent!", BOLD), "",
-                    style("  An emulated agent on the server, talking to this interface,", GREY),
+                    style("  An agent, talking to you through this interface,", GREY),
                     style("  which runs as Python in your browser (Pyodide).", GREY), "",
                     style(f"  session: {self.session or 'connecting…'}", GREY)]
             border = style("╭" + "─" * (cols - 2) + "╮", ACCENT)
             return [border, *(style("│ ", ACCENT) + pad(row, inner) + style(" │", ACCENT) for row in rows),
                     style("╰" + "─" * (cols - 2) + "╯", ACCENT), "",
-                    style(truncate(" Tips: type a SMILES, such as CC(=O)Oc1ccccc1C(=O)O, or ask for one. /help for help.", cols), GREY), ""]
+                    style(truncate(" Tips: type a message for the agent and press enter. /help for help.", cols), GREY), ""]
         if block.kind == "user":
             lines = wrap(block.text, cols - 4)
             return [style(pad(("> " if i == 0 else "  ") + line, cols - 2), USER_BG, GREY) for i, line in enumerate(lines)] + [""]
@@ -302,7 +302,8 @@ class App:
     def _tool_lines(self, block, cols):
         mark = {"running": style("●", GREY) if self.frame % 2 else "●", "done": style("●", GREEN), "error": style("●", RED)}[block.state]
         name = TOOL_NAMES.get(block.name, block.name)
-        argument = block.input.get("title") or block.input.get("smiles") or block.input.get("question") or ""
+        named = block.input.get("title") or block.input.get("smiles") or block.input.get("question")
+        argument = named or next((v for v in block.input.values() if isinstance(v, str)), "")  # else the first text it was given
         head = f"{mark} {style(name, BOLD)}({truncate(str(argument), max(cols - width(name) - 6, 8))})"
         lines = [head]
         body = []
@@ -332,7 +333,7 @@ class App:
         box = [style("╭" + "─" * (cols - 2) + "╮", GREY)]
         for i, line in enumerate(shown):
             prefix = "> " if i == 0 and len(shown) == len(text_lines) else "  "
-            content = line if self.input else style("Try a SMILES, or \"show me a drug\"", GREY, ITALIC)
+            content = line if self.input else style("Message the agent", GREY, ITALIC)
             box.append(style("│ ", GREY) + pad(prefix + content, inner) + style(" │", GREY))
         box.append(style("╰" + "─" * (cols - 2) + "╯", GREY))
         hint = "  ? /help for shortcuts" if not self.scroll else f"  scrolled back {self.scroll} lines · pgdn to return"

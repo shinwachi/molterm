@@ -5,7 +5,19 @@
   POST /api/v1/sessions/<id>/messages         {"text", "cols"}: what the user typed
   POST /api/v1/sessions/<id>/tool_results     {"id", "result"}: the TUI's answer to one of its tools
   POST /api/v1/sessions/<id>/interrupt        stop the agent's turn
+  GET  /api/v1/sessions/<id>                  whether the session is open, and where its agent runs
+
+For an agent that runs elsewhere (sdk/tuiagent/remote.py; see TUTORIAL.md), with the session's token as "Authorization: Bearer":
+  POST /api/v1/agents/sessions                       a session with no agent of the server's   -> {"id", "token", "url"}
+  POST /api/v1/sessions/<id>/agent/events            {"type", ...}: an event for the transcript
+  GET  /api/v1/sessions/<id>/agent/messages?timeout  the user's next message, waiting up to `timeout` s -> {"message", "interrupted", "closed"}
+  GET  /api/v1/sessions/<id>/agent/tool_results/<tool id>?timeout   a TUI tool's answer             -> {"result", "interrupted", "closed"}
+  GET  /api/v1/sessions/<id>/agent                   -> {"interrupted", "closed"}
+
+The agent the server runs itself is EmulatedAgent, or the class named by AGENT ("module:Class", made with the session alone).
 """
+import hmac
+import importlib
 import json
 import os
 import time
@@ -25,7 +37,23 @@ MAX_TEXT = 10_000
 
 app = Flask(__name__)
 molterm = Molterm(MOLTERM_URL)
-sessions = Sessions(lambda session: EmulatedAgent(session, molterm, pace=float(os.environ.get("AGENT_PACE", "1"))))
+AGENT = os.environ.get("AGENT", "")
+AGENT_EVENTS = {"turn_start", "status", "text", "text_end", "tool_use", "tool_result", "error", "turn_end"}
+MAX_EVENT = 4 * 1024 * 1024  # a picture's PNG travels in its tui.show event
+MAX_POLL = 25
+
+
+def agent_factory():
+    """What makes the server's own agent for a session: EmulatedAgent, or the class AGENT names."""
+    pace = float(os.environ.get("AGENT_PACE", "1"))
+    if not AGENT:
+        return lambda session: EmulatedAgent(session, molterm, pace=pace)
+    module, _, name = AGENT.partition(":")
+    agent_class = getattr(importlib.import_module(module), name)
+    return lambda session: agent_class(session)
+
+
+sessions = Sessions(agent_factory())
 
 
 @app.errorhandler(SessionError)
@@ -50,7 +78,7 @@ def health():
     pyodide = (VENDOR / "pyodide" / "pyodide.asm.wasm").is_file()
     status = "ok" if pyodide else "degraded"
     return jsonify(service="molterm-agent", status=status, env=os.environ.get("APP_ENV", "dev"), sessions=sessions.count(),
-                   pyodide=pyodide, agent="emulated"), 200 if pyodide else 503
+                   pyodide=pyodide, agent=AGENT or "emulated"), 200 if pyodide else 503
 
 
 @app.route("/vendor/<path:name>")
@@ -81,6 +109,12 @@ def tools():
 def create_session():
     session = sessions.create()
     return jsonify(id=session.id), 201
+
+
+@app.route("/api/v1/sessions/<session_id>")
+def session_info(session_id):
+    session = sessions.get(session_id)
+    return jsonify(id=session.id, agent="remote" if session.token else "server")
 
 
 @app.route("/api/v1/sessions/<session_id>/events")
@@ -133,3 +167,60 @@ def tool_result(session_id):
 def interrupt(session_id):
     sessions.get(session_id).interrupt()
     return jsonify(ok=True)
+
+
+# -- for an agent that runs elsewhere ------------------------------------------------------------------------------------------------
+
+def agent_session(session_id):
+    """The session, if the request carries its token."""
+    session = sessions.get(session_id)
+    sent = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not session.token or not hmac.compare_digest(sent, session.token):
+        raise SessionError("forbidden", "This session's agent runs on the server, or the token is wrong.", 403)
+    return session
+
+
+def poll_timeout():
+    value = request.args.get("timeout", "0")
+    return min(float(value), MAX_POLL) if value.replace(".", "", 1).isdigit() else 0
+
+
+def state(session, **data):
+    return jsonify(interrupted=session.interrupted, closed=session.closed, **data)
+
+
+@app.route("/api/v1/agents/sessions", methods=["POST"])
+def create_agent_session():
+    session = sessions.create(external=True)
+    return jsonify(id=session.id, token=session.token, url=f"{request.host_url.rstrip('/')}/?session={session.id}"), 201
+
+
+@app.route("/api/v1/sessions/<session_id>/agent")
+def agent_state(session_id):
+    return state(agent_session(session_id))
+
+
+@app.route("/api/v1/sessions/<session_id>/agent/events", methods=["POST"])
+def agent_event(session_id):
+    session = agent_session(session_id)
+    if (request.content_length or 0) > MAX_EVENT:
+        raise SessionError("too_large", f"An event can be at most {MAX_EVENT // 1024 // 1024} MB.", 413)
+    data = body()
+    type_ = data.pop("type", None)
+    if type_ not in AGENT_EVENTS:
+        raise SessionError("bad_request", f"\"type\" must be one of {', '.join(sorted(AGENT_EVENTS))}.")
+    data.pop("seq", None)
+    session.emit(type_, **data)
+    return state(session)
+
+
+@app.route("/api/v1/sessions/<session_id>/agent/messages")
+def agent_messages(session_id):
+    session = agent_session(session_id)
+    return state(session, message=session.next_message(poll_timeout()))
+
+
+@app.route("/api/v1/sessions/<session_id>/agent/tool_results/<tool_id>")
+def agent_tool_result(session_id, tool_id):
+    session = agent_session(session_id)
+    return state(session, result=session.wait_result(tool_id, poll_timeout()))

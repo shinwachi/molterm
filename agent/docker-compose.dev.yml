@@ -6,5 +6,7 @@ services:
             - ./server:/app/server
             - ./tui:/app/tui
             - ./tests:/app/tests
+            - ./sdk:/app/sdk
+            - ./examples:/app/examples
         command: ["gunicorn", "--chdir", "server", "-b", "0.0.0.0:8950", "-w", "1", "-k", "gthread", "--threads", "64", "--timeout", "0",
                   "--reload", "--access-logfile", "-", "app:app"]

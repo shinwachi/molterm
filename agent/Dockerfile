@@ -25,6 +25,8 @@ FROM python:3.13-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTEST_ADDOPTS="-p no:cacheprovider"
 ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH VENDOR_DIR=/opt/vendor
+# the agents base class (sdk/tuiagent), and /app for agents named by AGENT, such as examples.hello_agent:HelloAgent
+ENV PYTHONPATH=/app/sdk:/app
 WORKDIR /app
 COPY agent/requirements.txt .
 RUN python -m venv /opt/venv && pip install --no-cache-dir -r requirements.txt

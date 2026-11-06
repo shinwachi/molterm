@@ -55,7 +55,7 @@ def test_it_starts_with_a_banner_and_an_empty_input_box(app):
     text = screen(app)
     assert "Welcome to the molterm agent!" in text
     assert "session: connecting…" in text
-    assert "╭" in text and "Try a SMILES" in text
+    assert "╭" in text and "Message the agent" in text
     assert app.bridge.written[0].startswith("\x1b[?1049h")  # the alternate screen
 
 
@@ -86,6 +86,8 @@ def test_server_tools_show_their_result(app):
     app.event({"type": "tool_result", "id": "t1", "output": "Drew it in 3 lines of Braille"})
     assert "└  Drew it in 3 lines of Braille" in screen(app)
     assert app.bridge.results == []  # a server tool is answered by the server
+    app.event({"type": "tool_use", "id": "t1b", "name": "text.count", "input": {"limit": 3, "text": "two words"}})
+    assert "text.count(two words)" in screen(app)  # an agent's own tool shows the first text it was given
 
 
 def test_tui_show_puts_a_panel_in_the_transcript_and_answers(app):
@@ -126,7 +128,7 @@ def test_tui_ask_takes_over_the_input_until_answered(app):
     app.key("\r")
     assert app.bridge.results == [("t3", {"choice": "Caffeine", "index": 1})]
     assert "└  Caffeine" in screen(app)
-    assert "Try a SMILES" in screen(app)  # the input is back
+    assert "Message the agent" in screen(app)  # the input is back
 
 
 def test_a_number_picks_and_escape_skips(app):

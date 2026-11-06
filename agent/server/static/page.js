@@ -128,8 +128,16 @@ function listen() {
 try {
     show("loading Python and the terminal…");
     const [size, pyodide] = await Promise.all([startTerminal(), startPython()]);
-    show("starting a session…");
-    session = (await api("/api/v1/sessions")).id;
+    // ?session=<id> joins a session an agent of its own made (see TUTORIAL.md); otherwise the server starts one with its agent
+    const joining = new URLSearchParams(location.search).get("session");
+    show(joining ? "joining the session…" : "starting a session…");
+    if (joining) {
+        const response = await fetch(`/api/v1/sessions/${encodeURIComponent(joining)}`);
+        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error?.message || "no such session");
+        session = joining;
+    } else {
+        session = (await api("/api/v1/sessions")).id;
+    }
     const { App } = pyodide.pyimport("molterm_tui");
     app = App(bridge, size.cols, size.rows);
     app.start();

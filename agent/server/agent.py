@@ -5,12 +5,11 @@ tools: `tui.show` puts a drawing in the transcript, and `tui.ask` asks the user 
 make the same calls with the same events; only the deciding would differ.
 """
 import base64
-import itertools
 import math
 import re
-import time
 
 import requests
+from tuiagent import TuiAgent
 
 SAMPLES = {
     "Aspirin": "CC(=O)Oc1ccccc1C(=O)O",
@@ -30,15 +29,8 @@ TOOLS = [
      "description": "Draw a molecule (SMILES): as a picture for the Kitty graphics protocol (mode kitty, the default), or as coloured "
                     "Braille text (mode braille)."},
     {"name": "molterm.properties", "where": "server", "description": "Compute a molecule's MW, cLogP, TPSA, H-bond donors and acceptors, QED."},
-    {"name": "tui.show", "where": "client",
-     "description": "Show a panel in the user's terminal: a title, and a picture (image: png, cols, rows) and/or text (body, ANSI "
-                    "colours allowed)."},
-    {"name": "tui.ask", "where": "client", "description": "Ask the user to pick one of some options; returns their choice."},
+    *TuiAgent.TUI_TOOLS,
 ]
-
-
-class Interrupted(Exception):
-    pass
 
 
 def looks_like_smiles(text):
@@ -79,73 +71,15 @@ class Molterm:
         return {"formula": body.get("formula"), **body["properties"]}
 
 
-class EmulatedAgent:
+class EmulatedAgent(TuiAgent):
+    """The demo agent: the TuiAgent base (sdk/tuiagent) does the talking; this decides what to say, as a model would."""
+
     def __init__(self, session, molterm, pace=1.0):
-        self.session, self.molterm, self.pace = session, molterm, pace
-        self.ids = itertools.count(1)
+        super().__init__(session, pace)
+        self.molterm = molterm
 
-    # -- the session's loop -----------------------------------------------------------------------------------------------------------
-
-    def __call__(self):
-        self.turn(self.greet)
-        while not self.session.closed:
-            message = self.session.next_message(timeout=30)
-            if message:
-                self.turn(lambda: self.respond(message["text"], message.get("cols", 72)))
-
-    def turn(self, work):
-        self.session.interrupted = False
-        self.session.emit("turn_start", label="Thinking")
-        try:
-            self.pause(0.6)
-            work()
-        except Interrupted:
-            pass
-        except Exception as error:  # noqa: BLE001 - the user sees what went wrong, and the session goes on
-            self.session.emit("error", message=f"The agent stumbled: {error}")
-        finally:
-            self.session.emit("text_end")
-            self.session.emit("turn_end")
-
-    def pause(self, seconds):
-        deadline = time.time() + seconds * self.pace
-        while time.time() < deadline:
-            if self.session.interrupted:
-                raise Interrupted
-            time.sleep(min(0.05, max(deadline - time.time(), 0)))
-
-    # -- what the agent can do --------------------------------------------------------------------------------------------------------
-
-    def say(self, text):
-        """Stream text to the transcript a word at a time, as a model does."""
-        for word in re.findall(r"\S+\s*|\s+", text):
-            self.session.emit("text", delta=word)
-            self.pause(0.03)
-        self.session.emit("text_end")
-
-    def use_server_tool(self, name, input_, run, label):
-        tool_id = f"tool_{next(self.ids)}"
-        self.session.emit("tool_use", id=tool_id, name=name, input=input_)
-        self.session.emit("status", label=label)
-        self.pause(0.3)
-        try:
-            output = run()
-        except (requests.RequestException, ValueError, KeyError) as error:
-            self.session.emit("tool_result", id=tool_id, output=f"Failed: {error}", is_error=True)
-            return None
-        self.session.emit("tool_result", id=tool_id, output=self.summary(name, output))
-        return output
-
-    def use_tui(self, name, input_, label):
-        """Call one of the TUI's tools and wait for the page to answer."""
-        tool_id = f"tool_{next(self.ids)}"
-        self.session.emit("tool_use", id=tool_id, name=name, input=input_)
-        self.session.emit("status", label=label)
-        result = self.session.wait_result(tool_id)
-        if result is None:
-            raise Interrupted
-        self.session.emit("status", label="Thinking")
-        return result
+    def use_server_tool(self, name, input_, run, label="Working", summary=None, errors=(requests.RequestException, ValueError, KeyError)):
+        return super().use_server_tool(name, input_, run, label, summary or (lambda output: self.summary(name, output)), errors)
 
     @staticmethod
     def summary(name, output):

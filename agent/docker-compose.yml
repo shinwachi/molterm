@@ -12,9 +12,13 @@ services:
             dockerfile: agent/Dockerfile
         restart: unless-stopped
         user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+        env_file:  # secrets, such as ANTHROPIC_API_KEY for examples/claude_agent.py; optional
+            - path: ../credentials_norepo.env
+              required: false
         environment:
             - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
             - APP_ENV=${APP_TAG:-prod}
+            - AGENT=${AGENT:-}  # the agent class the server runs, as module:Class; empty for the emulated one
         labels:
             - traefik.enable=true
             - traefik.docker.network=traefik
