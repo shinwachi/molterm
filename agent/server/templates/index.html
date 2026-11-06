@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>molterm agent</title>
+    <link rel="stylesheet" href="/vendor/house.css">
+    <link rel="stylesheet" href="/static/page.css">
+    <script>
+        try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    </script>
+</head>
+<body>
+<header class="topbar">
+    <span class="brand">molterm agent</span>
+    <span class="chip" id="state"><i></i>starting…</span>
+    <span class="spacer"></span>
+    <span class="muted" id="about">A terminal interface in Python (Pyodide), talking to an agent on the server</span>
+</header>
+<main>
+    <div id="frame"><div id="terminal"></div></div>
+    <p class="faint" id="note">Click the terminal and type. The agent is an emulation: it draws molecules with molterm and asks you things
+        through the interface, the way a real agent would use it as a tool.</p>
+</main>
+<script type="module" src="/static/page.js"></script>
+</body>
+</html>

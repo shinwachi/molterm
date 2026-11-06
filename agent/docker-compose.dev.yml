@@ -1,0 +1,10 @@
+# Layered on docker-compose.yml for ENV=dev: the sources bind-mounted, and gunicorn reloading when they change.
+services:
+    molterm-agent:
+        restart: "no"
+        volumes:
+            - ./server:/app/server
+            - ./tui:/app/tui
+            - ./tests:/app/tests
+        command: ["gunicorn", "--chdir", "server", "-b", "0.0.0.0:8950", "-w", "1", "-k", "gthread", "--threads", "64", "--timeout", "0",
+                  "--reload", "--access-logfile", "-", "app:app"]

@@ -56,6 +56,11 @@ renderer, ported to JavaScript, turns the drawing into Braille or ASCII, or show
 nginx only serves the files, and `make -C web export` writes them out for any static host. Its ASCII matches this server's character for
 character; its Braille differs only by single dots where the browser's antialiasing differs from Cairo's (`/check.html`). See its README.
 
+`agent/` is a fourth: a Claude Code-like terminal interface for a server-side agent, at http://molterm-agent-dev.localhost (prod:
+`molterm-agent`). The interface is Python, run in the browser by Pyodide and drawn in restty; the server is Flask, with a session and an
+agent for each visitor. The agent uses the interface as tools, `tui.show` to put a panel in the transcript and `tui.ask` to ask the user
+something and wait for the answer. For now the agent is an emulation that draws molecules with this server. See its README.
+
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
 
 Every service is published through a Traefik on the external `traefik` Docker network, by container labels. The hosts in `env/*.env`

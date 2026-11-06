@@ -1,0 +1,26 @@
+# The molterm agent: a Claude Code-like TUI in the browser (Python in Pyodide, in restty), and sessions with an emulated agent on the
+# server, which draws molecules with the molterm server at $MOLTERM_URL. Built from the repository's root to share its stylesheet.
+networks:
+    traefik:
+        external: true
+
+services:
+    molterm-agent:
+        image: molterm-agent:${APP_TAG:-latest}
+        build:
+            context: ..
+            dockerfile: agent/Dockerfile
+        restart: unless-stopped
+        user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+        environment:
+            - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
+            - APP_ENV=${APP_TAG:-prod}
+        labels:
+            - traefik.enable=true
+            - traefik.docker.network=traefik
+            - traefik.http.routers.${ROUTER:-molterm-agent}.rule=Host(`${APP_HOST:-molterm-agent.localhost}`)
+            - traefik.http.routers.${ROUTER:-molterm-agent}.service=${ROUTER:-molterm-agent}
+            - traefik.http.routers.${ROUTER:-molterm-agent}.entrypoints=web
+            - traefik.http.services.${ROUTER:-molterm-agent}.loadbalancer.server.port=8950
+        networks:
+            - traefik
