@@ -1,8 +1,8 @@
-"""Take the README's hero screenshots from the running dev services, in headless Chromium: `make screenshots` (Playwright's image, on the
-traefik network, so the pages are reached by container name and no hostname appears in them).
+"""Take the README's hero screenshot, and web/README.md's, from the running dev services, in headless Chromium: `make screenshots`
+(Playwright's image, on the traefik network, so the pages are reached by container name and no hostname appears in them).
 
-The showcases and the VisiData demo are recordings that play by themselves, so each shot waits for a caption, lets the frame settle,
-and photographs the terminal alone.
+The showcase is a recording that plays by itself, so the shot waits for a caption, lets the frame settle, and photographs the
+terminal alone.
 """
 import os
 import sys
@@ -11,24 +11,12 @@ from playwright.sync_api import sync_playwright
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images")
 MOLTERM = os.environ.get("MOLTERM", "http://molterm-dev-molterm-1:8910")
-VD = os.environ.get("MOLTERM_VD", "http://molterm-vd-dev-molterm-vd-1:8920")
-M3D = os.environ.get("MOLTERM_3D", "http://molterm-3d-dev-molterm-3d-1:8930")
 WEB = os.environ.get("MOLTERM_WEB", "http://molterm-web-dev-molterm-web-1:8940")
 
 # (page, [(words in the caption, milliseconds to let the frame settle, file)]), in the order the recording plays them
 RECORDED = [
     (f"{MOLTERM}/showcase", [
-        ("The same molecule both ways", 1500, "molterm-ascii.png"),
-        ("A larger drug, imatinib", 1500, "molterm-braille.png"),
         ("A text interface with structures in it", 1800, "molterm-tui.png"),
-        ("The prompt waits below the last one", 1200, "molterm-shell.png"),
-    ]),
-    (VD, [
-        ("the sheet scrolls, the pictures with it", 1500, "visidata.png"),
-        ("Alt+Shift+V opens the row's molecule", 2500, "visidata-3d.png"),
-    ]),
-    (f"{M3D}/showcase", [
-        ("The four lightings side by side", 2500, "molterm-3d-lightings.png"),
     ]),
 ]
 LONGEST = 8 * 60 * 1000  # a recording can take minutes to reach its last shot
