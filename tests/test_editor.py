@@ -1493,6 +1493,17 @@ def test_callouts_draw_highlights_and_leave_the_notes_to_the_host():
     rows = sorted(n["row"] for n in again["notes"])
     assert rows[1] - rows[0] >= min(callouts.BUBBLE_ROWS, again["rows"] // 2)  # kept apart, for the bubbles
     assert callouts.picture(again["smiles"], 60, 16, clear=True)["notes"] == []
+    assert result["notes"][0]["by"] == "agent" and result["notes"][0]["group"]  # an agent's, about all it highlighted
+
+
+def test_callouts_draw_the_persons_own_notes_in_their_colour():
+    import callouts
+    result = callouts.picture("CCO |atomProp:2.atomNote.mine:2.molterm_flags.user|", 40, 10)
+    note = result["notes"][0]
+    assert note["by"] == "user" and not note["group"]
+    image = Image.open(BytesIO(base64.b64decode(result["png"])))
+    pixel = image.getpixel((image.width - 1, int((note["row"] + 0.5) * 2 * editor.graphics.CELL_PIXELS)))
+    assert pixel[:3] == callouts.USER_LEADER
     assert callouts._rows([5, 5, 5], 6) == [0, 3, 5] or callouts._rows([5, 5, 5], 6)[-1] <= 5
     for bad in ({"atoms": [99]}, {"smarts": "["}, {"atoms": [0], "highlight": "plaid"}):
         with pytest.raises(callouts.CalloutError):
@@ -1530,6 +1541,7 @@ def test_an_inline_editor_tells_its_host_the_notes_for_bubbles_and_draws_their_l
     status, text, output = editor.step("", "CCO |atomProp:2.atomNote.the OH|", "", 100, 40, CW, CH, inline=place, at=(12, 5, 6, 20))
     told = json.loads(b64.b64decode(re.search(r"5523;notes=([A-Za-z0-9+/=]+)", output).group(1)))
     assert told["edge"] == 5 + 44 and [n["text"] for n in told["notes"]] == ["the OH"] and 12 <= told["notes"][0]["row"] < 22
+    assert told["notes"][0]["by"] == "agent"
     assert output.index("5523;notes") < output.index(editor.HOST_REPAINT)  # told before the host draws
     # an unchanged drawing says nothing more; a note taken away is told, with a repaint for the host's bubbles
     status, text, output = editor.step(text, "", "", 100, 40, CW, CH, inline=place)

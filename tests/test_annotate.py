@@ -145,7 +145,58 @@ def test_an_atom_can_be_highlighted_and_noted_from_its_menu():
     assert "Note:" in session.output
     session.send("hydroxyl").send("\r")
     assert session.state["notes"]["atoms"] == [[3, "yellow", "hydroxyl"]] and session.state["prompt"] is None
-    assert editor.annotated(session.state) == "CCO |atomProp:2.atomNote.hydroxyl:2.molterm_highlight.yellow|"  # the O, in RDKit's order
+    assert session.state["notes"]["flags"] == {"a3": "user"}  # the person's own note
+    assert editor.annotated(session.state) == "CCO |atomProp:2.atomNote.hydroxyl:2.molterm_flags.user:2.molterm_highlight.yellow|"  # the O, in RDKit's order
+
+
+def test_a_note_says_who_wrote_it_and_whether_it_is_about_a_group_through_cxsmiles():
+    notes = {**NOTED, "flags": {"a1": "user group", "b1-3": "user"}}
+    annotate.check(notes)
+    text = annotate.write("CC(=O)Nc1ccc(O)cc1", notes)
+    assert "molterm_flags.user group" in text and "molterm_bond_3_flags.user" in text
+    _, read = annotate.split(text)
+    assert read == notes and annotate.flags(read, [9]) == set()
+    moved = annotate.renumber(read, {1: 5, 3: 7, 9: 2})
+    assert moved["flags"] == {"a5": "user group", "b5-7": "user"}
+    assert "flags" not in annotate.renumber(NOTED, {1: 1, 3: 3, 9: 9})  # none, and no key for them
+    for bad in ({"a1": "admin"}, {"x1": "user"}, ["user"]):
+        with pytest.raises(annotate.NoteError):
+            annotate.check({**NOTED, "flags": bad})
+    assert annotate.group(NOTED, [(1, 2), (1, 3), (3, 4)], [1]) == [1]  # its neighbours aren't highlighted
+    ring = {"atoms": [[i, "green", ""] for i in (1, 2, 3)] + [[4, "blue", ""]], "bonds": [], "show": []}
+    assert sorted(annotate.group(ring, [(1, 2), (2, 3), (3, 4)], [2])) == [1, 2, 3] and annotate.group(ring, [], [5]) == [5]
+
+
+def test_an_atom_in_a_highlighted_group_is_noted_alone_or_for_the_group():
+    session = Session("CC(=O)Nc1ccc(O)cc1")
+    s = session.state
+    s["selected"] = [5, 6, 7, 8, 10, 11]  # the ring
+    session.text = editor.encode(s)
+    session.right_click(*session.atom_cell(6)).choose("Highlight Blue")
+    s = session.state
+    s["selected"] = []
+    session.text = editor.encode(s)
+    session.right_click(*session.atom_cell(6))
+    labels = [editor._item_label(session.state, item).strip() for item in editor._menu_items(session.state) if item]
+    assert "Note This Atom..." in labels and "Note Highlighted Group..." in labels and "Note..." not in labels
+    session.choose("Note Highlighted Group...")
+    assert "the highlighted group" in session.output
+    session.send("the ring\r")
+    s = session.state
+    assert [entry for entry in s["notes"]["atoms"] if entry[2]] == [[6, "blue", "the ring"]] and s["notes"]["flags"] == {"a6": "user group"}
+    session.right_click(*session.atom_cell(8)).choose("Note This Atom...")
+    session.send("a CH\r")
+    assert session.state["notes"]["flags"] == {"a6": "user group", "a8": "user"}
+    # inline, the group's note points at the middle of the ring, the atom's at the atom
+    ui = editor.Layout(COLS, ROWS, CW, CH, inline=(2, 2, 30, 80))
+    found = {text: point for text, point, _, _ in editor.inline_notes(session.state, ui)}
+    ring = [a for a in session.state["atoms"] if a[0] in (5, 6, 7, 8, 10, 11)]
+    assert found["the ring"] == pytest.approx((sum(a[2] for a in ring) / 6, sum(a[3] for a in ring) / 6))
+    atom = next(a for a in session.state["atoms"] if a[0] == 8)
+    assert found["a CH"] == pytest.approx((atom[2], atom[3]))
+    # an atom outside any group keeps the one item
+    session.right_click(*session.atom_cell(1))
+    assert "Note..." in [editor._item_label(session.state, item).strip() for item in editor._menu_items(session.state) if item]
 
 
 def test_a_bond_gets_its_own_annotation():

@@ -94,7 +94,9 @@ Cancel and tools buttons. F2 or the tools button puts the tools away, for someon
 the next edit. The line under the drawing resizes it: drag it (down and across), or Alt with the arrows. The transcript makes room,
 what is below moving down, and the molecule stays where it is. The ChemDraw keys work on the atom or bond under the pointer, and the right button's menus have the rest, annotations
 included: highlights and notes. A note made there shows at once in a bubble beside the drawing, at the end of a leader from its atom
-(drawn in the drawing by molterm, which leaves the note's text to the TUI), and moves with the drawing. `/edit N box`, or `/editor box` for every click, opens the
+(drawn in the drawing by molterm, which leaves the note's text to the TUI), and moves with the drawing. On an atom or bond in a
+highlighted group, the menu asks which the note is about: Note This Atom (or Bond)... or Note Highlighted Group..., whose leader
+points at the middle of the group. `/edit N box`, or `/editor box` for every click, opens the
 compact editor in a box over the picture instead.
 
 **Done** (Ctrl-Q) redraws the molecule as edited (`mol 1 · edited`), in the place of the drawing, and the edit waits above the
@@ -121,7 +123,9 @@ terminal's input, keys and mouse reports alike, goes back into the TUI.
 A molecule's annotations, the user's from the editor or the agent's from `tui.mark`, are drawn by molterm (`POST /api/v1/callouts`,
 through `POST /api/v1/sessions/<id>/picture`): the highlights in the picture, and, for each note, a leader from its atom to the
 picture's right edge, ending in the middle of a row. The TUI carries the leader on in text to a speech bubble with the note in it,
-beside the picture, turning down or up when bubbles would overlap. Bubbles and highlights are drawn over the transcript each frame, so
+beside the picture, turning down or up when bubbles would overlap. Whose a note is shows in its colour: the user's own (written
+in the editor, and kept as theirs in the CXSMILES) in blue, the blue of the text they highlight, its leader, bubble and text alike;
+the agent's in amber. Bubbles and highlights are drawn over the transcript each frame, so
 they scroll with it. A bubble goes where it covers the least text near what it points at (beside a picture, in a blank line, beside a short line),
 and where it can't help covering some, that text shows faintly in the bubble's margins and empty room, so the user knows there is
 more under it. The line from its atom or text to the bubble is the cheapest path over the screen's cells: blank
@@ -133,10 +137,16 @@ all, and `/notes reset` puts them back where they were.
 
 Text can be pointed at too. The agent's `tui.mark` with `text` highlights those words where they last appear (the user's own words
 or the agent's), with a note in a bubble hanging under them. The user drags across text: the selection shows as it is dragged, then
-turns blue, and waits above the input as a context; a click on the highlight takes it away.
+turns blue, its tint and its letters both, as the user's notes are, and waits above the input as a context; a click on the
+highlight takes it away.
 
 The input's cursor is the terminal's own, where typing goes: restty draws it solid while the terminal has the keyboard, the cue
 that the user can type, and hollow when it hasn't. It is hidden while a question or an edit has the keys.
+
+A question (`tui.ask`) takes the input's place and holds the keys and the mouse until it is answered: a click on an option answers
+it, and a click anywhere else, or typing it has no use for, makes its box pulse twice (its border brightening, a warm tint inside)
+to show where the answer goes; the wheel still scrolls. A tool that is running, the question's among them, has a dot that fades
+out and in rather than blinking.
 
 ### Contexts, above the input
 

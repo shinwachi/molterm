@@ -21,7 +21,8 @@ import annotate
 import graphics
 import render as renderer
 
-LEADER = (229, 192, 123)  # the notes' colour, which the host's bubbles share
+LEADER = (229, 192, 123)  # the notes' colour, which the host's bubbles share: an agent's
+USER_LEADER = (140, 180, 245)  # and the person's own, the blue of what they highlight
 BUBBLE_ROWS = 3  # a bubble's height at the least: its border and a line of text
 MAX_MARKED = 200
 MAX_INPUT = 20_000
@@ -81,7 +82,8 @@ def add(mol, notes, mark):
         if highlight:
             entry[1] = highlight
     if note:
-        entries[atoms[0]][2] = note
+        entries[atoms[0]][2] = note  # an agent's, about the whole of what it marked if it highlighted more than an atom
+        annotate.set_flags(notes, [atoms[0]], {"group"} if highlight and len(atoms) > 1 else set())
     notes["atoms"] = sorted(entry for entry in entries.values() if entry[1] or entry[2])
     if highlight:
         bonds = {(b[0], b[1]): b for b in notes["bonds"]}
@@ -114,8 +116,9 @@ def _rows(wanted, rows):
 
 def picture(text, cols, rows, theme=graphics.DEFAULT_THEME, cell_pixels=graphics.CELL_PIXELS, mark=None, clear=False):
     """The picture and what a host needs to put bubbles beside it: {png (base64), cols, rows, smiles (the CXSMILES with the
-    annotations), notes: [{atom, bond, text, highlight, row}], marked}. `row` is the row of cells the note's leader ends on, at the
-    right edge."""
+    annotations), notes: [{atom, bond, text, highlight, row, by, group}], marked}. `row` is the row of cells the note's leader ends
+    on, at the right edge; `by` is "user" for a note the person wrote, drawn in their colour, or "agent"; a `group` note points at
+    the middle of its highlighted group."""
     mol, kept, notes = _read(text)
     if clear:
         notes = annotate.empty()
@@ -158,12 +161,15 @@ def picture(text, cols, rows, theme=graphics.DEFAULT_THEME, cell_pixels=graphics
     out = Image.new("RGBA", (used_cols * cell_pixels, used_rows * row_pixels), (0, 0, 0, 0))
     out.paste(image.crop((left, top, right, bottom)), (0, 0))
 
+    pairs = [(b.GetBeginAtomIdx(), b.GetEndAtomIdx()) for b in mol.GetBonds()]
+
+    def ids(entry):
+        return [entry[1]] if entry[0] == "a" else list(entry[1])
+
     def anchor(entry):
-        if entry[0] == "a":
-            p = points[entry[1]]
-            return p.x - left, p.y - top
-        first, second = points[entry[1][0]], points[entry[1][1]]
-        return (first.x + second.x) / 2 - left, (first.y + second.y) / 2 - top
+        """Its atom, the middle of its bond, or the middle of its highlighted group."""
+        chosen = annotate.group(notes, pairs, ids(entry)) if "group" in annotate.flags(notes, ids(entry)) else ids(entry)
+        return (sum(points[i].x for i in chosen) / len(chosen) - left, sum(points[i].y for i in chosen) / len(chosen) - top)
 
     anchors = [anchor(entry) for entry in shown]
     leader_rows = _rows([int(y // row_pixels) for _, y in anchors], used_rows)
@@ -171,15 +177,18 @@ def picture(text, cols, rows, theme=graphics.DEFAULT_THEME, cell_pixels=graphics
     line = max(round(cell_pixels / 9), 1)
     dot = max(round(cell_pixels / 5), 2)
     edge = out.width
-    for (x, y), row in zip(anchors, leader_rows):
+    for entry, (x, y), row in zip(shown, anchors, leader_rows):
+        colour = USER_LEADER if "user" in annotate.flags(notes, ids(entry)) else LEADER
         level = (row + 0.5) * row_pixels
         bend = min(x + abs(level - y), edge)  # at 45 degrees to the row, then along it
-        pen.line([(x, y), (bend, level), (edge, level)], fill=(*LEADER, 255), width=line, joint="curve")
-        pen.ellipse([x - dot, y - dot, x + dot, y + dot], fill=(*LEADER, 255))
+        pen.line([(x, y), (bend, level), (edge, level)], fill=(*colour, 255), width=line, joint="curve")
+        pen.ellipse([x - dot, y - dot, x + dot, y + dot], fill=(*colour, 255))
     buffer = BytesIO()
     out.save(buffer, "PNG")
     return {"png": base64.b64encode(buffer.getvalue()).decode("ascii"), "cols": used_cols, "rows": used_rows,
             "smiles": annotate.write(kept, notes), "marked": marked,
             "notes": [{"atom": entry[1] if entry[0] == "a" else None, "bond": list(entry[1]) if entry[0] == "b" else None,
-                       "text": entry[2], "highlight": entry[3], "row": row} for entry, row in zip(shown, leader_rows)]}
+                       "text": entry[2], "highlight": entry[3], "row": row,
+                       "by": "user" if "user" in annotate.flags(notes, ids(entry)) else "agent",
+                       "group": "group" in annotate.flags(notes, ids(entry))} for entry, row in zip(shown, leader_rows)]}
 

@@ -1842,31 +1842,30 @@ def draw_structure(s, ui, theme):
 
 
 def inline_notes(s, ui):
-    """An inline editor's notes, for its host's bubbles: [(text, the anchor's model point, the row its leader ends on)], for the
-    notes whose atom or bond is on the drawing. The rows are kept apart, as molterm's callouts keeps them."""
+    """An inline editor's notes, for its host's bubbles: [(text, the anchor's model point, the row its leader ends on, its flags)],
+    for the notes whose atom or bond is on the drawing. The anchor is the atom, the middle of the bond, or the middle of the
+    highlighted group for a group's note. The rows are kept apart, as molterm's callouts keeps them."""
     found = []
-    for ident, _, text in s["notes"]["atoms"]:
-        atom = _atom(s, ident)
-        if text and atom:
-            found.append((text, (atom[2], atom[3])))
-    for first, second, _, text in s["notes"]["bonds"]:
-        a, b = _atom(s, first), _atom(s, second)
-        if text and a and b:
-            found.append((text, ((a[2] + b[2]) / 2, (a[3] + b[3]) / 2)))
+    entries = [([ident], text) for ident, _, text in s["notes"]["atoms"]] + [([a, b], text) for a, b, _, text in s["notes"]["bonds"]]
+    for ids, text in entries:
+        flags = annotate.flags(s["notes"], ids)
+        chosen = [_atom(s, i) for i in (_group(s, ["a", *ids] if len(ids) == 1 else ["b", *ids]) if "group" in flags else ids)]
+        if text and all(chosen):
+            found.append((text, (sum(a[2] for a in chosen) / len(chosen), sum(a[3] for a in chosen) / len(chosen)), flags))
     shown = []
-    for text, point in found:
+    for text, point, flags in found:
         col, row = ui.to_cell(s, *point)
         if ui.left <= col < ui.left + ui.canvas_cols and ui.top <= row < ui.top + ui.canvas_rows:
-            shown.append((text, point, int(row) - ui.top))
-    rows = callouts._rows([row for _, _, row in shown], ui.canvas_rows)
-    return [(text, point, ui.top + row) for (text, point, _), row in zip(shown, rows)]
+            shown.append((text, point, int(row) - ui.top, flags))
+    rows = callouts._rows([row for _, _, row, _ in shown], ui.canvas_rows)
+    return [(text, point, ui.top + row, flags) for (text, point, _, flags), row in zip(shown, rows)]
 
 
 def _draw_leaders(s, ui, drawer):
     """Each note's leader, from its atom to the drawing's right edge, in the middle of its row: where the host's bubble takes it on."""
-    colour = tuple(c / 255 for c in callouts.LEADER)
     edge = ui.left + ui.canvas_cols
-    for _, (x, y), row in inline_notes(s, ui):
+    for _, (x, y), row, flags in inline_notes(s, ui):
+        colour = tuple(c / 255 for c in (callouts.USER_LEADER if "user" in flags else callouts.LEADER))
         col, at_row = ui.to_cell(s, x, y)
         level = row + 0.5
         bend = min(col + abs(level - at_row) * ui.cell_height / ui.cell_width, edge)
@@ -1988,7 +1987,13 @@ def _fit_text(text, width):
 def _menu_items(s, ui=None):
     menu = s["menu"]
     if menu[0] == "context":
-        return CONTEXT_MENUS[menu[1]]
+        items = CONTEXT_MENUS[menu[1]]
+        target = s.get("menu_target")
+        if menu[1] in ("atom", "bond") and target and len(_group(s, target)) > 1:  # in a highlighted group: a note on it, or on the group
+            at = items.index(("Note...", "", ("note", None)))
+            own = "Note This Atom..." if menu[1] == "atom" else "Note This Bond..."
+            items = [*items[:at], (own, "", ("note", None)), ("Note Highlighted Group...", "", ("note", "group")), *items[at + 1:]]
+        return items
     if menu[1] == 0 and ui and ui.hosted:
         return [*MENUS[0][1][:-1], ("Done", "Ctrl-Q", ("command", "quit")), ("Cancel", "Ctrl-C", ("command", "cancel"))]
     return MENUS[menu[1]][1]
@@ -2071,6 +2076,8 @@ def _status(s, ui, smiles, problem, colours, cols=None):
         title, hint = _PROMPT_TEXT[s["prompt"].get("kind", "note")]
         shown = _fit_text(s["prompt"]["text"], cols - len(title) - 4)
         where = "this atom or bond" if count == 1 else f"these {count} atoms and bonds"
+        if s["prompt"].get("group"):
+            where = "the highlighted group"
         return f"\x1b[1m{title}:\x1b[0m {shown}\x1b[7m \x1b[0m", f"{dim}{_fit_text(hint.format(where=where) + ' Esc cancels.', cols)}\x1b[0m"
     if s["entry"] is not None:
         width = cols - 9
@@ -2211,7 +2218,8 @@ def frame(s, ui, theme):
         keys["backing"] = digest()
     notes_told = ""
     if ui.inline:
-        told = {"edge": ui.left + ui.canvas_cols, "notes": [{"text": text, "row": row} for text, _, row in inline_notes(s, ui)]}
+        told = {"edge": ui.left + ui.canvas_cols, "notes": [{"text": text, "row": row, "by": "user" if "user" in flags else "agent"}
+                                                        for text, _, row, flags in inline_notes(s, ui)]}
         keys["notes"] = digest(told)
         if told["notes"] or s["shown"].get("notes"):
             notes_told = HOST_NOTES.format(base64.b64encode(json.dumps(told).encode()).decode())
@@ -2960,8 +2968,14 @@ def _entry(s, target):
     return next((entry for entry in found if entry[:-2] == ids), None)
 
 
-def _annotate(s, targets, highlight=None, note=None):
-    """Set the highlight or the note, or with both None clear them, on each target. "" takes one off."""
+def _group(s, target):
+    """The atoms of the highlighted group an atom or bond is in (see annotate.group)."""
+    return annotate.group(s["notes"], [b[:2] for b in s["bonds"]], target[1:2] if target[0] == "a" else sorted(target[1:]))
+
+
+def _annotate(s, targets, highlight=None, note=None, group=False):
+    """Set the highlight or the note, or with both None clear them, on each target. "" takes one off. A note is the person's own,
+    and with `group` it is about the highlighted group its target is in."""
     _save(s)
     for target in targets:
         entry = _entry(s, target)
@@ -2975,6 +2989,7 @@ def _annotate(s, targets, highlight=None, note=None):
             entry[-2] = highlight
         if note is not None:
             entry[-1] = annotate.clean_note(note)
+            annotate.set_flags(s["notes"], ids, {"user", "group"} if group else {"user"})
     for name in ("atoms", "bonds"):
         s["notes"][name] = sorted(entry for entry in s["notes"][name] if entry[-2] or entry[-1])
     if len(s["notes"]["atoms"]) + len(s["notes"]["bonds"]) > annotate.MAX_NOTES:
@@ -2994,6 +3009,8 @@ def _annotation(s, kind, value, target):
     elif kind == "note":
         known = _entry(s, targets[0]) if len(targets) == 1 else None
         s["prompt"] = {"targets": targets, "text": known[-1] if known else "", "kind": "note"}
+        if value == "group" and len(targets) == 1:
+            s["prompt"]["group"] = True
 
 
 def _prompt_key(s, name):
@@ -3008,7 +3025,7 @@ def _prompt_key(s, name):
             return
         targets = [t for t in prompt["targets"] if _target_points(s, t)]
         if targets and kind == "note":
-            _annotate(s, targets, note=prompt["text"])
+            _annotate(s, targets, note=prompt["text"], group=bool(prompt.get("group")))
         elif targets:
             _apply_prompt(s, kind, targets, prompt["text"])
     elif name == "backspace":

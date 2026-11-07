@@ -71,7 +71,7 @@ character; its Braille differs only by single dots where the browser's antialias
 `molterm-agent`). The interface is Python, run in the browser by Pyodide and drawn in restty; the server is Flask, with a session and an
 agent for each visitor. The agent uses the interface as tools, `tui.show` to put a panel in the transcript and `tui.ask` to ask the user
 something and wait for the answer, and `tui.mark` to point things out: atoms highlighted, notes in speech bubbles with leaders to
-them, words highlighted in the transcript. A molecule it shows can be edited and annotated where it is, the drawing staying in place
+them, words highlighted in the transcript. The user's own notes and highlights are blue, the agent's notes amber. A molecule it shows can be edited and annotated where it is, the drawing staying in place
 under a floating strip of tools (or in a box, if you prefer) and resizable, the transcript making room; the edit, like text the
 user drags across, waits above the input until they click it into a message. Bubbles can be dragged, folded and hidden. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
 server or anywhere else over HTTP, and with a model behind it if you like, is in [its tutorial](agent/TUTORIAL.md).
@@ -399,7 +399,10 @@ over it, or the layout changed, the output carries `ESC ] 5523;repaint ST`, wher
 draws over it, and `ESC ] 5523;tools=0` (or 1) when the tools were put away (or shown), for the host to remember. A host may change
 `inline` between steps, to resize the drawing: what was at its top left corner stays there. Inline, notes are the host's to show:
 the drawing has, for each, a leader from its atom to its right edge, and the output carries `ESC ] 5523;notes=<base64 JSON>` with
-`edge` and `notes` (`text`, `row`), followed by a repaint, whenever they change.
+`edge` and `notes` (`text`, `row`, `by`), followed by a repaint, whenever they change. A note written in the editor is the
+person's own (`by: "user"`, its leader blue; an agent's are amber), and one made with Note Highlighted Group... (offered on an atom or bond in
+a highlighted group) is about the group, its leader from the group's middle. Both travel in the CXSMILES, as
+`molterm_flags` (`user`, `group`) on the note's atom, or `molterm_bond_<n>_flags` for a bond's.
 `server/board.py`, behind `/api/v1/tui`, shows one way to use the editor from Python.
 
 The client also reads the terminal's background and text colours, to fit `theme` to them and blend Sixel's edges, and its cell size, because Sixel's
@@ -435,7 +438,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`), and `properties: true` | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`), and if asked `properties` (`mw`, `logp`, `tpsa`, `hbd`, `hba`, `rotb`, `qed`, `ro5`, `pains`, `brenk`) |
 | `POST /api/v1/properties` | JSON `{"inputs": [...]}`, at most 1000 SMILES or molblocks | `{"results": [...]}` in the same order, each `formula` and `properties` as above, or `error` |
 | `GET /api/v1/render.png` | query `input`, `format`, `cols`, `rows`, `theme`, `background`, `foreground`, `cell_width` (pixels per column) | a transparent PNG within cols by rows cells (a cell taken as twice as tall as wide), cropped to its drawing; `X-Molterm-Cols` gives the columns it takes. For programs that place pictures themselves |
-| `POST /api/v1/callouts` | JSON `input` (SMILES or CXSMILES with molterm's annotations), `cols`, `rows`, optional `cell_width`, `theme`, `background`, `foreground`, `mark` (`atoms` or `smarts`, `highlight`, `note`), `clear: true` | `png` (base64, whole cells), `cols`, `rows`, `smiles` (with the annotations and the mark), `notes` (`atom` or `bond`, `text`, `highlight`, `row`), `marked`. Highlights are drawn; each note is left to the host, as a speech bubble, and a leader runs from its atom to the right edge, in the middle of its `row` |
+| `POST /api/v1/callouts` | JSON `input` (SMILES or CXSMILES with molterm's annotations), `cols`, `rows`, optional `cell_width`, `theme`, `background`, `foreground`, `mark` (`atoms` or `smarts`, `highlight`, `note`), `clear: true` | `png` (base64, whole cells), `cols`, `rows`, `smiles` (with the annotations and the mark), `notes` (`atom` or `bond`, `text`, `highlight`, `row`, `by`: `user` or `agent`, `group`), `marked`. Highlights are drawn; each note is left to the host, as a speech bubble, and a leader runs from its atom to the right edge, in the middle of its `row` |
 | `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `kitty`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
 | `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, `background` and `foreground` (`RRGGBB`, the terminal's, to fit the theme to), and for Sixel `cell_width` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |

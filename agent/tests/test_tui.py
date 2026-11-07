@@ -155,6 +155,34 @@ def test_a_number_picks_and_escape_skips(app):
     assert app.bridge.results == [("a", {"choice": "No", "index": 1}), ("b", {"choice": None, "skipped": True})]
 
 
+def test_a_question_pulses_when_something_else_is_clicked_or_typed_and_a_click_on_an_option_answers(app):
+    show_molecule(app)
+    app.event({"type": "tool_use", "id": "q", "name": "tui.ask", "input": {"question": "Properties too?", "options": ["Yes", "No"]}})
+    lines, _ = app.lines()
+    calm = next(line for line in lines if "│ Properties too?" in strip(line))
+    top = app.placed[1][0]
+    click(app, (top + 1, 8))  # the picture: no editor while the question waits, the box pulses instead
+    assert app.editing is None and app.flash
+    pulsing = next(line for line in app.lines()[0] if "│ Properties too?" in strip(line))
+    assert pulsing != calm and "\x1b[48;2;" in pulsing  # brighter border, a warm tint inside
+    for _ in range(12):
+        app.tick()
+    assert app.flash == 0 and next(line for line in app.lines()[0] if "│ Properties too?" in strip(line)) == calm  # and settles
+    app.key("x")
+    assert app.flash and len(app.bridge.results) == 1  # only show_molecule's result: typing has nowhere to go, and it pulses too
+    lines, _ = app.lines()
+    row = next(i for i, line in enumerate(lines) if "2. No" in strip(line))
+    click(app, (row, 6))
+    assert app.bridge.results[-1] == ("q", {"choice": "No", "index": 1})
+
+
+def test_a_running_tools_dot_fades_out_and_in_rather_than_blinking():
+    from molterm_tui.app import FADE_FRAMES, _fade
+    levels = [_fade(frame) for frame in range(FADE_FRAMES + 1)]
+    assert levels[0] == 1 and min(levels) < 0.05 and levels[-1] == pytest.approx(1)
+    assert max(abs(a - b) for a, b in zip(levels, levels[1:])) < 0.25  # in small steps, both ways
+
+
 def test_escape_interrupts_a_busy_agent(app):
     app.event({"type": "turn_start"})
     app.key("\x1b")
@@ -479,10 +507,10 @@ def test_a_bubble_goes_where_there_is_no_text_and_any_text_under_it_shows_faintl
     covered = [app._plain(app._start + r)[left:left + 14] for r in range(top, top + 3)]
     assert not any(c.strip() for c in covered)  # the blank line between the replies, or beside them: no words covered
     assert (top, left) != (row + 1, 0)
-    from molterm_tui.app import FAINT, _cover, _route
+    from molterm_tui.app import AGENT, _cover, _route
     under = "abcdefghij"
-    covered = _cover(under, 2, "\x1b[48;2;44;39;30m│ x    │\x1b[0m", [1, 3, 4, 5, 6])
-    assert strip(covered) == "ab│dxfghi│" and FAINT in covered  # the blank cells show what is under them, faintly
+    covered = _cover(under, 2, "\x1b[48;2;44;39;30m│ x    │\x1b[0m", (AGENT, [1, 3, 4, 5, 6]))
+    assert strip(covered) == "ab│dxfghi│" and AGENT[2] in covered  # the blank cells show what is under them, faintly
     route = _route((5, 10), "left", 2, 20, 3, 8)  # a bubble up and to the right: along, up, along, into its left side
     assert [c for _, _, c, _ in route] == ["─"] * 8 + ["╯", "│", "╭", "─", "┤"] and route[-1][:2] == (3, 20)
     route = _route((5, 10), "left", 9, 2, 3, 12)  # below and across: down, along, into its top
@@ -515,6 +543,30 @@ def test_notes_made_while_editing_inline_hang_in_bubbles_beside_the_drawing_at_o
     app.edit_answer("0 S2\n\x1b]5523;notes=" + b64.b64encode(json.dumps({"edge": left + cols, "notes": []}).encode()).decode()
                     + "\x1b\\\x1b]5523;repaint\x1b\\")
     assert "the OH" not in strip(app.bridge.written[-1])  # gone with the note
+
+
+def test_the_users_own_notes_and_highlights_are_blue_and_the_agents_notes_yellow(app):
+    from molterm_tui.app import NOTE_INK, USER_INK
+    show_molecule(app)
+    app.event({"type": "tool_use", "id": "k1", "name": "tui.mark", "input": {"mol": 1, "atoms": [1], "note": "theirs"}})
+    answer = {"png": "C" * 10, "cols": 20, "rows": 8, "smiles": "CCO", "marked": [1],
+              "notes": [{"atom": 1, "text": "theirs", "row": 1, "by": "agent"}, {"atom": 2, "text": "mine", "row": 5, "by": "user"}]}
+    app.picture_answer(json.dumps(app.bridge.pictures[-1]), json.dumps(answer))
+    lines = app.lines()[0]
+    theirs = next(line for line in lines if "theirs" in strip(line))
+    mine = next(line for line in lines if "mine" in strip(line))
+    assert NOTE_INK in theirs and USER_INK not in theirs
+    assert USER_INK + " mine" in mine.replace("\x1b[48;2;26;36;56m", "") or USER_INK in mine.split("mine")[0][-40:]  # its text blue too
+    app.event({"type": "text", "delta": "Imatinib binds the kinase in its inactive form."})
+    app.event({"type": "text_end"})
+    lines, _ = app.lines()
+    row = next(i for i, line in enumerate(lines) if "Imatinib binds" in strip(line))
+    col = strip(lines[row]).index("the kinase")
+    app.key(f"\x1b[<0;{col + 1};{row + 1}M")
+    app.key(f"\x1b[<32;{col + 10};{row + 1}M")
+    app.key(f"\x1b[<0;{col + 10};{row + 1}m")
+    marked = next(line for line in app.lines()[0] if "Imatinib binds" in strip(line))
+    assert "\x1b[48;2;32;62;104m" + USER_INK in marked  # the user's highlight: the blue tint, and their blue ink
 
 
 def test_the_pages_wheel_leaves_the_transcript_still_while_a_molecule_is_edited(app):

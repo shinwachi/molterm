@@ -8,9 +8,16 @@ converts on the way in and out. Either way the shape is the same plain data:
 
     {"atoms": [[atom, highlight, note], ...], "bonds": [[atom, atom, highlight, note], ...], "show": ["numbers", "cip"]}
 
-with "" for no highlight or no note, and the lower atom first in a bond.
+with "" for no highlight or no note, and the lower atom first in a bond. A note may also have flags, in an optional
+
+    "flags": {"a3": "user", "b1-2": "user group"}
+
+keyed by its atom ("a" and the atom) or bond ("b" and its atoms): "user" for a note the person wrote (rather than an agent), which
+hosts draw in the user's colour, and "group" for a note on the highlighted group its atom or bond is in, which is pointed at in the
+middle of the group rather than at the atom.
 """
 import base64
+import re
 
 from rdkit import Chem, rdBase
 from rdkit.Chem import rdCIPLabeler
@@ -23,7 +30,8 @@ MAX_NOTES = 400
 HIGHLIGHTS = {"yellow": (1.0, 0.82, 0.25), "green": (0.45, 0.82, 0.45), "blue": (0.45, 0.68, 1.0), "pink": (1.0, 0.55, 0.72)}
 SHOWN = ("numbers", "cip")
 _HIGHLIGHT_ALPHA = 0.55
-_NOTE, _HIGHLIGHT, _SHOW = "atomNote", "molterm_highlight", "molterm_show"
+_NOTE, _HIGHLIGHT, _SHOW, _FLAGS = "atomNote", "molterm_highlight", "molterm_show", "molterm_flags"
+FLAGS = ("user", "group")
 _ESCAPES = str.maketrans({c: f"&#{ord(c)};" for c in "&:;|,"})  # as RDKit writes them
 EXPORT_SIZE = (600, 450)
 
@@ -48,8 +56,14 @@ def clean_note(text):
 def check(notes, limit=10**6):
     """Raise NoteError unless `notes` has the shape above, with atoms below `limit`."""
     try:
-        if not isinstance(notes, dict) or set(notes) != {"atoms", "bonds", "show"}:
+        if not isinstance(notes, dict) or set(notes) - {"flags"} != {"atoms", "bonds", "show"}:
             raise NoteError("The annotations are not valid.")
+        flags = notes.get("flags", {})
+        if not isinstance(flags, dict) or len(flags) > MAX_NOTES:
+            raise NoteError("The annotations are not valid.")
+        for key, value in flags.items():
+            if not (isinstance(key, str) and re.fullmatch(r"a\d+|b\d+-\d+", key) and isinstance(value, str) and set(value.split()) <= set(FLAGS)):
+                raise NoteError("The annotations are not valid.")
         atoms, bonds, show = notes["atoms"], notes["bonds"], notes["show"]
         if not (isinstance(atoms, list) and isinstance(bonds, list) and len(atoms) + len(bonds) <= MAX_NOTES):
             raise NoteError("There are too many annotations.")
@@ -70,6 +84,47 @@ def check(notes, limit=10**6):
         if isinstance(error, NoteError):
             raise
         raise NoteError("The annotations are not valid.") from error
+
+
+def key(ids):
+    """A note's key in "flags": "a3" for atom 3, "b1-2" for the bond between atoms 1 and 2."""
+    return f"a{ids[0]}" if len(ids) == 1 else "b{}-{}".format(*sorted(ids))
+
+
+def flags(notes, ids):
+    """The flags of the note on this atom ([atom]) or bond ([atom, atom])."""
+    return set(notes.get("flags", {}).get(key(ids), "").split())
+
+
+def set_flags(notes, ids, chosen):
+    found = notes.setdefault("flags", {})
+    words = " ".join(name for name in FLAGS if name in chosen)
+    if words:
+        found[key(ids)] = words
+    else:
+        found.pop(key(ids), None)
+    if not found:
+        del notes["flags"]
+
+
+def group(notes, pairs, ids):
+    """The atoms of the highlighted group an atom ([atom]) or bond ([atom, atom]) is in: those joined to it through bonds (`pairs`)
+    whose atoms are highlighted in its colour. Just its own atoms if it has no highlight."""
+    shade = {entry[0]: entry[1] for entry in notes["atoms"] if entry[1]}
+    bond_shade = {tuple(entry[:2]): entry[2] for entry in notes["bonds"] if entry[2]}
+    colour = shade.get(ids[0]) if len(ids) == 1 else bond_shade.get(tuple(sorted(ids))) or shade.get(ids[0]) or shade.get(ids[1])
+    found = list(ids)
+    if not colour:
+        return found
+    near = {}
+    for a, b in pairs:
+        near.setdefault(a, []).append(b)
+        near.setdefault(b, []).append(a)
+    for atom in found:  # grows as it goes
+        for other in near.get(atom, ()):
+            if other not in found and shade.get(other) == colour:
+                found.append(other)
+    return found
 
 
 # As text
@@ -96,7 +151,7 @@ def split(text):
 def read(mol):
     """The notes kept on a molecule's atoms, as RDKit reads them from CXSMILES."""
     notes = empty()
-    bonds = {}
+    bonds, bond_flags = {}, {}
     for atom in mol.GetAtoms():
         props = atom.GetPropsAsDict(includePrivate=False, includeComputed=False)
         index = atom.GetIdx()
@@ -106,20 +161,27 @@ def read(mol):
             highlight = ""
         if highlight or note:
             notes["atoms"].append([index, highlight, note])
+        if note and props.get(_FLAGS):
+            set_flags(notes, [index], str(props[_FLAGS]).split())
         for name, value in props.items():
             parts = name.split("_")
-            if len(parts) == 4 and parts[:2] == ["molterm", "bond"] and parts[2].isdigit() and parts[3] in ("highlight", "note"):
+            if len(parts) == 4 and parts[:2] == ["molterm", "bond"] and parts[2].isdigit() and parts[3] in ("highlight", "note", "flags"):
                 other = int(parts[2])
                 if other == index or other >= mol.GetNumAtoms() or not mol.GetBondBetweenAtoms(index, other):
                     continue
                 entry = bonds.setdefault(tuple(sorted((index, other))), ["", ""])
-                if parts[3] == "highlight":
+                if parts[3] == "flags":
+                    bond_flags[tuple(sorted((index, other)))] = str(value).split()
+                elif parts[3] == "highlight":
                     entry[0] = str(value) if str(value) in HIGHLIGHTS else ""
                 else:
                     entry[1] = clean_note(str(value))
         if index == 0:
             notes["show"] = [name for name in SHOWN if name in str(props.get(_SHOW, "")).split()]
     notes["bonds"] = [[*pair, *entry] for pair, entry in sorted(bonds.items()) if entry[0] or entry[1]]
+    for pair, chosen in bond_flags.items():
+        if bonds.get(pair, ["", ""])[1]:
+            set_flags(notes, list(pair), chosen)
     return notes
 
 
@@ -129,6 +191,8 @@ def write(smiles, notes):
     for index, highlight, note in notes["atoms"]:
         if note:
             props.append((index, _NOTE, note))
+            if flags(notes, [index]):
+                props.append((index, _FLAGS, " ".join(name for name in FLAGS if name in flags(notes, [index]))))
         if highlight:
             props.append((index, _HIGHLIGHT, highlight))
     for first, second, highlight, note in notes["bonds"]:
@@ -136,6 +200,8 @@ def write(smiles, notes):
             props.append((first, f"molterm_bond_{second}_highlight", highlight))
         if note:
             props.append((first, f"molterm_bond_{second}_note", note))
+            if flags(notes, [first, second]):
+                props.append((first, f"molterm_bond_{second}_flags", " ".join(name for name in FLAGS if name in flags(notes, [first, second]))))
     if notes["show"]:
         props.append((0, _SHOW, " ".join(notes["show"])))
     base, fields = markush.split(smiles)
@@ -154,9 +220,11 @@ def renumber(notes, order):
     for index, highlight, note in notes["atoms"]:
         if index in order:
             moved["atoms"].append([order[index], highlight, note])
+            set_flags(moved, [order[index]], flags(notes, [index]))
     for first, second, highlight, note in notes["bonds"]:
         if first in order and second in order:
             moved["bonds"].append([*sorted((order[first], order[second])), highlight, note])
+            set_flags(moved, [order[first], order[second]], flags(notes, [first, second]))
     moved["atoms"].sort()
     moved["bonds"].sort()
     moved["show"] = list(notes["show"])

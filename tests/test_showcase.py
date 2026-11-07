@@ -223,7 +223,7 @@ def test_showcase_copies_from_the_list_and_the_window():
     frames = showcase.frames(120, 38, 7, 14)
     copied = [text for frame in frames for text in _clipboard(frame["output"])]
     aspirin = "CC(=O)Oc1ccccc1C(=O)O"
-    edited = "CCOc1ccc(NC(C)=O)cc1F |atomProp:2.atomNote.ethyl ether:13.molterm_highlight.yellow|"
+    edited = "CCOc1ccc(NC(C)=O)cc1F |atomProp:2.atomNote.ethyl ether:2.molterm_flags.user:13.molterm_highlight.yellow|"
     assert copied == [aspirin, aspirin, edited, edited]
     pictures = [frame["output"] for frame in frames if "\x1b]5522;type=write" in frame["output"]]
     assert len(pictures) == 1
