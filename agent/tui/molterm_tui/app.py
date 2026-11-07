@@ -36,8 +36,8 @@ from dataclasses import dataclass, field
 
 from . import keys as keyboard
 from . import kitty
-from .screen import (ACCENT, BOLD, DIM, GREEN, GREY, ITALIC, RED, RESET, USER_BG, cells, overlay, pad, paint, strip, style, truncate,
-                     width, wrap)
+from .screen import (ACCENT, BOLD, DIM, GREEN, GREY, ITALIC, RED, RESET, USER_BG, cells, join, overlay, pad, paint, strip, style,
+                     truncate, width, wrap)
 
 SPINNER = "·✢✳✶✻✽✻✶✳✢"
 TOOL_NAMES = {"tui.show": "Show", "tui.ask": "Ask", "tui.mark": "Mark", "molterm.render": "Render", "molterm.properties": "Properties"}
@@ -179,7 +179,9 @@ class App:
         self.selecting = None  # a drag across the transcript: [row, col, row, col] on the screen
         self.expansions = {}  # a context's tag in the input -> what the message carries instead, see tag()
         self.chips = []  # the contexts waiting above the input, see Context
-        self.bubbles = {}  # a bubble's key -> how the user left it: {"dx", "dy", "min", "gone"}
+        self.bubbles = {}  # a bubble's key -> how the user left it: {"at" (rows, cols from its anchor), "min", "gone"}
+        self._bubble_places = {}  # a bubble's key -> (top, left, anchor row, anchor col), as last drawn
+        self.focused = True  # the terminal has the keyboard: the input's cursor shows
         self.dragging = None  # a bubble being dragged
         self._bubble_hits, self._chip_hits = [], []
 
@@ -188,7 +190,12 @@ class App:
     def start(self):
         self.started = True
         # the alternate screen, pastes marked as pastes, and the mouse reported (SGR) with drags, to pick a molecule or mark text
-        self.bridge.write("\x1b[?1049h\x1b[?2004h\x1b[?1002h\x1b[?1006h")
+        self.bridge.write("\x1b[?1049h\x1b[?2004h\x1b[?1002h\x1b[?1006h" + kitty.send_cursor())
+        self.draw()
+
+    def focus(self, focused):
+        """The page says whether the terminal has the keyboard: the input's cursor shows only when it has."""
+        self.focused = bool(focused)
         self.draw()
 
     def resize(self, cols, rows):
@@ -449,7 +456,7 @@ class App:
             self._place_edit(top)
             inline = self.editing["inline"]
             self.editing["at"] = (inline[0], inline[1], min(molecule.rows, inline[2]), molecule.cols)
-        self.bridge.write("\x1b[?25l\x1b[?1003h")  # no cursor, and every movement, for the editor's hover and drags
+        self.bridge.write("\x1b[?25l" + kitty.hide_cursor() + "\x1b[?1003h")  # no cursor, and every movement, for the editor
         self.draw()
         self._edit_pump()
 
@@ -665,7 +672,7 @@ class App:
             self.scroll = max(self.scroll + (step if key.name == "pageup" else -step), 0)
             return
         if key.name == "ctrl-l":
-            self.bridge.write("\x1b[2J")
+            self.bridge.write("\x1b[2J" + kitty.send_cursor())
             return
         if self.question:
             self._question_key(key)
@@ -679,7 +686,7 @@ class App:
         if self.dragging:  # a bubble, moved with the pointer until let go
             d = self.dragging
             state = self.bubbles.setdefault(d["key"], {})
-            state["dx"], state["dy"] = d["dx"] + col - d["col"], d["dy"] + row - d["row"]
+            state["at"] = [d["at"][0] + row - d["row"], d["at"][1] + col - d["col"]]
             if not pressed and not button & 32:
                 self.dragging = None
             return
@@ -726,7 +733,8 @@ class App:
                 elif part == "open":
                     state["min"] = False
                 else:
-                    self.dragging = {"key": key, "row": row, "col": col, "dx": state.get("dx", 0), "dy": state.get("dy", 0)}
+                    top, left, anchor_row, anchor_col = self._bubble_places[key]
+                    self.dragging = {"key": key, "row": row, "col": col, "at": [top - anchor_row, left - anchor_col]}
                 return True
         return False
 
@@ -859,7 +867,7 @@ class App:
                 else:
                     state["min"] = state["gone"] = False
                 if notes.group(1) == "reset":
-                    state["dx"] = state["dy"] = 0
+                    state.pop("at", None)
             return
         if text == "/clear":
             self.blocks, self.molecules, self.placed, self.highlights = [Block("banner")], [], {}, []
@@ -993,9 +1001,11 @@ class App:
         return box + [style("  ↑↓ to choose · enter to answer · a number picks · esc to skip", GREY)]
 
     def _bubbles(self, cols):
-        """What is drawn over the transcript: [(content line, col, text)], for the molecules' notes and the highlights' notes. Each
-        bubble is where the user left it (dragged, folded or hidden); `_bubble_hits` says where its parts are, for the mouse."""
-        out, self._bubble_hits = [], []
+        """What is drawn over the transcript: [(content line, col, text, interior)], for the molecules' notes and the highlights'
+        notes, where `interior` is the span of a bubble's row that may show faintly what it covers. A bubble goes where it covers
+        the least text, near what it points at, unless the user dragged it; a line in text joins it to what it points at, wherever
+        it is. `_bubble_hits` says where each one's parts are, for the mouse."""
+        out, self._bubble_hits, self._bubble_places, taken = [], [], {}, []
         e = self.editing
         editing = e["molecule"] if e and e["mode"] == "inline" else None
         for molecule in self.molecules:
@@ -1003,10 +1013,7 @@ class App:
             if base is None or not molecule.notes or molecule is editing:
                 continue
             x = 5 + molecule.cols  # just past the picture's right edge, where the leaders end
-            room = min(cols - x - 3 - 4, BUBBLE_TEXT)
-            if room < 8:
-                continue
-            below = None
+            room = min(max(cols - x - 3 - 4, 12), BUBBLE_TEXT)
             for note in sorted(molecule.notes, key=lambda n: int(n.get("row") or 0)):
                 key = ("mol", molecule.number, str(note.get("atom")), str(note.get("bond")), str(note.get("text")))
                 state = self.bubbles.setdefault(key, {})
@@ -1014,16 +1021,19 @@ class App:
                 if state.get("gone"):
                     continue
                 if state.get("min"):
-                    out.append((leader, x, style("──◆", NOTE_INK)))
+                    out.append((leader, x, style("──◆", NOTE_INK), None))
                     self._bubble_hits.append((key, "open", leader, x, x + 3))
                     continue
                 rows = _bubble(str(note.get("text") or ""), room)
-                top = leader - 1 if below is None else max(leader - 1, below)
-                below = top + len(rows)
-                top = top + state.get("dy", 0)
-                left = max(min(x + 3 + state.get("dx", 0), cols - width(strip(rows[0]))), 0)
-                out += _connector(rows, leader, x, top, left)
-                out += self._place_bubble(key, rows, top, left, cols)
+                size = width(strip(rows[0]))
+                if "at" in state:
+                    top, left = leader + state["at"][0], max(min(x + state["at"][1], cols - size), 0)
+                else:
+                    tops = range(leader - len(rows) + 2, leader + 5)
+                    lefts = range(x + 3, max(min(cols - size, x + 15), x + 3) + 1, 3)
+                    top, left = self._free_place(tops, lefts, len(rows), size, taken, (leader - 1, x + 3), cols)
+                taken.append((top, left, len(rows), size))
+                out += self._place_bubble(key, rows, top, left, (leader, x), "left", cols)
         for highlight, line, start, end in self._painted_first:
             if not highlight.note:
                 continue
@@ -1032,30 +1042,78 @@ class App:
             if state.get("gone"):
                 continue
             if state.get("min"):
-                out.append((line, end, style("◆", NOTE_INK)))
+                out.append((line, end, style("◆", NOTE_INK), None))
                 self._bubble_hits.append((key, "open", line, end, end + 1))
                 continue
             rows = _bubble(highlight.note, min(cols - 8, BUBBLE_TEXT))
             size = width(strip(rows[0]))
-            left = max(min(start - 2, cols - 1 - size), 0) + state.get("dx", 0)
-            top = line + 1 + state.get("dy", 0)
-            if top > line and left < start < left + size - 6:  # under the text: a tail pointing up at it, through a line if need be
-                border = strip(rows[0])
-                rows[0] = style(border[:start - left] + "┴" + border[start - left + 1:], NOTE_BG, NOTE_INK)
-                out += [(r, start, style("│", NOTE_INK)) for r in range(line + 1, top)]
-            out += self._place_bubble(key, rows, top, left, cols)
+            if "at" in state:
+                top, left = line + state["at"][0], max(min(start + state["at"][1], cols - size), 0)
+            else:
+                tops = [*range(line + 1, line + 7), *range(line - len(rows) - 3, line - len(rows) + 1)]
+                lefts = range(max(start - 22, 0), max(min(start + 30, cols - size), 0) + 1, 2)
+                top, left = self._free_place(tops, lefts, len(rows), size, taken, (line + 1, max(start - 2, 0)), cols)
+            taken.append((top, left, len(rows), size))
+            out += self._place_bubble(key, rows, top, left, (line, start), "text", cols, end)
         return out
 
-    def _place_bubble(self, key, rows, top, left, cols):
-        size = width(strip(rows[0]))
-        left = max(min(left, cols - size), 0)
+    def _free_place(self, tops, lefts, height, size, taken, near, cols):
+        """Of the places given, the one where a bubble covers the least text and no other bubble, nearest `near` (top, left)."""
+        best, best_cost = near, None
+        for top in tops:
+            for left in lefts:
+                if left < 0 or left + size > cols:
+                    continue
+                cost = abs(top - near[0]) + abs(left - near[1]) / 4
+                for other in taken:
+                    if top < other[0] + other[2] and other[0] < top + height and left < other[1] + other[3] and other[1] < left + size:
+                        cost += 1000
+                for row in range(top, top + height):
+                    cost += 10 * sum(1 for c in self._plain(row)[left:left + size] if c != " ")
+                if best_cost is None or cost < best_cost:
+                    best, best_cost = (top, left), cost
+        return best
+
+    def _plain(self, index):
+        """A content line as a character a column, for finding where text is ("" past the transcript)."""
+        cache = self._plain_lines
+        if index not in cache:
+            line = self._content_lines[index] if 0 <= index < len(self._content_lines) else ""
+            cache[index] = "".join((text[:1] or " ") if text[:1] != kitty.PLACEHOLDER else "▒" for _, text in cells(line))
+        return cache[index]
+
+    def _place_bubble(self, key, rows, top, left, anchor, kind, cols, end=None):
+        """The bubble's rows, its parts for the mouse, and the line joining it to its anchor: a molecule's leader at the picture's
+        edge, coming from the left, or highlighted text, which it leaves from below, above, or its end."""
+        size, height = width(strip(rows[0])), len(rows)
         inner = size - 4
-        self._bubble_hits.append((key, "drag", top, left, left + size))
-        for i in range(1, len(rows)):
+        self._bubble_places[key] = (top, left, *anchor)
+        for i in range(height):
             self._bubble_hits.append((key, "drag", top + i, left, left + size))
         self._bubble_hits.append((key, "fold", top, left + inner - 2, left + inner + 1))
         self._bubble_hits.append((key, "hide", top, left + inner + 1, left + inner + 3))
-        return [(top + i, left, row) for i, row in enumerate(rows)]
+        out = []
+        for i, line in enumerate(rows):  # its margins and the room after its text may show faintly what it covers, not between words
+            text = strip(line)[2:size - 2].rstrip()
+            out.append((top + i, left, line, [1, *range(2 + width(text), size - 1)] if 0 < i < height - 1 else None))
+        row, col = anchor
+        tail = min(max(col, left + 1), max(left + size - 7, left + 1))
+        if kind == "text" and top == row + 1 and left < col < left + size - 1:  # right under the text: a tail up at it
+            return out + [(top, tail, style("┴", NOTE_BG, NOTE_INK), None)]
+        if kind == "text" and top + height == row and left < col < left + size - 1:  # right above it: a tail down
+            return out + [(top + height - 1, col, style("┬", NOTE_BG, NOTE_INK), None)]
+        if kind == "left":
+            start, entry = (row, col), "left"
+        elif top > row + 1:
+            start, entry = (row + 1, col), "up"
+        elif top + height < row:
+            start, entry = (row - 1, col), "down"
+        elif left > end:
+            start, entry = (row, end), "left"
+        else:
+            start, entry = (row, max(col - 1, 0)), "right"
+        return out + [(r, c, style(char, *((NOTE_BG,) if joint else ()), NOTE_INK), None)
+                      for r, c, char, joint in _route(start, entry, top, left, height, size)]
 
     def lines(self):
         """The screen's lines, top to bottom, and where the cursor goes (row, col), or None to hide it."""
@@ -1084,7 +1142,7 @@ class App:
         self.scroll = min(self.scroll, max(len(content) - room, 0))
         end = len(content) - self.scroll
         start = max(end - room, 0)
-        self._content_lines, self._start = content, start
+        self._content_lines, self._start, self._plain_lines = content, start, {}
         shown = content[start:end] if room else []
         e = self.editing
         gap = range(0)
@@ -1092,9 +1150,9 @@ class App:
             first = self._content_at[e["molecule"].number]
             gap = range(first - 3, first + e["rows"] + 1)
         shown += [""] * (room - len(shown))  # the empty rows over the input too, where a bubble may be dragged
-        for line, col, text in self._bubbles(cols):  # over the transcript, where they are shown
-            if start <= line < start + room and line not in gap:
-                shown[line - start] = truncate(overlay(shown[line - start], col, text), cols)
+        for line, col, text, interior in self._bubbles(cols):  # over the transcript, where they are shown
+            if start <= line < start + room and line not in gap and col >= 0:
+                shown[line - start] = truncate(_cover(shown[line - start], col, text, interior), cols)
         if self.selecting:
             _, spans = self._selection_cells(self.selecting)
             for line, a, b in spans:
@@ -1127,12 +1185,12 @@ class App:
             frozen = self.editing["frozen"]
             footer = self._footer(self.cols - 1)[-(self.rows - len(frozen)):]
             screen = frozen + [""] * (self.rows - len(frozen) - len(footer)) + footer
-            return "\x1b[?25l" + "".join(f"\x1b[{row + 1};1H" + line + RESET + "\x1b[K"
-                                          for row, line in enumerate(screen) if not top <= row < top + rows)
+            return "\x1b[?25l" + kitty.hide_cursor() + "".join(f"\x1b[{row + 1};1H" + line + RESET + "\x1b[K"
+                                                              for row, line in enumerate(screen) if not top <= row < top + rows)
         screen, cursor = self.lines()
         out = "\x1b[?25l\x1b[H" + "\r\n".join(line + RESET + "\x1b[K" for line in screen) + "\x1b[J"
-        if cursor:
-            out += f"\x1b[{cursor[0] + 1};{cursor[1] + 1}H\x1b[?25h"
+        # the terminal's own cursor stays hidden: an outline over the cell shows where typing goes, and leaves its character readable
+        out += kitty.place_cursor(*cursor) if cursor and self.focused else kitty.hide_cursor()
         return out
 
     def draw(self):
@@ -1182,18 +1240,66 @@ def _grip(cols, label):
     return style("╌" * (side // 2) + label + "╌" * (side - side // 2) + "◢", GREY)
 
 
-def _connector(rows, leader, x, top, left):
-    """The leader carried on in text from the picture's edge (row `leader`, column `x`) to a bubble at (top, left), joining it at
-    its side; nothing if the bubble was dragged to the left of the edge."""
-    turn = left - 2
-    if turn < x:
+_SIDES = {"left": (0, -1), "right": (0, 1), "up": (-1, 0), "down": (1, 0)}
+_LINES = {frozenset(("left", "right")): "─", frozenset(("up", "down")): "│", frozenset(("left", "down")): "╮",
+          frozenset(("right", "down")): "╭", frozenset(("left", "up")): "╯", frozenset(("right", "up")): "╰"}
+_OPPOSITE = {"left": "right", "right": "left", "up": "down", "down": "up"}
+
+
+def _route(start, entry, top, left, height, size):
+    """A line in text from `start` (row, col), which it enters from its `entry` side, to a bubble at (top, left), joining one of
+    its sides: [(row, col, character, on the bubble's edge)]. Along a row, then a column, then a row, as box drawing goes; nothing
+    if the bubble covers the start."""
+    row, col = start
+    bottom, right = top + height - 1, left + size - 1
+    if left > col:  # the bubble to the right: into its left side
+        joint = min(max(row, top + 1), bottom - 1)
+        turn = max(col, left - 2)
+        points, last, edge = [(row, col), (row, turn), (joint, turn), (joint, left - 1)], "right", (joint, left, "┤")
+    elif right < col:  # to the left: into its right side
+        joint = min(max(row, top + 1), bottom - 1)
+        # a picture's leader, which comes from the left, turns at once, beside the picture rather than through it
+        turn = col if entry == "left" else min(col, right + 2)
+        points, last, edge = [(row, col), (row, turn), (joint, turn), (joint, right + 1)], "left", (joint, right, "├")
+    elif top > row:  # below: into its top, clear of its controls
+        at = min(max(col, left + 1), max(right - 6, left + 1))
+        points, last, edge = [(row, col), (top - 1, col), (top - 1, at)], "down", (top, at, "┴")
+    elif bottom < row:  # above: into its bottom
+        at = min(max(col, left + 1), right - 1)
+        points, last, edge = [(row, col), (bottom + 1, col), (bottom + 1, at)], "up", (bottom, at, "┬")
+    else:
         return []
-    joint = top + min(max(leader - top, 1), len(rows) - 2)
-    rows[joint - top] = NOTE_BG + NOTE_INK + "┤" + rows[joint - top][len(NOTE_BG + NOTE_INK) + 1:]
-    if joint == leader:
-        return [(leader, x, style("─" * (left - x), NOTE_INK))]
-    down = joint > leader
-    out = [(leader, x, style("─" * (turn - x) + ("╮" if down else "╯"), NOTE_INK))]
-    out += [(row, turn, style("│", NOTE_INK)) for row in range(min(leader, joint) + 1, max(leader, joint))]
-    out.append((joint, turn, style(("╰" if down else "╭") + "─" * (left - turn - 1), NOTE_INK)))
-    return out
+    walk = [points[0]]
+    for target in points[1:]:
+        while walk[-1] != target:
+            r, c = walk[-1]
+            walk.append((r + (target[0] > r) - (target[0] < r), c + (target[1] > c) - (target[1] < c)) if r == target[0] or c == target[1]
+                        else (r + (target[0] > r) - (target[0] < r), c))
+    out = []
+    for i, (r, c) in enumerate(walk):
+        came = entry if i == 0 else _OPPOSITE[_step(walk[i - 1], (r, c))]
+        going = last if i == len(walk) - 1 else _step((r, c), walk[i + 1])
+        out.append((r, c, _LINES.get(frozenset((came, going)), "─" if came in ("left", "right") else "│"), False))
+    return out + [(*edge, True)]
+
+
+def _step(a, b):
+    return next(side for side, (dr, dc) in _SIDES.items() if (b[0] - a[0], b[1] - a[1]) == (dr, dc))
+
+
+FAINT = "\x1b[38;2;92;84;66m"  # what a bubble covers, shown in its blank cells
+
+
+def _cover(line, col, text, interior):
+    """The line with `text` drawn over it from `col`; in the `interior` span of a bubble's row, a blank cell over text shows that
+    text faintly, so that the user knows there is something under the bubble."""
+    if interior is None:
+        return overlay(line, col, text)
+    under, new = cells(line), cells(text)
+    for i in interior:
+        below = under[col + i][1] if col + i < len(under) else " "
+        if new[i][1] == " " and below.strip() and below[:1] != kitty.PLACEHOLDER:
+            new[i] = [NOTE_BG + FAINT, below]
+    under += [["", " "] for _ in range(col + len(new) - len(under))]
+    under[col:col + len(new)] = new
+    return join(under)

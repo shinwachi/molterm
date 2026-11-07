@@ -110,13 +110,21 @@ A molecule's annotations, the user's from the editor or the agent's from `tui.ma
 through `POST /api/v1/sessions/<id>/picture`): the highlights in the picture, and, for each note, a leader from its atom to the
 picture's right edge, ending in the middle of a row. The TUI carries the leader on in text to a speech bubble with the note in it,
 beside the picture, turning down or up when bubbles would overlap. Bubbles and highlights are drawn over the transcript each frame, so
-they scroll with it. A bubble can be moved out of the way: drag it (its leader follows, turning as it must), fold it with its `–`
+they scroll with it. A bubble goes where it covers the least text near what it points at (beside a picture, in a blank line, beside a short line),
+and where it can't help covering some, that text shows faintly in the bubble's margins and empty room, so the user knows there is
+more under it. A bubble can be moved out of the way: drag it, and the line from its atom or text follows it anywhere, into the
+nearest side of the bubble (a molecule's turns at the picture's edge, so as not to cut through the picture); fold it with its `–`
 to a ◆ at the leader's end (a click opens it again), or hide it with its `×`. `/notes` shows them all again, `/notes hide` folds them
 all, and `/notes reset` puts them back where they were.
 
 Text can be pointed at too. The agent's `tui.mark` with `text` highlights those words where they last appear (the user's own words
 or the agent's), with a note in a bubble hanging under them. The user drags across text: the selection shows as it is dragged, then
 turns blue, and waits above the input as a context; a click on the highlight takes it away.
+
+The input's cursor is an outline over its cell, so the character under it stays readable, and it shows only while the terminal
+has the keyboard (the page tells the TUI, `App.focus`). restty draws a hollow cursor only for an unfocused terminal, and no escape
+sequence asks for one, so the TUI draws its own: a small transparent picture (`kitty.outline`, a PNG made with the standard library),
+placed directly over the cell above the text, the terminal's cursor staying hidden.
 
 ### Contexts, above the input
 
@@ -133,11 +141,12 @@ into the same `use_tui` and `use_server_tool` calls: the events, the page and th
 
 ## Status
 
-Verified (2026-11-07): `make test`, 48 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; a molecule
+Verified (2026-11-07): `make test`, 50 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; a molecule
 kept, placed, clicked, edited inline or in a box, and put into the input on Done, or left on Cancel; the inline editor's repaints and
 its tools put away and remembered; the agent's marks on a molecule, with their bubbles beside it, and on text, with a bubble under it;
 a drag that highlights text and leaves it as a context; contexts put into the text, taken out, dropped and sent in full;
-bubbles folded, opened, dragged, hidden and shown again; the inline drawing resized by keys and by its line, the transcript making
+bubbles folded, opened, dragged, hidden and shown again, placed clear of text, their lines routed to any side, and text under
+them shown faintly; the outline cursor, hidden without focus; the inline drawing resized by keys and by its line, the transcript making
 room and closing up after; the server's sessions, stream, tool answers,
 interrupts, the editor's way through to molterm, and the agent's script, its review of an edited molecule included, with molterm stubbed; an agent elsewhere driving a session over a real HTTP port, the token checks, `AGENT`, and
 the Claude example's tool loop and interrupt handling with a stand-in client). In Chrome: the page starts Pyodide and a session, the greeting streams in, "show me a
@@ -158,7 +167,10 @@ and put its tag into the input. A drag across "methylpiperazine" showed the sele
 sending it made the agent mark it as seen. Then (2026-11-07, later): a bubble folded to ◆ and back with `/notes`, and dragged down and
 right with its leader turning to follow; a highlight dragged across text waited as a chip above the input, and a click put its tag
 into the text; while editing inline, Alt+↓ twice and a drag of the line under the drawing made it larger, the text below moving down
-and the molecule staying put, and Done put the picture back in place with the transcript closed up.
+and the molecule staying put, and Done put the picture back in place with the transcript closed up. Then: the cursor shows as an outline
+with the letter under it readable; the agent's note on its own words sits beside the short lines below them, covering nothing; a
+molecule's bubble dragged below and left of the picture, and up over its title, kept its line (beside the picture, not through it),
+and the text it covered showed faintly in its margins.
 
 ## Open issues
 
@@ -173,7 +185,8 @@ and the molecule staying put, and Done put the picture back in place with the tr
   itself, and draws them its own way). Resizing the window while editing cancels the edit.
 - While an inline edit is open the TUI draws nothing of its own except when the editor asks: the agent's events show at the next
   repaint, or on Done or Cancel.
-- A note's leader is a straight line to the picture's right edge, and may cross other bonds. Bubbles need about 37 columns beside
+- A note's leader is a straight line to the picture's right edge, and may cross other bonds. A bubble dragged to the left of the
+  picture, level with it, is joined by a line across the picture, which hides the cells it crosses. Bubbles need about 37 columns beside
   the picture, which is drawn narrower to leave them; in a narrower window the notes aren't shown (the highlights still are).
 - A text highlight is found by its words, so the same words elsewhere in that block are highlighted too. Highlights are of the
   user's, the agent's and notes' text, not of tool lines or panels.

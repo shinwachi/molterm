@@ -1,5 +1,6 @@
 """The TUI, driven as the page drives it: keys and the agent's events in, frames and calls to the bridge out."""
 import json
+import re
 
 import pytest
 
@@ -119,7 +120,7 @@ def test_tui_show_sends_a_picture_once_and_prints_its_placeholders(app):
     app.bridge.written.clear()
     app.event({"type": "tool_use", "id": "t9", "name": "tui.show", "input": {"title": "Ethanol", "image": image}})
     sent = "".join(app.bridge.written)
-    assert sent.count("\x1b_G") == 1 + 2  # a delete of the id, then the picture in two chunks
+    assert sent.count("\x1b_Ga=d,d=I") + sent.count("a=T,") + sent.count("\x1b_Gq=2") == 1 + 2  # a delete of the id, then two chunks
     assert "a=T,f=100,U=1,i=1,c=3,r=2,q=2,m=1;" + "A" * 4096 in sent
     assert app.bridge.results == [("t9", {"shown": True, "lines": 2})]
     lines, _ = app.lines()
@@ -129,7 +130,7 @@ def test_tui_show_sends_a_picture_once_and_prints_its_placeholders(app):
     assert all(width(line) <= 80 for line in lines)
     app.bridge.written.clear()
     app.draw()
-    assert "\x1b_G" not in "".join(app.bridge.written)  # frames don't send it again
+    assert "i=1," not in "".join(app.bridge.written)  # frames don't send it again
 
 
 def test_tui_ask_takes_over_the_input_until_answered(app):
@@ -340,7 +341,9 @@ def test_the_agent_highlights_text_with_a_note_under_it(app):
     lines, _ = app.lines()
     row = next(i for i, line in enumerate(lines) if "The amide is" in strip(line))
     assert "\x1b[48;2;94;78;28m" in lines[row]  # yellow behind it
-    assert strip(lines[row + 1])[:10] == "╭─┴─ – × ╮" and "│ here   │" in strip(lines[row + 2])  # its tail points up at it
+    top = next(i for i, line in enumerate(lines) if "│ here   │" in strip(line)) - 1  # where it covers no text
+    anchor = strip(lines[row]).index("amide") - 4
+    assert top > row and strip(lines[top])[anchor] == "┴" and all(strip(lines[r])[anchor] == "│" for r in range(row + 1, top))
     app.event({"type": "tool_use", "id": "t2", "name": "tui.mark", "input": {"text": "nowhere to be found"}})
     assert app.bridge.results[-1][1] == {"error": "\"nowhere to be found\" isn't in the transcript."}
     app.event({"type": "tool_use", "id": "t3", "name": "tui.mark", "input": {"text": "", "clear": True}})
@@ -434,21 +437,61 @@ def test_bubbles_fold_hide_and_move_out_of_the_way(app):
     app.event({"type": "tool_use", "id": "t1", "name": "tui.mark", "input": {"text": "amide", "note": "here"}})
     lines, _ = app.lines()
     row = next(i for i, line in enumerate(lines) if "The amide is" in strip(line))
-    border = strip(lines[row + 1])
+    top = next(i for i, line in enumerate(lines) if "│ here" in strip(line)) - 1
+    border = strip(lines[top])
     left = border.index("╭")
-    click(app, (row + 1, border.index("–")))  # folded: a mark after the text, which opens it again
+    click(app, (top, border.index("–")))  # folded: a mark after the text, which opens it again
     lines, _ = app.lines()
-    assert "here" not in strip(lines[row + 2]) and "◆" in strip(lines[row])
+    assert not any("│ here" in strip(line) for line in lines) and "◆" in strip(lines[row])
     click(app, (row, strip(lines[row]).index("◆")))
-    assert "│ here" in strip(app.lines()[0][row + 2])
-    app.key(f"\x1b[<0;{left + 3};{row + 3}M")  # dragged by its body, three rows down and ten across
-    app.key(f"\x1b[<32;{left + 13};{row + 6}M")
-    app.key(f"\x1b[<0;{left + 13};{row + 6}m")
+    assert "│ here" in strip(app.lines()[0][top + 1])
+    app.key(f"\x1b[<0;{left + 3};{top + 2}M")  # dragged by its body, three rows down and ten across
+    app.key(f"\x1b[<32;{left + 13};{top + 5}M")
+    app.key(f"\x1b[<0;{left + 13};{top + 5}m")
     lines = [strip(line) for line in app.lines()[0]]
-    assert "│ here" in lines[row + 5] and lines[row + 5].index("│ here") == left + 10
-    click(app, (row + 4, lines[row + 4].index("×")))  # hidden, until /notes
+    assert lines[top + 4].index(" here") == left + 11  # its side, where the line from the text may join it
+    assert "┤" in lines[top + 4] or "┴" in lines[top + 3]  # the line from the text follows it, into a side or its top
+    click(app, (top + 3, lines[top + 3].index("×")))  # hidden, until /notes
     assert not any("here" in line for line in (strip(x) for x in app.lines()[0]))
     app.key("/notes\r")
-    assert any("│ here" in strip(line) for line in app.lines()[0])
+    assert any(re.search("[│┤├] here", strip(line)) for line in app.lines()[0])
     app.key("/notes hide\r")
-    assert not any("│ here" in strip(line) for line in app.lines()[0])
+    assert not any(re.search("[│┤├] here", strip(line)) for line in app.lines()[0])
+
+
+def test_a_bubble_goes_where_there_is_no_text_and_any_text_under_it_shows_faintly(app):
+    for n in range(6):
+        app.event({"type": "text", "delta": f"line {n} " + "word " * (14 if n % 2 else 3)})
+        app.event({"type": "text_end"})
+    app.event({"type": "tool_use", "id": "t1", "name": "tui.mark", "input": {"text": "line 2", "note": "a note"}})
+    lines = [strip(line) for line in app.lines()[0]]
+    row = next(i for i, line in enumerate(lines) if "line 2" in line)
+    top = next(i for i, line in enumerate(lines) if " a note" in line and "╭" not in line) - 1
+    left = lines[top].index("╭")
+    covered = [app._plain(app._start + r)[left:left + 14] for r in range(top, top + 3)]
+    assert not any(c.strip() for c in covered)  # the blank line between the replies, or beside them: no words covered
+    assert (top, left) != (row + 1, 0)
+    from molterm_tui.app import FAINT, _cover, _route
+    under = "abcdefghij"
+    covered = _cover(under, 2, "\x1b[48;2;44;39;30m│ x    │\x1b[0m", [1, 3, 4, 5, 6])
+    assert strip(covered) == "ab│dxfghi│" and FAINT in covered  # the blank cells show what is under them, faintly
+    route = _route((5, 10), "left", 2, 20, 3, 8)  # a bubble up and to the right: along, up, along, into its left side
+    assert [c for _, _, c, _ in route] == ["─"] * 8 + ["╯", "│", "╭", "─", "┤"] and route[-1][:2] == (3, 20)
+    route = _route((5, 10), "left", 9, 2, 3, 12)  # below and across: down, along, into its top
+    assert route[0][2] == "╮" and route[-1][2] == "┴" and route[-1][0] == 9
+    assert _route((5, 10), "left", 4, 8, 3, 6) == []  # it covers the start
+    route = _route((5, 10), "left", 0, 0, 3, 6)  # up and to the left of a picture's edge: up beside the picture, then along
+    assert [(r, c) for r, c, _, _ in route[:4]] == [(5, 10), (4, 10), (3, 10), (2, 10)] and route[-1][2] == "├"
+
+
+def test_the_cursor_is_an_outline_over_the_cell_while_the_terminal_has_the_keyboard(app):
+    from molterm_tui import kitty
+    assert "a=t,f=100,i=7900" in app.bridge.written[0]
+    app.key("hi")
+    _, (row, col) = app.lines()
+    assert app.bridge.written[-1].endswith(kitty.place_cursor(row, col)) and "\x1b[?25h" not in app.bridge.written[-1]
+    app.focus(False)
+    assert app.bridge.written[-1].endswith(kitty.hide_cursor())
+    import base64
+    png = base64.b64decode(kitty.outline())
+    assert png.startswith(b"\x89PNG") and int.from_bytes(png[16:20], "big") == 20

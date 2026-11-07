@@ -55,3 +55,46 @@ def lines(image_id, cols, rows):
     cols, rows = min(cols, MAX_CELLS), min(rows, MAX_CELLS)
     return [colour(image_id) + "".join(PLACEHOLDER + DIACRITICS[row] + DIACRITICS[col] for col in range(cols)) + "\x1b[39m"
             for row in range(rows)]
+
+
+CURSOR = 7900  # the input's cursor, an outline drawn over the cell: a picture of its own, placed directly
+_OUTLINE = None
+
+
+def _png(width, height, rgba_rows):
+    """A PNG from rows of RGBA bytes, with only the standard library (Pyodide has no imaging library)."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    raw = b"".join(b"\x00" + row for row in rgba_rows)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def outline(rgb=(240, 239, 236), width=20, height=40, line=2):
+    """A cell's outline, transparent inside, as base64 PNG: the cursor that leaves the character under it to be read."""
+    import base64
+    global _OUTLINE
+    if _OUTLINE is None:
+        ink, clear = bytes((*rgb, 255)), bytes(4)
+        edge = ink * width
+        side = ink * line + clear * (width - 2 * line) + ink * line
+        rows = [edge if y < line or y >= height - line else side for y in range(height)]
+        _OUTLINE = base64.b64encode(_png(width, height, rows)).decode("ascii")
+    return _OUTLINE
+
+
+def send_cursor():
+    """The cursor's picture, sent once (again after the screen is cleared)."""
+    return f"\x1b_Ga=t,f=100,i={CURSOR},q=2;{outline()}\x1b\\"
+
+
+def place_cursor(row, col):
+    """The cursor's outline over the cell at (row, col), from 0, above the text; it moves there if it was elsewhere."""
+    return f"\x1b[{row + 1};{col + 1}H\x1b_Ga=p,i={CURSOR},p=1,c=1,r=1,C=1,z=1,q=2\x1b\\"
+
+
+def hide_cursor():
+    return f"\x1b_Ga=d,d=i,i={CURSOR},p=1,q=2\x1b\\"
