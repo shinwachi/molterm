@@ -6,11 +6,34 @@ TUI renderer for chemical structures using RDKit and advanced text graphics
 
 ![A text interface of structures, drawn as Kitty graphics](docs/images/molterm-tui.png)
 
+| | |
+|---|---|
+| ![Imatinib as a Kitty picture beside the same drawing in Braille](docs/images/molterm-braille.png) | ![Caffeine as a Kitty picture beside plain ASCII](docs/images/molterm-ascii.png) |
+| Kitty graphics and coloured Braille | Kitty graphics and plain ASCII, for anywhere text goes |
+
+![molterm in a shell: each command's picture prints below it and scrolls with the text](docs/images/molterm-shell.png)
+
+| | |
+|---|---|
+| ![VisiData with a column of structures beside their SMILES](docs/images/visidata.png) | ![VisiData with a molecule open in 3D, drawn by Mol* on molterm-3d](docs/images/visidata-3d.png) |
+| The VisiData plugin: structures in a spreadsheet | ...and a molecule in 3D, turned with the mouse |
+
+![molterm-3d: haemoglobin drawn by Mol* in each of its four lightings](docs/images/molterm-3d-lightings.png)
+
+![molterm in the browser: RDKit as WebAssembly, no server](docs/images/web.png)
+
 ![The agent's terminal interface: asked for a drug, it offers a choice, draws imatinib and shows its properties](docs/images/molterm-agent.gif)
 
-The picture comes from the dev services' own demos (`make screenshots`, in headless Chromium), and the GIF from the dev agent (`make agent-gif`); each
-part's own pictures are with it: the text modes and the shell below, and the others in [agent/README.md](agent/README.md),
-[visidata-molterm/README.md](visidata-molterm/README.md), [molterm-3d/README.md](molterm-3d/README.md) and [web/README.md](web/README.md).
+![The agent's marks: part of imatinib highlighted, a note in a speech bubble at the end of a leader, the agent's words highlighted, and the user's highlight waiting above the input](docs/images/molterm-agent-bubbles.png)
+
+![Imatinib edited where it is shown: the drawing in the picture's place, a floating strip of tools, and notes in bubbles beside it](docs/images/molterm-agent-inline.png)
+
+![Editing in place: a note added to the carbonyl oxygen appears in a bubble at once, the drawing is made larger, and Done sends the edit to the agent](docs/images/molterm-agent-annotate.gif)
+
+![Pointing things out: a bubble dragged aside, text dragged across and clicked into a message, and the agent marking it as seen](docs/images/molterm-agent-point.gif)
+
+The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium, and `make agent-gif` records the
+agent's GIFs and shots.
 
 Created 2026-10-31 from a Flask project template.
 
@@ -120,11 +143,6 @@ only offers Braille, since browsers usually have no octant font.
 Colour shows elements on bonds as well as labels: O red, N blue, S yellow, P magenta, halogens green. It uses the terminal's
 16 colours, so it follows a light or dark theme.
 
-| | |
-|---|---|
-| ![Imatinib as a Kitty picture beside the same drawing in Braille](docs/images/molterm-braille.png) | ![Caffeine as a Kitty picture beside plain ASCII](docs/images/molterm-ascii.png) |
-| Kitty graphics and coloured Braille | Kitty graphics and plain ASCII, for anywhere text goes |
-
 ### Images in the terminal
 
 Terminals with a graphics protocol can show RDKit's real drawing, so double bonds and stereo wedges appear properly, at about
@@ -145,8 +163,6 @@ curl -so molterm http://molterm-dev.localhost/molterm && chmod +x molterm
 
 Either session draws with the best mode the terminal supports. What you type is sent to the server, which runs only the commands
 in `help`; the client never runs it. The prompt has the terminal's plain line editing, so no Tab completion or history.
-
-![molterm in a shell: each command's picture prints below it and scrolls with the text](docs/images/molterm-shell.png)
 
 It chooses the first of these that the terminal supports. `-m` or `$MOLTERM_MODE` overrides the choice.
 
