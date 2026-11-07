@@ -1422,3 +1422,20 @@ def test_endpoint_needs_the_size(client):
 
 def test_get_is_not_allowed(client):
     assert client.get("/api/v1/edit").status_code == 405
+
+
+def test_a_compact_editor_has_a_strip_of_tools_over_the_drawing_and_no_menu_bar():
+    box = (5, 0, 20, 100)  # row, col, rows, cols, counting the border
+    ui = editor.Layout(120, 40, CW, CH, box=box, title="Edit", compact=True)
+    assert (ui.top, ui.left, ui.palette_top, ui.palette_rows) == (2, 0, 0, 2) and ui.canvas_cols == 98
+    assert [editor.PALETTE[i][0] for i in ui.tools] == list(editor.COMPACT_TOOLS)
+    benzene = editor.COMPACT_TOOLS.index("benzene")
+    assert ui.palette_at(benzene * ui.button_cols + 1, 1) == editor._ICON_NAMES.index("benzene")
+    assert ui.title_at(2, 0) is None and editor.fits(ui)
+    status, text, output = editor.step("", "CCO", "", 120, 40, CW, CH, box=box, title="Edit", compact=True)
+    assert status == editor.CONTINUE and "File" not in output and "Done Ctrl-Q" in output
+    # the strip's benzene, then a click in the drawing, then Done
+    x, y = benzene * ui.button_cols + 2, 1 + 6 + 1  # 1-based cells: the box's border is row 5, the strip starts on row 6
+    status, text, _ = editor.step(text, "", f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m\x1b[<0;20;20M\x1b[<0;20;20m", 120, 40, CW, CH, box=box, compact=True)
+    status, _, smiles = editor.step(text, "", "\x11", 120, 40, CW, CH, box=box, compact=True)
+    assert status == editor.QUIT and "c1ccccc1" in smiles and "CCO" in smiles.replace("OCC", "CCO")

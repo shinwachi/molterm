@@ -19,6 +19,9 @@ SAMPLES = {
 }
 _SMILES = re.compile(r"^[A-Za-z0-9@+\-\[\]()=#$%/\\.:*]+$")
 _ELEMENTS = re.compile(r"Cl|Br|[BCNOSPFI]|[cnosp]")
+# a molecule the user edited where it was shown, as the TUI puts it in their message (molterm_tui.app.context)
+_EDITED = re.compile(r"⟦mol (\d+) (.*?), edited: ([^⟧]+)⟧")
+_NOTES = re.compile(r"atomNote\.([^:|.,]+)")
 # the page's terminal colours, for molterm to fit its picture to, and the pixels a picture gets per column (a cell is twice as tall)
 TERMINAL = {"background": "161615", "foreground": "f0efec"}
 CELL_PIXELS = 16
@@ -38,7 +41,7 @@ def looks_like_smiles(text):
 
 
 class Molterm:
-    """The molterm server, as the agent's server-side tools."""
+    """The molterm server, as the agent's server-side tools, and its editor, for the page to edit a molecule in place."""
 
     def __init__(self, url, timeout=20):
         self.url, self.timeout = url.rstrip("/"), timeout
@@ -53,6 +56,14 @@ class Molterm:
         height = int.from_bytes(png[20:24], "big")  # the PNG's IHDR: width, then height
         return {"png": base64.b64encode(png).decode("ascii"), "cols": int(response.headers.get("X-Molterm-Cols", cols)),
                 "rows": max(math.ceil(height / (2 * CELL_PIXELS)), 1)}
+
+    EDIT_FIELDS = ("state", "smiles", "events", "cols", "rows", "box", "title", "cell_width", "cell_height", "close")
+
+    def edit(self, fields):
+        """One step of molterm's editor, compact, in a box (see molterm's /api/v1/edit), with this page's colours: (status, text)."""
+        form = {name: str(fields[name]) for name in self.EDIT_FIELDS if fields.get(name) is not None}
+        response = requests.post(f"{self.url}/api/v1/edit", data={**form, **TERMINAL, "compact": "1"}, timeout=self.timeout)
+        return response.status_code, response.text
 
     def render(self, smiles, cols):
         """The drawing as coloured Braille text."""
@@ -100,7 +111,10 @@ class EmulatedAgent(TuiAgent):
 
     def respond(self, text, cols):
         words = text.lower()
-        if looks_like_smiles(text):
+        edited = _EDITED.search(text)
+        if edited:
+            self.review(edited.group(2), edited.group(3).strip(), cols)
+        elif looks_like_smiles(text):
             self.draw(text, None, cols)
         elif any(w in words for w in ("drug", "molecule", "show", "draw", "example", "pick")):
             self.offer(cols)
@@ -130,13 +144,30 @@ class EmulatedAgent(TuiAgent):
         if picture is None:
             self.say("molterm couldn't draw it. If that was a SMILES, check it for typos; otherwise the molterm server may be down.")
             return
-        self.use_tui("tui.show", {"title": name or smiles, "image": picture}, "Showing")
-        self.say("There it is, drawn by RDKit and shown with the Kitty graphics protocol: oxygen red, nitrogen blue.")
+        # with its SMILES, the TUI knows the picture is this molecule, and lets the user edit and annotate it there
+        self.use_tui("tui.show", {"title": name or smiles, "image": picture, "smiles": smiles}, "Showing")
+        self.say("There it is, drawn by RDKit and shown with the Kitty graphics protocol: oxygen red, nitrogen blue. Click it to "
+                 "edit or annotate it, and I'll look at your version.")
         answer = self.use_tui("tui.ask", {"question": f"Do you want the properties of {name or 'this molecule'} too?",
                                           "options": ["Yes", "No"]}, "Waiting for you")
         if answer.get("index") != 0:
             self.say("Fine. Type another SMILES, or ask me for a drug.")
             return
+        self.properties(smiles, name)
+
+    def review(self, name, smiles, cols):
+        """The user edited a molecule shown earlier: say what they marked, and compute their version's properties."""
+        notes = _NOTES.findall(smiles)
+        marked = "molterm_highlight" in smiles
+        said = f"You edited {name}."
+        if notes:
+            said += " Your notes: " + ", ".join(f"\"{note}\"" for note in notes) + "."
+        if marked:
+            said += " I see the atoms you highlighted."
+        self.say(said + " Here's what your version comes to.")
+        self.properties(smiles, f"{name}, edited")
+
+    def properties(self, smiles, name):
         values = self.use_server_tool("molterm.properties", {"smiles": smiles}, lambda: self.molterm.properties(smiles), "Computing")
         if values is None:
             self.say("molterm couldn't compute them, sorry.")

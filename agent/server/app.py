@@ -6,6 +6,8 @@
   POST /api/v1/sessions/<id>/tool_results     {"id", "result"}: the TUI's answer to one of its tools
   POST /api/v1/sessions/<id>/interrupt        stop the agent's turn
   GET  /api/v1/sessions/<id>                  whether the session is open, and where its agent runs
+  POST /api/v1/sessions/<id>/edit             one step of molterm's editor, for a molecule edited where it's shown (see the TUI)
+  POST /api/v1/sessions/<id>/picture          {"smiles", "cols"}: a molecule's picture, after an edit  -> {"png", "cols", "rows"}
 
 For an agent that runs elsewhere (sdk/tuiagent/remote.py; see TUTORIAL.md), with the session's token as "Authorization: Bearer":
   POST /api/v1/agents/sessions                       a session with no agent of the server's   -> {"id", "token", "url"}
@@ -23,6 +25,7 @@ import os
 import time
 from pathlib import Path
 
+import requests
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 
 from agent import TOOLS, EmulatedAgent, Molterm
@@ -167,6 +170,36 @@ def tool_result(session_id):
 def interrupt(session_id):
     sessions.get(session_id).interrupt()
     return jsonify(ok=True)
+
+
+# -- molecules edited in place: molterm's editor and pictures, for the page, which can't reach molterm itself -------------------------
+
+MAX_EDIT = 2_000_000  # a drawing's state travels with each step
+
+
+@app.route("/api/v1/sessions/<session_id>/edit", methods=["POST"])
+def edit(session_id):
+    sessions.get(session_id)
+    if (request.content_length or 0) > MAX_EDIT:
+        raise SessionError("too_large", "That edit is too large.")
+    try:
+        status, text = molterm.edit(body())
+    except requests.RequestException as error:
+        raise SessionError("unavailable", f"molterm can't be reached: {error.__class__.__name__}", 502)
+    return Response(text, status=200 if status == 200 else 502 if status >= 500 else 400, mimetype="text/plain")
+
+
+@app.route("/api/v1/sessions/<session_id>/picture", methods=["POST"])
+def picture(session_id):
+    sessions.get(session_id)
+    data = body()
+    smiles, cols = data.get("smiles"), data.get("cols", 72)
+    if not isinstance(smiles, str) or not smiles or len(smiles) > MAX_TEXT or not isinstance(cols, int):
+        raise SessionError("bad_request", "Send the molecule as \"smiles\", and \"cols\".")
+    try:
+        return jsonify(molterm.picture(smiles, cols))
+    except (requests.RequestException, ValueError) as error:
+        raise SessionError("unavailable", f"molterm couldn't draw it: {error}", 502)
 
 
 # -- for an agent that runs elsewhere ------------------------------------------------------------------------------------------------

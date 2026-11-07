@@ -27,7 +27,7 @@ cols)` handles each message the user sends, and `cols` is the transcript's width
 | call | what the user sees | returns |
 |---|---|---|
 | `self.say(text)` | text streamed into the transcript, a word at a time | |
-| `self.show(title, body=..., image=...)` | a panel: text (ANSI colours allowed) and/or a picture | `{"shown": true, "lines"}` |
+| `self.show(title, body=..., image=..., smiles=...)` | a panel: text (ANSI colours allowed) and/or a picture; with `smiles`, a molecule the user can edit | `{"shown": true, "lines"}` |
 | `self.ask(question, options)` | the input box turns into a choice; ↑↓/enter or a number picks, Esc skips | `{"choice", "index"}` or `{"choice": None, "skipped": True}` |
 | `self.use_server_tool(name, input, run, label, summary=)` | a tool line, a spinner while `run()` works, then `summary(output)` under it | `run()`'s output, or `None` if it raised |
 
@@ -54,6 +54,11 @@ class HelloAgent(TuiAgent):
 A picture is a PNG plus the cells it covers, given as `(png_bytes, cols, rows)` or `{"png": base64, "cols", "rows"}`. A cell is about
 twice as tall as it is wide. The TUI shows the picture with the Kitty graphics protocol, and the picture scrolls with the transcript.
 `png_bytes` above is your own code; the full example builds a gradient with `zlib`.
+
+Give the picture of a molecule its `smiles` and the user can edit and annotate it where it is: a click on it (or `/edit N`) opens
+molterm's editor over it, and Done puts the result into their next message as `⟦mol N name, edited: <CXSMILES>⟧`, notes and highlights
+included. Your `respond` finds it in `text` (`molterm_tui.app.CONTEXT` is the pattern); the demo agent's `review` in `server/agent.py`
+shows one way to answer.
 
 When the user presses Esc, the turn ends: whatever the agent was waiting on returns, and the agent's next `say`, `show` or `ask`
 raises `Interrupted`, which `TuiAgent.turn` catches. Clean up in a `finally` if you hold something open. An error you don't catch is

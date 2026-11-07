@@ -62,7 +62,8 @@ character; its Braille differs only by single dots where the browser's antialias
 `agent/` is a fourth: a Claude Code-like terminal interface for a server-side agent, at http://molterm-agent-dev.localhost (prod:
 `molterm-agent`). The interface is Python, run in the browser by Pyodide and drawn in restty; the server is Flask, with a session and an
 agent for each visitor. The agent uses the interface as tools, `tui.show` to put a panel in the transcript and `tui.ask` to ask the user
-something and wait for the answer. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
+something and wait for the answer. A molecule it shows can be edited and annotated where it is, with a compact `molterm edit` over
+it, and the edit goes into the user's next message. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
 server or anywhere else over HTTP, and with a model behind it if you like, is in [its tutorial](agent/TUTORIAL.md).
 
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
@@ -377,6 +378,9 @@ The box stays inside that area and doesn't change screens, but the host has work
 - The box needs at least 38 columns and enough rows for four of canvas, counting its border. Otherwise the client exits with 1.
 
 A host that talks HTTP can skip the client: `POST /api/v1/edit` takes `box` and `title`, and answers `3` in its first line on Cancel.
+With `compact=1` the box has no menu bar, and a strip of the common tools runs along its top (the right button's menus have the rest),
+for a host that edits a molecule where it shows it, as the agent's TUI does; `close=1`, alone, answers with what removes the editor's
+pictures, for when the host closes the box.
 `server/board.py`, behind `/api/v1/tui`, shows one way to use the editor from Python.
 
 The client also reads the terminal's background and text colours, to fit `theme` to them and blend Sixel's edges, and its cell size, because Sixel's

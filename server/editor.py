@@ -1466,6 +1466,8 @@ PALETTE = [("select", ("tool", "select"), "Selection [Space]: drag to move, or d
            ("cyclopentadiene", ("ring", "cyclopentadiene"), "Cyclopentadiene [J]"),
            ("benzene", ("ring", "benzene"), "Benzene [j]")]
 _ICON_NAMES = tuple(entry[0] for entry in PALETTE)
+# the tools of a compact editor, one strip of them over the drawing, for a host that edits a molecule where it shows it
+COMPACT_TOOLS = ("select", "erase", "text", "single", "double", "triple", "wedge", "hash", "plus", "minus", "ring5", "ring6", "benzene")
 
 # (label, key, action), with None for a dividing line
 _COPY = [("Copy SMILES", "", ("copy", ("smiles", False))), ("Copy SVG", "", ("copy", ("svg", False))), ("Copy PNG", "", ("copy", ("png", False))),
@@ -1519,9 +1521,11 @@ CONTEXT_MENUS = {
 class Layout:
     """Where everything is. Columns and rows here count from 0 at the top left of the editor, which is the screen's unless the editor
     is in a box: then `box` is (row, col, rows, cols) on the screen, counting its border, and `title` goes in the border. A `window` box
-    also has buttons to minimize and maximize it on its top edge, and a grip to resize it at the bottom right, for a host that does so."""
+    also has buttons to minimize and maximize it on its top edge, and a grip to resize it at the bottom right, for a host that does so.
+    A `compact` editor has no menu bar and a short strip of tools above the drawing (COMPACT_TOOLS); its menus are those of the
+    right button. `tools` are the palette's indices that are shown, in order."""
 
-    def __init__(self, cols, rows, cell_width=None, cell_height=None, pixels=False, box=None, title="", window=False):
+    def __init__(self, cols, rows, cell_width=None, cell_height=None, pixels=False, box=None, title="", window=False, compact=False):
         self.box, self.title = box, title
         self.boxed = box is not None
         self.window = self.boxed and window
@@ -1531,19 +1535,26 @@ class Layout:
         self.cols, self.rows = cols, rows
         self.cell_width, self.cell_height = cell_width or DEFAULT_CELL[0], cell_height or DEFAULT_CELL[1]
         self.pixels = pixels
-        self.top = MENU_ROWS
-        self.canvas_rows = rows - MENU_ROWS - STATUS_ROWS
+        self.compact = compact
+        self.tools = [i for i, entry in enumerate(PALETTE) if entry[0] in COMPACT_TOOLS] if compact else list(range(len(PALETTE)))
         # square buttons two rows high, in as few columns as the height of the window allows
         self.button_cols = min(max(round(2 * self.cell_height / self.cell_width), 3), 6)
-        self.per_row = 2
-        while math.ceil(len(PALETTE) / self.per_row) * 2 > self.canvas_rows and self.per_row < len(PALETTE):
-            self.per_row += 1
-        self.palette_rows = math.ceil(len(PALETTE) / self.per_row) * 2
-        self.left = self.per_row * self.button_cols + 1
+        if compact:  # the strip, then the drawing below it, the full width
+            self.per_row, self.palette_rows, self.palette_top = len(self.tools), 2, 0
+            self.top, self.left = 2, 0
+            self.canvas_rows = rows - 2 - STATUS_ROWS
+        else:  # the menu bar, then the palette on the left and the drawing beside it
+            self.top = self.palette_top = MENU_ROWS
+            self.canvas_rows = rows - MENU_ROWS - STATUS_ROWS
+            self.per_row = 2
+            while math.ceil(len(self.tools) / self.per_row) * 2 > self.canvas_rows and self.per_row < len(self.tools):
+                self.per_row += 1
+            self.palette_rows = math.ceil(len(self.tools) / self.per_row) * 2
+            self.left = self.per_row * self.button_cols + 1
         self.canvas_cols = cols - self.left
         self.titles = []
         col = 1
-        for index, (title, _) in enumerate(MENUS):
+        for index, (title, _) in enumerate(() if compact else MENUS):
             self.titles.append((col, len(title) + 2, index))
             col += len(title) + 2
 
@@ -1592,10 +1603,11 @@ class Layout:
         return next((index for start, width, index in self.titles if start <= col < start + width), None)
 
     def palette_at(self, col, row):
-        if not (self.top <= row < self.top + self.palette_rows and 0 <= col < self.per_row * self.button_cols):
+        """The palette's index of the button at a place, or None."""
+        if not (self.palette_top <= row < self.palette_top + self.palette_rows and 0 <= col < self.per_row * self.button_cols):
             return None
-        index = (int(row) - self.top) // 2 * self.per_row + int(col) // self.button_cols
-        return index if index < len(PALETTE) else None
+        index = (int(row) - self.palette_top) // 2 * self.per_row + int(col) // self.button_cols
+        return self.tools[index] if index < len(self.tools) else None
 
     def to_model(self, s, col, row):
         """Canvas position in cells, as floats, to the molecule's coordinates. y runs upwards there."""
@@ -1997,11 +2009,11 @@ def _grids(s, ui, only=None):
     """Through tmux, the cells that show the palette and the drawing, or `only` those layers: printed before the menus, which then
     cover them."""
     out = []
-    for layer, cols, rows, left in (("palette", ui.per_row * ui.button_cols, ui.palette_rows, 0),
-                                    ("structure", ui.canvas_cols, ui.canvas_rows, ui.left)):
+    for layer, cols, rows, top, left in (("palette", ui.per_row * ui.button_cols, ui.palette_rows, ui.palette_top, 0),
+                                         ("structure", ui.canvas_cols, ui.canvas_rows, ui.top, ui.left)):
         if layer in s["flips"] and (only is None or layer in only):
             image = _IDS[layer] + s["flips"][layer]
-            out.append(placeholders.cells(image, cols, rows, lambda r, c, left=left: ui.at(ui.top + r, left + c)))
+            out.append(placeholders.cells(image, cols, rows, lambda r, c, top=top, left=left: ui.at(top + r, left + c)))
     return "".join(out)
 
 
@@ -2050,7 +2062,7 @@ def frame(s, ui, theme):
     """What to print for the current state: only the layers that changed, or nothing if the screen already shows it."""
     smiles, problem, wrong = analyse(s)
     colours = themes.chrome(theme)
-    screen = [ui.cols, ui.rows, ui.cell_width, ui.cell_height, theme, ui.box, ui.window]
+    screen = [ui.cols, ui.rows, ui.cell_width, ui.cell_height, theme, ui.box, ui.window, ui.compact]
 
     def digest(*parts):
         return hashlib.sha256(json.dumps([screen, *parts]).encode()).hexdigest()[:16]
@@ -2090,8 +2102,11 @@ def frame(s, ui, theme):
     if not tmux and ui.boxed and s["shown"].get("backing") != keys["backing"]:
         out.append(_place("backing", s, ui, _backing(theme), ui.cols + 2, ui.rows + 2, -1, -1))
     if s["shown"].get("palette") != keys["palette"]:
-        png = editor_icons.palette_image(_ICON_NAMES, ui.per_row, ui.button_cols * ui.cell_width, 2 * ui.cell_height, active, s["tip"], theme)
-        out.append(_place("palette", s, ui, png, ui.per_row * ui.button_cols, ui.palette_rows, ui.top, 0))
+        shown = tuple(_ICON_NAMES[i] for i in ui.tools)
+        png = editor_icons.palette_image(shown, ui.per_row, ui.button_cols * ui.cell_width, 2 * ui.cell_height,
+                                         ui.tools.index(active) if active in ui.tools else None,
+                                         ui.tools.index(s["tip"]) if s["tip"] in ui.tools else None, theme)
+        out.append(_place("palette", s, ui, png, ui.per_row * ui.button_cols, ui.palette_rows, ui.palette_top, 0))
     if s["shown"].get("structure") != keys["structure"]:
         drawn = draw_structure(s, ui, theme)
         if tmux and marks:
@@ -3342,7 +3357,7 @@ def _key(s, ui, name):
             s["focus"], s["press"], s["drag"], s["selected"] = None, None, None, []
         else:
             s["tool"] = "select"
-    elif name == "f10":
+    elif name == "f10" and not ui.compact:
         s["menu"], s["menu_hover"], s["menu_target"] = ["bar", 0], 0, None
     elif name == "redraw":
         s["shown"], s["size"] = {}, None
@@ -3568,8 +3583,10 @@ def finish(s, ended):
     return None
 
 
-def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None, pixels=False, theme=graphics.DEFAULT_THEME, box=None, title=""):
-    """Run one request: return (status, new state as text, what to print). With a `box`, see Layout, the editor stays inside it."""
+def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None, pixels=False, theme=graphics.DEFAULT_THEME, box=None, title="",
+         compact=False):
+    """Run one request: return (status, new state as text, what to print). With a `box`, see Layout, the editor stays inside it, and a
+    `compact` one has a strip of tools and no menu bar."""
     if box and (box[0] + box[2] > rows or box[1] + box[3] > cols):
         return FAILED, "", "The box doesn't fit in the window."
     if state_text:
@@ -3579,7 +3596,7 @@ def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None,
         s = new_state()
         first = True
     pixels = pixels and bool(cell_width) and bool(cell_height)
-    ui = Layout(cols, rows, cell_width, cell_height, pixels, box, title)
+    ui = Layout(cols, rows, cell_width, cell_height, pixels, box, title, compact=compact)
     if box and not fits(ui):
         return FAILED, "", "The box is too small for the editor."
     if ui.canvas_rows < 4 or ui.canvas_cols < 20:
@@ -3599,4 +3616,4 @@ def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None,
 
 def fits(ui):
     """Is a box big enough to use?"""
-    return ui.canvas_rows >= 4 and ui.canvas_cols >= 20 and ui.cols >= MIN_BOX_COLS
+    return ui.canvas_rows >= 4 and ui.canvas_cols >= 20 and ui.cols >= max(MIN_BOX_COLS, ui.per_row * ui.button_cols if ui.compact else 0)

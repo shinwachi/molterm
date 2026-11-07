@@ -65,6 +65,19 @@ function refit() {
     })().catch(error => console.error(error)).finally(() => { fitting = null; });
 }
 
+// The TUI is the terminal's program, reached through a PTY that is this page: what the TUI writes comes out of it, so the terminal
+// reads its modes (mouse reporting, bracketed paste) as from any program, and what the terminal sends (keys, pastes, mouse reports,
+// replies) goes into the TUI.
+const pty = {
+    callbacks: null,
+    connect({ callbacks }) { this.callbacks = callbacks; callbacks.onConnect?.(); },
+    disconnect() { const callbacks = this.callbacks; this.callbacks = null; callbacks?.onDisconnect?.(); },
+    isConnected() { return this.callbacks !== null; },
+    sendInput(data) { app?.key(data); return true; },
+    resize() {},
+    write(text) { this.callbacks?.onData(text); },
+};
+
 async function startTerminal() {
     terminal = new Restty({
         root: box,
@@ -76,16 +89,7 @@ async function startTerminal() {
             fonts: [{ url: "/vendor/DejaVuSansMono.ttf", name: "DejaVu Sans Mono" },
                     { url: "/vendor/DejaVuSansMono-Bold.ttf", name: "DejaVu Sans Mono Bold", weight: 700 }],
         },
-        // keys and pastes go to the TUI rather than straight to the screen; what the TUI writes ("pty") is shown
-        services: () => ({
-            beforeInput: ({ text, source }) => {
-                if (source === "pty") return text;
-                if (app && (source === "key" || source === "paste")) {
-                    app.key(source === "paste" ? `\x1b[200~${text}\x1b[201~` : text);
-                }
-                return null;
-            },
-        }),
+        services: () => ({ ptyTransport: pty }),
     });
     pane = terminal.getActivePane();
     const { runtime } = pane;
@@ -93,6 +97,7 @@ async function startTerminal() {
     if (runtime.lifecycle.state() !== "ready") throw new Error("this browser could not start the terminal (it needs WebGL2 or WebGPU)");
     await document.fonts?.ready;
     await resize(100, 40);
+    terminal.connectPty("");
     return fit();
 }
 
@@ -110,13 +115,29 @@ async function startPython() {
 
 // what the Python TUI calls to reach the terminal and the server
 const bridge = {
-    write: text => terminal.sendInput(text, "pty"),
+    write: text => pty.write(text),
     post_message: (text, cols) => api(`/api/v1/sessions/${session}/messages`, { text, cols })
         .catch(error => app?.event(JSON.stringify({ type: "error", message: error.message }))),
     post_tool_result: (id, json) => api(`/api/v1/sessions/${session}/tool_results`, { id, result: JSON.parse(json) })
         .catch(error => app?.event(JSON.stringify({ type: "error", message: error.message }))),
     interrupt: () => api(`/api/v1/sessions/${session}/interrupt`).catch(() => {}),
+    // molterm's editor, for a molecule edited where it's shown: the TUI sends the fields, and gets the editor's answer as text
+    edit: json => post(`/api/v1/sessions/${session}/edit`,
+                       { ...JSON.parse(json), cell_width: Math.round(cell.width), cell_height: Math.round(cell.height) })
+        .then(text => app.edit_answer(text), error => app.edit_failed(error.message)),
+    picture: (smiles, cols, number) => post(`/api/v1/sessions/${session}/picture`, { smiles, cols })
+        .then(text => app.picture_answer(number, text), error => app.event(JSON.stringify({ type: "error", message: error.message }))),
 };
+
+// a POST whose answer is wanted as text, with the server's error message if it failed
+async function post(path, data) {
+    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    const text = await response.text();
+    if (response.ok) return text;
+    let message = text.trim();
+    try { message = JSON.parse(text).error?.message || message; } catch {}
+    throw new Error(message || `the server answered ${response.status}`);
+}
 
 function listen() {
     const source = new EventSource(`/api/v1/sessions/${session}/events`);

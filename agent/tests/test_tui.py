@@ -11,6 +11,7 @@ from molterm_tui.screen import strip, width, wrap
 class Bridge:
     def __init__(self):
         self.written, self.messages, self.results, self.interrupts = [], [], [], 0
+        self.edits, self.pictures = [], []
 
     def write(self, text):
         self.written.append(text)
@@ -23,6 +24,12 @@ class Bridge:
 
     def interrupt(self):
         self.interrupts += 1
+
+    def edit(self, fields):
+        self.edits.append(json.loads(fields))
+
+    def picture(self, smiles, cols, number):
+        self.pictures.append((smiles, number))
 
 
 @pytest.fixture
@@ -38,6 +45,7 @@ def screen(app):
 
 
 def test_keys_are_parsed_as_terminals_send_them():
+    assert keys.parse("\x1b[<0;12;5M")[0].mouse == (0, 11, 4, True) and keys.parse("\x1b[<65;1;1m")[0].mouse == (65, 0, 0, False)
     assert [k.name for k in keys.parse("\x1b[A\x1b[B\r\x7f\x1b")] == ["up", "down", "enter", "backspace", "escape"]
     assert keys.parse("hi there") == [keys.Key("text", "hi there")]
     assert keys.parse("\x1b[200~a\r\nb\x1b[201~") == [keys.Key("paste", "a\nb")]
@@ -191,3 +199,75 @@ def test_the_cursor_follows_the_typing(app):
     lines, (row, col) = app.lines()
     assert strip(lines[row]).startswith("│ > abc")
     assert col == 4 + 3
+
+
+def show_molecule(app, smiles="CCO", title="Ethanol", tool_id="m1"):
+    image = {"png": "A" * 10, "cols": 20, "rows": 6}
+    app.event({"type": "tool_use", "id": tool_id, "name": "tui.show", "input": {"title": title, "image": image, "smiles": smiles}})
+
+
+def test_a_molecule_shown_is_kept_and_its_place_known(app):
+    show_molecule(app)
+    assert [(m.number, m.name, m.smiles) for m in app.molecules] == [(1, "Ethanol", "CCO")]
+    assert "Ethanol  mol 1" in screen(app) and "/edit 1" in screen(app)
+    lines, _ = app.lines()
+    top, left, rows, cols = app.placed[1]
+    from molterm_tui import kitty
+    assert kitty.PLACEHOLDER in lines[top] and kitty.PLACEHOLDER not in lines[top - 1] and (left, rows, cols) == (5, 6, 20)
+    assert app.bridge.results == [("m1", {"shown": True, "lines": 7})]
+
+
+def test_clicking_a_molecule_edits_it_in_a_box_over_its_picture(app):
+    show_molecule(app)
+    app.key("draft")
+    top = app.placed[1][0]
+    app.bridge.written.clear()
+    app.key(f"\x1b[<0;10;{top + 2}M")  # a click on its second row
+    assert app.editing and app.bridge.edits[0]["smiles"] == "CCO" and app.bridge.edits[0]["events"] == ""
+    box = tuple(int(n) for n in app.bridge.edits[0]["box"].split(","))
+    assert box[1:] == (0, 22, 79) and app.bridge.edits[0]["title"] == "mol 1 · Ethanol"
+    assert box[0] <= top - 3 and top + 6 <= box[0] + 22 <= app._room  # over the picture, above the input
+    assert "\x1b[?1003h" in "".join(app.bridge.written)  # every movement now, for the editor
+    drawn = "".join(app.bridge.written)
+    assert f"\x1b[{top + 1};1H" not in drawn and "\x1b[1;1H" in drawn  # the app leaves the box to the editor
+    app.key("x")  # waits for the editor's first answer
+    assert len(app.bridge.edits) == 1
+    app.edit_answer("0 S1\n\x1b[5;1Hthe editor")
+    assert app.bridge.written[-1] == "\x1b[5;1Hthe editor" and app.bridge.edits[1] == {**app.bridge.edits[1], "state": "S1", "events": "78"}
+    app.edit_answer("0 S2\n")
+    app.key("\x11")  # Ctrl-Q
+    app.edit_answer("1 \nCCO |atomProp:2.atomNote.OH|")
+    assert app.bridge.edits[-1] == {"close": "1"}  # first the editor's pictures go
+    app.edit_answer("3 \n\x1b_Ga=d\x1b\\")
+    assert app.editing is None and "\x1b[?1003l" in "".join(app.bridge.written)
+    assert app.input == "draft⟦mol 1 Ethanol, edited: CCO |atomProp:2.atomNote.OH|⟧ "
+    assert app.bridge.pictures == [("CCO |atomProp:2.atomNote.OH|", 1)]
+    app.picture_answer(1, json.dumps({"png": "B" * 10, "cols": 22, "rows": 7}))
+    assert app.molecules[0].image == 2 and "mol 1 · edited" in screen(app)
+    from molterm_tui.app import CONTEXT
+    assert CONTEXT.search(app.input).groups() == ("1", "Ethanol", "CCO |atomProp:2.atomNote.OH|")
+
+
+def test_cancelling_an_edit_leaves_the_input_alone_and_edit_finds_the_last_molecule(app):
+    show_molecule(app)
+    show_molecule(app, "c1ccccc1", "Benzene", "m2")
+    app.key("/edit\r")
+    assert app.editing["molecule"].number == 2
+    app.edit_answer("3 \n")
+    app.edit_answer("3 \n")
+    assert app.editing is None and app.input == "" and app.bridge.pictures == []
+    app.key("/edit 7\r")
+    assert "There is no molecule 7." in screen(app)
+
+
+def test_an_edit_that_fails_says_why_and_the_wheel_scrolls(app):
+    show_molecule(app)
+    app.key("/edit 1\r")
+    app.edit_failed("molterm can't be reached")
+    app.edit_answer("3 \n")
+    assert app.editing is None and "The editor stopped: molterm can't be reached" in screen(app)
+    for n in range(40):
+        app.event({"type": "text", "delta": f"line {n} "})
+        app.event({"type": "text_end"})
+    app.key("\x1b[<64;5;5M")
+    assert app.scroll == 3

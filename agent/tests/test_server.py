@@ -163,3 +163,54 @@ def test_smiles_detection():
     assert agent_module.looks_like_smiles("CC(=O)Oc1ccccc1C(=O)O")
     assert not agent_module.looks_like_smiles("show me a drug")
     assert not agent_module.looks_like_smiles("12345")
+
+
+def test_an_edited_molecule_is_reviewed(client):
+    session_id = client.post("/api/v1/sessions").json["id"]
+    session = server.sessions.get(session_id)
+    wait_for(session, lambda e: e["type"] == "turn_end")
+    answer_tools(client, session, lambda _: {"index": 0})
+    client.post(f"/api/v1/sessions/{session_id}/messages",
+                json={"text": "⟦mol 1 Ethanol, edited: CCO |atomProp:2.atomNote.hydroxyl|⟧ what now?", "cols": 60})
+    events = wait_for(session, lambda e: e["type"] == "tool_use" and e["input"].get("title") == "Properties of Ethanol, edited")
+    text = "".join(e.get("delta", "") for e in events if e["type"] == "text")
+    assert 'You edited Ethanol. Your notes: "hydroxyl".' in text
+
+
+def test_a_drawing_is_shown_with_its_smiles_so_the_user_can_edit_it(client):
+    session_id = client.post("/api/v1/sessions").json["id"]
+    session = server.sessions.get(session_id)
+    wait_for(session, lambda e: e["type"] == "turn_end")
+    answer_tools(client, session, lambda _: {"index": 1})
+    client.post(f"/api/v1/sessions/{session_id}/messages", json={"text": "CCO", "cols": 60})
+    events = wait_for(session, lambda e: e["type"] == "tool_use" and e["name"] == "tui.show")
+    assert next(e for e in events if e["type"] == "tool_use" and e["name"] == "tui.show")["input"]["smiles"] == "CCO"
+
+
+def test_the_editor_and_pictures_go_through_the_session(client, monkeypatch):
+    sent = []
+
+    def edit(fields):
+        sent.append(fields)
+        return 200, "0 STATE\n\x1b[2;1Hdrawn"
+
+    monkeypatch.setattr(server.molterm, "edit", edit)
+    monkeypatch.setattr(server.molterm, "picture", lambda smiles, cols: {"png": "x", "cols": cols, "rows": 3})
+    session_id = client.post("/api/v1/sessions").json["id"]
+    response = client.post(f"/api/v1/sessions/{session_id}/edit", json={"smiles": "CCO", "cols": 100, "rows": 40, "box": "3,0,16,99"})
+    assert response.status_code == 200 and response.text == "0 STATE\n\x1b[2;1Hdrawn" and sent[0]["smiles"] == "CCO"
+    assert client.post(f"/api/v1/sessions/{session_id}/picture", json={"smiles": "CCO", "cols": 50}).json["cols"] == 50
+    assert client.post("/api/v1/sessions/nope/edit", json={}).status_code == 404
+    assert client.post(f"/api/v1/sessions/{session_id}/picture", json={"cols": 50}).status_code == 400
+
+
+def test_the_editor_asks_molterm_for_a_compact_box_in_the_pages_colours(monkeypatch):
+    posted = {}
+
+    class Answer:
+        status_code, text = 200, "0 S\n"
+
+    monkeypatch.setattr(agent_module.requests, "post", lambda url, data, timeout: posted.update(url=url, data=data) or Answer())
+    agent_module.Molterm("http://molterm").edit({"state": "S", "events": "1b", "cols": 100, "evil": "x"})
+    assert posted["url"] == "http://molterm/api/v1/edit"
+    assert posted["data"] == {"state": "S", "events": "1b", "cols": "100", **agent_module.TERMINAL, "compact": "1"}

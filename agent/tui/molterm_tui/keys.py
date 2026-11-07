@@ -2,6 +2,8 @@
 
 restty hands the page each key as the bytes a terminal would send: printable text as itself, and the rest as control characters or
 escape sequences. One delivery can hold several keys (a paste, or keys typed faster than they are read), so `parse` returns a list.
+With mouse reporting on (SGR, 1006), a click or a wheel step comes as a "mouse" key: `mouse` is (button, col, row, pressed), the
+column and row from 0, and `text` the report as it came, for passing on.
 """
 from dataclasses import dataclass
 
@@ -21,6 +23,7 @@ class Key:
     name: str  # "text" for typed text, else the key's name, such as "enter" or "up"
     text: str = ""
     alt: bool = False
+    mouse: tuple = ()
 
 
 def parse(data):
@@ -48,6 +51,14 @@ def parse(data):
                 j += 1
             params, final = data[i + 2:j], data[j] if j < len(data) else ""
             parts = params.split(";")
+            if params.startswith("<") and final in ("M", "m") and len(parts) == 3:
+                try:
+                    button, col, row = (int(part) for part in params[1:].split(";"))
+                    keys.append(Key("mouse", data[i:j + 1], mouse=(button, col - 1, row - 1, final == "M")))
+                except ValueError:
+                    pass
+                i = j + 1
+                continue
             alt = len(parts) > 1 and parts[1] in ("3", "4")
             if final == "~":
                 keys.append(Key(_TILDE.get(parts[0], "unknown"), alt=alt))

@@ -246,18 +246,21 @@ def edit():
     """One step of the molecular editor, for the client. Form fields: `cols` and `rows`, `events` (raw input, as hex), `state` (from
     the last answer) or `smiles` to begin, and optional `cell_width`, `cell_height`, `pixels=1` (mouse reports are in pixels), `theme`, and the
     terminal's `background` and `foreground` as RRGGBB, to fit the theme to.
-    To stay inside part of a window that a host program owns, `box` (row,col,rows,cols, from 0 and counting the border) and `title`.
+    To stay inside part of a window that a host program owns, `box` (row,col,rows,cols, from 0 and counting the border) and `title`;
+    `compact=1` for a strip of tools over the drawing and no menu bar, and `close=1`, alone, for what removes the editor's pictures.
 
     The first line of the answer is "<0 to go on, 1 finished, 2 failed, 3 cancelled> <state>". After it comes what to print: on finishing,
     the SMILES.
     """
     plain = {"Content-Type": "text/plain; charset=utf-8"}
     form = request.form
+    if form.get("close") == "1":
+        return f"{editor.CANCELLED} \n{editor.images_gone()}", 200, plain
     try:
         cols, rows, raw, cell_width, cell_height, pixels, theme = terminal_form(form)
         with placeholders.using(form.get("placeholders") == "1"):
             status, state, output = editor.step(form.get("state", ""), form.get("smiles", ""), raw, cols, rows, cell_width, cell_height, pixels, theme,
-                                                editor_box(form.get("box", "")), form.get("title", "")[:200])
+                                                editor_box(form.get("box", "")), form.get("title", "")[:200], compact=form.get("compact") == "1")
     except (molecule.ParseError, editor.StateError) as e:
         return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
     return f"{status} {state}\n{output}", 200, plain

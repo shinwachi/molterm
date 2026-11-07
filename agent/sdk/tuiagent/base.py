@@ -33,7 +33,7 @@ class TuiAgent:
     TUI_TOOLS = [
         {"name": "tui.show", "where": "client",
          "description": "Show a panel in the user's terminal: a title, and a picture (image: png, cols, rows) and/or text (body, ANSI "
-                        "colours allowed)."},
+                        "colours allowed). With smiles, the picture is that molecule, which the user can edit and annotate."},
         {"name": "tui.ask", "where": "client", "description": "Ask the user to pick one of some options; returns their choice."},
     ]
 
@@ -119,10 +119,13 @@ class TuiAgent:
         self.session.emit("status", label="Thinking")
         return result
 
-    def show(self, title, body=None, image=None):
+    def show(self, title, body=None, image=None, smiles=None):
         """A panel in the transcript. `body` is text (ANSI colours allowed); `image` is a picture, either {"png": base64, "cols",
-        "rows"} or a PNG's bytes, with `cols` and `rows` given as `image=(png_bytes, cols, rows)`."""
+        "rows"} or a PNG's bytes, with `cols` and `rows` given as `image=(png_bytes, cols, rows)`. With `smiles`, the picture is that
+        molecule: the user can edit and annotate it where it is, and their edit comes back in their next message (see TUTORIAL.md)."""
         input_ = {"title": title}
+        if smiles is not None:
+            input_["smiles"] = smiles
         if body is not None:
             input_["body"] = body
         if isinstance(image, tuple):
