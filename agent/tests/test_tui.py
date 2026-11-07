@@ -406,7 +406,9 @@ def test_dragging_across_text_highlights_it_and_puts_it_in_the_message(app):
     click(app, chip(app, "dismiss"))  # × drops it, from the text too
     assert app.input == "" and app.chips == []
     assert "\x1b[48;2;32;62;104m" in app.lines()[0][row]  # blue, the user's
-    app.key(f"\x1b[<0;{col + 3};{row + 1}M\x1b[<0;{col + 3};{row + 1}m")  # a click on it takes it away
+    app.key(f"\x1b[<2;{col + 3};{row + 1}M\x1b[<2;{col + 3};{row + 1}m")  # its menu takes it away
+    top, left, _ = app._menu_box()
+    click(app, (top + 4, left + 2))  # Remove the highlight
     assert app.highlights == []
 
 
@@ -614,23 +616,51 @@ def where(app, text):
     return row, lines[row].index(text)
 
 
-def test_a_drag_takes_whole_words_and_a_pause_takes_exact_letters(app):
+def test_a_drag_takes_exact_letters_and_a_double_click_whole_words(app):
     app.clock = clock = Clock()
     reply(app, "Imatinib binds the kinase in its inactive form.")
     row, col = where(app, "binds")
     press(app, row, col + 2)  # in the middle of "binds"
-    move(app, row, col + 14)  # in the middle of "kinase"
-    assert "hold still for exact letters" in screen(app)
-    release(app, row, col + 14)
-    assert app.highlights[-1].phrase == "binds the kinase"  # whole words, not "nds the kin"
+    move(app, row, col + 13)  # into "kinase"
+    assert "double-click and drag for whole words" in screen(app)
+    release(app, row, col + 13)
+    assert app.highlights[-1].phrase == "nds the kina"  # letter by letter, to the one let go on
     row, col = where(app, "inactive")
+    for _ in range(2):  # a double click: the word
+        press(app, row, col + 3)
+        release(app, row, col + 3)
+        clock.now += 0.1
+    assert app.highlights[-1].phrase == "inactive"
+    clock.now += 1
+    row, col = where(app, "Imatinib")
     press(app, row, col + 2)
-    move(app, row, col + 5)
-    clock.now += 1  # held still
-    app.tick()
-    assert app.selecting["exact"] and "exact letters" in screen(app)
-    release(app, row, col + 5)
-    assert app.highlights[-1].phrase == "acti"
+    release(app, row, col + 2)
+    clock.now += 0.2
+    press(app, row, col + 2)  # double-click and drag: whole words
+    move(app, row, col + 11)
+    assert "whole words" in screen(app)
+    release(app, row, col + 11)
+    assert app.highlights[-1].phrase == "Imatinib binds"
+    clock.now += 1
+    press(app, row, col + 30)  # two presses too far apart in time: two clicks, nothing highlighted
+    release(app, row, col + 30)
+    clock.now += 1
+    press(app, row, col + 30)
+    release(app, row, col + 30)
+    assert len(app.highlights) == 3
+
+
+def test_a_highlight_across_paragraphs_and_wrapped_lines_is_painted_where_it_was_dragged(app):
+    reply(app, "First paragraph ends here.\n\n  Indented second paragraph starts here, and it runs on long enough to wrap onto another line.")
+    start, end = where(app, "ends here"), where(app, "onto another")
+    press(app, *start)
+    move(app, end[0], end[1] + 3)
+    release(app, end[0], end[1] + 3)
+    phrase = app.highlights[-1].phrase
+    assert phrase.startswith("ends here. Indented second") and phrase.endswith("onto")
+    app.lines()
+    painted = sorted({line for h, line, _, _ in app._painted})
+    assert len(painted) >= 3 and painted[-1] - painted[0] >= 3  # every line of it, the blank line between skipped
 
 
 def test_a_drag_across_several_replies_highlights_each_part_as_one(app):
@@ -638,11 +668,12 @@ def test_a_drag_across_several_replies_highlights_each_part_as_one(app):
     reply(app, "The second one starts here.")
     first, second = where(app, "ends here"), where(app, "second one")
     press(app, *first)
-    move(app, second[0], second[1] + 3)
-    release(app, second[0], second[1] + 3)
+    move(app, second[0], second[1] + 5)
+    release(app, second[0], second[1] + 5)
     assert [h.phrase for h in app.highlights] == ["ends here.", "The second"]
     assert len({h.gid for h in app.highlights}) == 1 and [c.tag for c in app.chips] == ['⟦highlighted: "ends here. … The second"⟧']
-    click(app, first)  # a click on it takes the whole of it away
+    press(app, *first, 2)  # its menu takes the whole of it away
+    app.key("\x1b[B\x1b[B\x1b[B\r")  # Remove the highlight
     assert app.highlights == [] and app.chips == []
 
 
@@ -654,6 +685,8 @@ def test_a_right_click_on_the_users_highlight_gives_it_handles_to_drag(app):
     release(app, row, col + 9)
     press(app, row, col + 2, 2)
     release(app, row, col + 2, 2)
+    assert app.menu["items"][0][0] == "Change the selection"
+    app.key("\r")
     assert app.handles and app.highlights == []
     lines = app.lines()[0]
     assert strip(lines[row - 1])[col] == "●" and strip(lines[row + 1])[col + 9] == "●"  # above its first letter, below its last
@@ -665,15 +698,13 @@ def test_a_right_click_on_the_users_highlight_gives_it_handles_to_drag(app):
     app.key("\r")
     assert app.handles is None and app.highlights[0].phrase == "the kinase in" and len(app.chips) == 1
     assert app.chips[0].tag == '⟦highlighted: "the kinase in"⟧'
-    press(app, row, col + 2, 2)
-    release(app, row, col + 2, 2)
-    app.key("\x1b")  # undone
+    app.key("\x1b[<16;" + f"{col + 3};{row + 1}M")  # ctrl+click, a Mac's right click
+    app.key("\r\x1b")  # its handles, then undone
     assert app.handles is None and app.highlights[0].phrase == "the kinase in"
 
 
-def test_holding_the_right_button_on_a_highlight_opens_its_menu_for_a_note(app):
+def test_a_right_click_on_a_highlight_opens_its_menu_for_a_note(app):
     from molterm_tui.app import USER_NOTE_BG, WHITE
-    app.clock = clock = Clock()
     reply(app, "Imatinib binds the kinase in its inactive form.")
     app.event({"type": "tool_use", "id": "t1", "name": "tui.mark", "input": {"text": "inactive form"}})  # the agent's
     row, col = where(app, "the kinase")
@@ -681,12 +712,10 @@ def test_holding_the_right_button_on_a_highlight_opens_its_menu_for_a_note(app):
     move(app, row, col + 9)
     release(app, row, col + 9)
     press(app, row, col + 2, 2)
-    clock.now += 1
-    app.tick()
     assert app.menu and [label for label, _ in app.menu["items"]] == [
         "Change the selection", "Add a note…", "Put it in my message", "Remove the highlight"]
     release(app, row, col + 2, 2)
-    assert app.menu and not app.handles  # letting go after the menu opened leaves it open
+    assert app.menu and not app.handles  # letting go leaves it open
     app.key("\x1b[B\r")  # Add a note…
     assert app.prompt and "Note on “the kinase”" in screen(app)
     _, cursor = app.lines()
@@ -701,7 +730,7 @@ def test_holding_the_right_button_on_a_highlight_opens_its_menu_for_a_note(app):
     theirs = next(h for h in app.highlights if h.by == "agent")
     row, col = where(app, "inactive form")
     press(app, row, col + 1, 2)
-    release(app, row, col + 1, 2)  # the agent's: a click gives its menu, without handles
+    release(app, row, col + 1, 2)  # the agent's: its menu, without handles
     assert "Change the selection" not in [label for label, _ in app.menu["items"]]
     top, left, _ = app._menu_box()
     click(app, (top + 3, left + 2))  # Remove the highlight

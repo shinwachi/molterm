@@ -74,8 +74,8 @@ something and wait for the answer, and `tui.mark` to point things out: atoms hig
 them, words highlighted in the transcript. The user's own notes and highlights are blue, the agent's notes amber. A molecule it shows can be edited and annotated where it is, the drawing staying in place
 under a floating strip of tools (or in a box, if you prefer) and resizable, the transcript making room; the edit, like text the
 user drags across, waits above the input until they click it into a message. Bubbles can be dragged, folded, hidden, and right-clicked to edit
-their note or put it into a message. A drag highlights whole words (a pause, exact letters), across replies too; a right click
-gives the user's highlight handles to drag, and held opens its menu, for a note. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
+their note or put it into a message. A drag highlights the letters it crosses, across lines and replies too (a double click, a word; double-click and
+drag, whole words); a right click opens a highlight's menu, for a note, handles to change it, or to remove it. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
 server or anywhere else over HTTP, and with a model behind it if you like, is in [its tutorial](agent/TUTORIAL.md).
 
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).

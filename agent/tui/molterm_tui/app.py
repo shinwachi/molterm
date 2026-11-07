@@ -63,10 +63,9 @@ WHITE = "\x1b[38;2;255;255;255m"
 # a bubble's colours: (its border and line, its paper, what it covers shown faintly, its text, its – and ×)
 AGENT = (NOTE_INK, NOTE_BG, "\x1b[38;2;92;84;66m", "", NOTE_INK)
 USER = (USER_INK, USER_NOTE_BG, "\x1b[38;2;96;132;192m", WHITE, WHITE)  # white letters in a blue bubble
-EXACT = "\x1b[48;2;64;84;130m"  # a selection of exact letters, after a pause, or between handles
+WORDS = "\x1b[48;2;64;84;130m"  # a selection of whole words, after a double click
 MENU, MENU_ON = "\x1b[48;2;40;42;50m\x1b[38;2;220;222;228m", "\x1b[48;2;56;78;120m\x1b[38;2;255;255;255m"
-PAUSE = 0.6  # seconds still while dragging, to select exact letters rather than whole words
-HOLD = 0.5  # seconds the right button is held on a highlight, for its menu
+DOUBLE = 0.4  # seconds between two presses in the same place, for a double click
 BUBBLE_TEXT = 30  # a bubble's text at its widest
 CHIP, CHIP_ON = "\x1b[48;2;48;52;64m\x1b[38;2;200;204;214m", "\x1b[48;2;56;78;120m\x1b[38;2;240;242;248m"  # a context, put away or in the text
 TAG = "\x1b[48;2;56;78;120m"  # a context's tag in the input's text
@@ -83,10 +82,11 @@ Molecules
   /editor box    clicks open the box from now on (/editor inline goes back)
   the line under it  drag it (or alt+arrows while editing) to make the drawing larger or smaller
 Pointing things out
-  drag across text   highlight it, whole words (hold still while dragging for exact letters), across several replies
-                     too; it waits above the input, and a click there puts it in your message; a click on it removes it
-  right click        on your highlight: handles (●) to drag, enter keeps it, esc undoes; held, or on the agent's:
-                     its menu (change it, add or edit a note, put it in your message, remove it)
+  drag across text   highlight it, letter by letter, across several lines and replies too; it waits above the input,
+                     and a click there puts it in your message · double-click a word for it, double-click and drag
+                     for whole words
+  right click        on a highlight (or ctrl+click): its menu, to change it (handles ● to drag; enter keeps it, esc
+                     undoes), add or edit a note, put it in your message, or remove it
   a bubble           drag it aside; – folds it to ◆ (click to open), × hides it; right click: edit its note, or put it
                      in your message; /notes shows them all again, /notes hide folds them all, /notes reset puts them back
   above the input    what you edited or highlighted: click to put it in your message (or take it out), × to drop it
@@ -214,7 +214,7 @@ class App:
         self.menu = None  # a context menu: {"row", "col", "items": [(label, action)], "hover"}
         self.prompt = None  # a note being written: {"title", "text", "save"}
         self.handles = None  # a highlight's selection being changed: {"from", "to" (content line, col), "old", "drag"}
-        self._right = None  # the right button held on a highlight, for its menu: {"row", "col", "at", "highlight"}
+        self._pressed = (0.0, None)  # the last left press, (when, where), for a double click
         self._knobs, self._menu_at = {}, None
         self._option_rows, self._option_hits = {}, {}  # a question's options: footer line -> option, and screen row -> option
 
@@ -237,14 +237,6 @@ class App:
         """Called a few times a second, to turn the spinner, fade a running tool's dot and pulse a question's box."""
         if self.flash:
             self.flash -= 1
-        now = self.clock()
-        if self._right and now - self._right["at"] >= HOLD:  # held: the highlight's menu
-            right, self._right = self._right, None
-            self._highlight_menu(right["highlight"], right["row"], right["col"])
-            self.draw()
-        if self.selecting and not self.selecting["exact"] and now - self.selecting["moved"] >= PAUSE:
-            self.selecting["exact"] = True  # paused: exact letters from here on
-            self.draw()
         if self.busy or self.question or self.flash or any(b.kind == "tool" and b.state == "running" for b in self.blocks):
             self.frame += 1
             self.draw()
@@ -781,13 +773,12 @@ class App:
         if self.handles:
             self._handles_mouse(button, col, row, pressed)
             return
-        if button in (2, 34):
-            self._right_mouse(button, col, row, pressed)
+        if button in (2, 16):  # the right button, or ctrl+click (a Mac's right click)
+            if pressed:
+                self._right_click(row, col)
             return
         if button == 32 and self.selecting:  # dragging, the left button held
-            at = (self._start + row, col)
-            if at != self.selecting["to"]:
-                self.selecting["to"], self.selecting["moved"] = at, self.clock()
+            self.selecting["to"] = (self._start + row, col)
             return
         if button != 0:
             return
@@ -798,18 +789,18 @@ class App:
                 if top <= row < top + rows and left <= col < left + cols:
                     self.edit(number)
                     return
-            at = (self._start + row, col)
-            self.selecting = {"from": at, "to": at, "exact": False, "moved": self.clock()} if row < self._room else None
+            at, now = (self._start + row, col), self.clock()
+            last, where = self._pressed
+            double = where is not None and now - last <= DOUBLE and where[0] == at[0] and abs(where[1] - at[1]) <= 1
+            self._pressed = (0.0, None) if double else (now, at)
+            self.selecting = {"from": at, "to": at, "words": double} if row < self._room else None
             return
         selection, self.selecting = self.selecting, None
         if not selection:
             return
-        if selection["from"] == (self._start + row, col) == selection["to"]:  # a click: on a highlight of the user's, it removes it
-            found = self._highlight_at(row, col)
-            if found:
-                self._remove_group(found)
-            return
         selection["to"] = (self._start + row, col)
+        if selection["from"] == selection["to"] and not selection["words"]:  # a click: nothing to highlight
+            return
         self._mark_spans(self._selection_spans(selection))
 
     def _press_controls(self, row, col):
@@ -842,8 +833,8 @@ class App:
         return None
 
     def _selection_spans(self, selection):
-        """The text a selection covers, block by block, in reading order: [(block, [(content line, start col, end col)])]. Unless it
-        is `exact`, its ends take in the whole words they are in, so that a drag doesn't stop in the middle of one."""
+        """The text a selection covers, block by block, in reading order: [(block, [(content line, start col, end col)])]. Letter by
+        letter; with `words` (a double click, and a drag after it), its ends take in the whole words they are in."""
         (i1, c1), (i2, c2) = sorted([tuple(selection["from"]), tuple(selection["to"])])
         found = []
         for index in range(max(i1, 0), min(i2, len(self._owners) - 1) + 1):
@@ -855,7 +846,7 @@ class App:
             used = len(line.rstrip())
             a = max(c1 if index == i1 else 0, text_col)
             b = min(c2 + 1 if index == i2 else used, used)
-            if not selection["exact"]:
+            if selection.get("words"):
                 if index == i1:
                     if a < used and line[a] != " ":
                         while a > text_col and line[a - 1] != " ":
@@ -927,28 +918,17 @@ class App:
                 return highlight
         return None
 
-    # -- the right button: a highlight's handles and menu, a bubble's menu -------------------------------------------------------------
+    # -- the right button: a highlight's menu (and its handles), a bubble's menu -------------------------------------------------------------
 
-    def _right_mouse(self, button, col, row, pressed):
-        """A right click on the user's highlight gives it handles, to change what it covers; held, on any highlight, its menu. On a
-        bubble, its menu at once."""
-        if button == 34:  # moved, held
+    def _right_click(self, row, col):
+        """A right click on a bubble or a highlight opens its menu."""
+        key = self._bubble_at(row, col)
+        if key:
+            self._bubble_menu(key, row, col)
             return
-        if pressed:
-            key = self._bubble_at(row, col)
-            if key:
-                self._bubble_menu(key, row, col)
-                return
-            found = self._highlight_at(row, col, anyone=True)
-            self._right = {"row": row, "col": col, "at": self.clock(), "highlight": found} if found else None
-            return
-        right, self._right = self._right, None
-        if right is None:  # on nothing, or its menu opened while it was held
-            return
-        if right["highlight"].by == "user":
-            self._start_handles(right["highlight"])
-        else:
-            self._highlight_menu(right["highlight"], right["row"], right["col"])
+        found = self._highlight_at(row, col, anyone=True)
+        if found:
+            self._highlight_menu(found, row, col)
 
     def _highlight_menu(self, highlight, row, col):
         group = self._group(highlight)
@@ -1108,7 +1088,7 @@ class App:
     def _end_handles(self, keep):
         handles, self.handles = self.handles, None
         old = handles["old"]
-        if keep and self._mark_spans(self._selection_spans({"from": handles["from"], "to": handles["to"], "exact": True}), old):
+        if keep and self._mark_spans(self._selection_spans({"from": handles["from"], "to": handles["to"]}), old):
             return
         self.highlights += old  # undone, or it covers nothing now
 
@@ -1324,7 +1304,7 @@ class App:
         box.append(style("╰" + "─" * (cols - 2) + "╯", GREY))
         hint = "  ? /help for shortcuts" if not self.scroll else f"  scrolled back {self.scroll} lines · pgdn to return"
         if self.selecting:
-            hint = "  exact letters · let go to highlight" if self.selecting["exact"] else "  whole words · hold still for exact letters"
+            hint = "  whole words · let go to highlight" if self.selecting["words"] else "  let go to highlight · double-click and drag for whole words"
         elif self.handles:
             hint = "  drag ● to change it · enter or a click keeps it · esc undoes"
         right = f"session {self.session[:8]}" if self.session else "connecting…"
@@ -1596,12 +1576,12 @@ class App:
         for line, col, text, interior in self._bubbles(cols):  # over the transcript, where they are shown, and beside the drawing
             if start <= line < start + room and col >= 0 and not (line in gap and col < EDIT_LEFT + e["cols"]):
                 shown[line - start] = truncate(_cover(shown[line - start], col, text, interior), cols)
-        chosen = self.selecting or (dict(self.handles, exact=True) if self.handles else None)
-        if chosen:  # a selection being dragged, whole words or (paused) exact letters, or a highlight's between its handles
+        chosen = self.selecting or self.handles
+        if chosen:  # a selection being dragged, letter by letter or (double-clicked) whole words, or a highlight's between its handles
             for _, spans in self._selection_spans(chosen):
                 for line, a, b in spans:
                     if start <= line < start + room:
-                        shown[line - start] = paint(shown[line - start], a, min(b, cols), EXACT if chosen["exact"] else SELECTING)
+                        shown[line - start] = paint(shown[line - start], a, min(b, cols), WORDS if chosen.get("words") else SELECTING)
         self._knobs = {}
         if self.handles:  # as iOS has them: a knob just above the selection's first letter, and one just below its last
             ends = sorted((tuple(self.handles[name]), name) for name in ("from", "to"))
@@ -1667,22 +1647,33 @@ class App:
 
 
 def _find(lines, phrase):
-    """Where a phrase is in wrapped lines, which wrapping broke at spaces: [(line, start col, end col)], one for each line it is on."""
-    joined, starts = "", []
-    for line in lines:
-        starts.append(len(joined))
-        joined += line + " "
-    spans, needle, at = [], phrase.lower(), 0
-    haystack = joined.lower()
+    """Where a phrase is in wrapped lines: [(line, start col, end col)], one for each line it is on. Any run of spaces, line
+    breaks, blank lines and indents counts as one space, as in the phrase (see _normal), so a phrase across paragraphs is found."""
+    text, places = [], []  # the lines' text with its spaces collapsed, and where each character of it is: (line, index in it)
+    for index, line in enumerate(lines):
+        for i, char in enumerate(line + " "):
+            if char.isspace():
+                if text and text[-1] != " ":
+                    text.append(" ")
+                    places.append((index, i))
+            else:
+                text.append(char)
+                places.append((index, i))
+    haystack, needle, spans, at = "".join(text).lower(), _normal(phrase).lower(), [], 0
     while needle:
         found = haystack.find(needle, at)
         if found < 0:
             break
         at = found + len(needle)
-        for index, line in enumerate(lines):
-            a, b = max(found, starts[index]), min(at, starts[index] + len(line))
-            if a < b:
-                spans.append((index, width(line[:a - starts[index]]), width(line[:b - starts[index]])))
+        covered = {}
+        for k in range(found, at):
+            index, i = places[k]
+            if i < len(lines[index]):
+                first, last = covered.get(index, (i, i))
+                covered[index] = (min(first, i), max(last, i))
+        for index, (first, last) in sorted(covered.items()):
+            line = lines[index]
+            spans.append((index, width(line[:first]), width(line[:last + 1])))
     return spans
 
 
