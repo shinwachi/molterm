@@ -64,7 +64,7 @@ release: ## bump VERSION, commit, tag, build the prod image (clean tree only)
 	$(MAKE) build ENV=prod
 
 PLAYWRIGHT := mcr.microsoft.com/playwright/python:v1.49.1-noble
-screenshots: ## the README's hero shot and web's, in docs/images, from the running dev services (SHOTS="a.png b.png" for some)
+screenshots: ## the README's hero shots in docs/images, from the running dev services (SHOTS="a.png b.png" for some)
 	docker run --rm --network traefik --user $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/docs:/docs $(PLAYWRIGHT) \
 		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 && PYTHONPATH=/tmp/pw python /docs/screenshots/shoot.py $(SHOTS)'
 

@@ -7,6 +7,8 @@ A sub-project of molterm, as `visidata-molterm/` is. Mol* runs headless in Node 
 llvmpipe on a virtual X display), so the server needs no GPU. 3D coordinates for SMILES and molblocks come from the molterm server's
 `/api/v1/conformer.sdf`; PDB entries come from RCSB. Author: Shinichiro Wachi.
 
+![molterm-3d: haemoglobin drawn by Mol* in each of its four lightings](../docs/images/molterm-3d-lightings.png)
+
 ## Use
 
 ```sh

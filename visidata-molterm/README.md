@@ -8,6 +8,11 @@ properties can be added as typed columns, to sort and filter by.
 A sub-project of molterm: a molterm server draws everything, so the plugin is one file that needs only VisiData and Python's standard
 library. Author: Shinichiro Wachi.
 
+| | |
+|---|---|
+| ![VisiData with a column of structures beside their SMILES](../docs/images/visidata.png) | ![VisiData with a molecule open in 3D, drawn by Mol* on molterm-3d](../docs/images/visidata-3d.png) |
+| Structures in a spreadsheet | ...and a molecule in 3D, turned with the mouse |
+
 ## Use
 
 Put `molterm_visidata.py` where Python finds it (or add its folder to `sys.path`), and in `~/.visidatarc`:
