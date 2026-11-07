@@ -7,6 +7,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
 import board
+import callouts
 import conformer
 import editor
 import graphics
@@ -232,12 +233,12 @@ def terminal_form(form):
     return cols, rows, bytes.fromhex(events).decode("latin-1"), cell_width, cell_height, form.get("pixels") == "1", theme
 
 
-def editor_box(text):
+def editor_box(text, name="box"):
     """A box as row,col,rows,cols, counted from 0 at the top left of the window."""
     if not text:
         return None
     if not re.fullmatch(r"[0-9]{1,4},[0-9]{1,4},[0-9]{1,4},[0-9]{1,4}", text, re.ASCII):
-        raise molecule.ParseError("bad_request", "box must be row,col,rows,cols, as whole numbers.")
+        raise molecule.ParseError("bad_request", f"{name} must be row,col,rows,cols, as whole numbers.")
     return tuple(int(part) for part in text.split(","))
 
 
@@ -248,6 +249,10 @@ def edit():
     terminal's `background` and `foreground` as RRGGBB, to fit the theme to.
     To stay inside part of a window that a host program owns, `box` (row,col,rows,cols, from 0 and counting the border) and `title`;
     `compact=1` for a strip of tools over the drawing and no menu bar, and `close=1`, alone, for what removes the editor's pictures.
+    Or, to edit a picture where it is shown, `inline` (row,col,rows,cols: the drawing's place on the screen), with `at`, the picture's
+    own place, which the drawing matches, and `strip=0` to begin with the tools put away (F2 shows them). Everything else on the screen
+    stays the host's: the output asks the host to draw it again with `ESC ] 5523;repaint ST`, and tells it the tools were put away or
+    shown with `ESC ] 5523;tools=0` (or 1), for it to remember.
 
     The first line of the answer is "<0 to go on, 1 finished, 2 failed, 3 cancelled> <state>". After it comes what to print: on finishing,
     the SMILES.
@@ -260,7 +265,9 @@ def edit():
         cols, rows, raw, cell_width, cell_height, pixels, theme = terminal_form(form)
         with placeholders.using(form.get("placeholders") == "1"):
             status, state, output = editor.step(form.get("state", ""), form.get("smiles", ""), raw, cols, rows, cell_width, cell_height, pixels, theme,
-                                                editor_box(form.get("box", "")), form.get("title", "")[:200], compact=form.get("compact") == "1")
+                                                editor_box(form.get("box", "")), form.get("title", "")[:200], compact=form.get("compact") == "1",
+                                                inline=editor_box(form.get("inline", ""), "inline"), at=editor_box(form.get("at", ""), "at"),
+                                                strip=form.get("strip") != "0")
     except (molecule.ParseError, editor.StateError) as e:
         return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
     return f"{status} {state}\n{output}", 200, plain
@@ -392,6 +399,32 @@ def render_png():
         return e.message + "\n", 400, {"Content-Type": "text/plain; charset=utf-8"}
     image, used = graphics.draw_image(parsed.mol, cols, rows, theme, cell_pixels or graphics.CELL_PIXELS)
     return graphics._png(image), 200, {"Content-Type": "image/png", "X-Molterm-Cols": str(used), "Cache-Control": "max-age=3600"}
+
+
+@app.route("/api/v1/callouts", methods=["POST"])
+def callouts_json():
+    """A molecule's picture for a host that draws its notes as speech bubbles (see callouts.py): JSON {"input": SMILES or CXSMILES with
+    annotations, "cols", "rows", and optional "cell_width", "theme", "background", "foreground", "mark": {"atoms": [index, ...] or
+    "smarts", "highlight": yellow|green|blue|pink, "note"}, "clear": true to drop the annotations first}. The answer: {"png" (base64),
+    "cols", "rows", "smiles" (with the annotations, the mark's included), "notes": [{"atom", "bond", "text", "highlight", "row"}],
+    "marked": [atom indices]}, where a note's leader ends at the picture's right edge in the middle of its `row`."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error={"code": "bad_request", "message": "Send a JSON object with an \"input\" field."}), 400
+    values = {name: str(body[name]) for name in ("cols", "rows", "cell_width", "theme", "background", "foreground") if body.get(name) is not None}
+    mark = body.get("mark")
+    try:
+        cols, rows, _ = render_options(values)
+        theme = theme_option(values)
+        cell_pixels, _ = sixel_options(values)
+        if mark is not None and not isinstance(mark, dict):
+            raise molecule.ParseError("bad_request", "mark must be an object.")
+        result = callouts.picture(body.get("input"), cols, rows, theme, cell_pixels or graphics.CELL_PIXELS, mark, body.get("clear") is True)
+    except molecule.ParseError as e:
+        return jsonify(error={"code": e.code, "message": e.message}), 400
+    except callouts.CalloutError as e:
+        return jsonify(error={"code": "bad_request", "message": str(e)}), 400
+    return jsonify(result)
 
 
 @app.route("/api/v1/render.txt")

@@ -145,7 +145,7 @@ def test_claude_uses_the_tui_as_tools():
                     ("tui.show", {"title": "Coffee", "body": "Strong."})]
     assert "".join(e.get("delta", "") for e in session.events) == "Let me ask.Enjoy."
     first = client.sent[0]
-    assert first["model"] == "claude-opus-5-5" and first["fallbacks"] == "default" and {t["name"] for t in first["tools"]} == {"show_panel", "ask_user"}
+    assert first["model"] == "claude-opus-5-5" and first["fallbacks"] == "default" and {t["name"] for t in first["tools"]} == {"show_panel", "ask_user", "point_out"}
     results = client.sent[1]["messages"][-1]["content"]
     assert results == [{"type": "tool_result", "tool_use_id": "c1", "content": '{"choice": "Coffee", "index": 1}'}]
 

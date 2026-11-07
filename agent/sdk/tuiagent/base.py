@@ -15,6 +15,8 @@ Subclass `TuiAgent` and write `greet()` and `respond(text, cols)`. Inside them:
     self.say(text)                         stream a reply into the transcript
     self.show(title, body=, image=)        put a panel in the transcript (text with ANSI colours, and/or a PNG picture)
     self.ask(question, options)            ask the user to pick one; returns {"choice", "index"}, or {"choice": None, "skipped": True}
+    self.mark(mol=, text=, ...)            point something out: highlight atoms of a shown molecule, or text in the transcript, with a
+                                           note in a speech bubble if you like
     self.use_server_tool(name, input, run) show a tool of your own running, and its result
     self.use_tui(name, input)              call a TUI tool by name, for tools beyond show and ask
 """
@@ -35,6 +37,12 @@ class TuiAgent:
          "description": "Show a panel in the user's terminal: a title, and a picture (image: png, cols, rows) and/or text (body, ANSI "
                         "colours allowed). With smiles, the picture is that molecule, which the user can edit and annotate."},
         {"name": "tui.ask", "where": "client", "description": "Ask the user to pick one of some options; returns their choice."},
+        {"name": "tui.mark", "where": "client",
+         "description": "Point something out in the user's terminal. On a molecule shown with smiles (mol: its number, which tui.show "
+                        "returned): highlight atoms (atoms: indices in its SMILES, from 0, or smarts: every match) and/or put a note in "
+                        "a speech bubble with a leader to the first atom. Or highlight text in the transcript (text: where it last "
+                        "appears), with a note in a bubble under it. highlight: yellow, green, blue or pink; clear: true removes "
+                        "what was marked first."},
     ]
 
     def __init__(self, session, pace=1.0):
@@ -137,3 +145,13 @@ class TuiAgent:
 
     def ask(self, question, options):
         return self.use_tui("tui.ask", {"question": question, "options": list(options)})
+
+    def mark(self, mol=None, text=None, atoms=None, smarts=None, highlight=None, note=None, clear=False):
+        """Point something out: on molecule `mol` (the number tui.show returned), the `atoms` (indices in its SMILES) or what `smarts`
+        matches, highlighted and/or with a `note` in a bubble; or `text` in the transcript, highlighted, with a `note` under it.
+        Returns the TUI's answer: for a molecule {"marked": [atoms], "smiles": its CXSMILES with the annotations}."""
+        input_ = {name: value for name, value in (("mol", mol), ("text", text), ("atoms", atoms), ("smarts", smarts),
+                                                  ("highlight", highlight), ("note", note)) if value is not None}
+        if clear:
+            input_["clear"] = True
+        return self.use_tui("tui.mark", input_, "Pointing it out")

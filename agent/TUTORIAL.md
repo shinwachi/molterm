@@ -27,7 +27,9 @@ cols)` handles each message the user sends, and `cols` is the transcript's width
 | call | what the user sees | returns |
 |---|---|---|
 | `self.say(text)` | text streamed into the transcript, a word at a time | |
-| `self.show(title, body=..., image=..., smiles=...)` | a panel: text (ANSI colours allowed) and/or a picture; with `smiles`, a molecule the user can edit | `{"shown": true, "lines"}` |
+| `self.show(title, body=..., image=..., smiles=...)` | a panel: text (ANSI colours allowed) and/or a picture; with `smiles`, a molecule the user can edit | `{"shown": true, "lines"}`, and `"mol"`, its number, for a molecule |
+| `self.mark(mol=N, atoms=[...] or smarts=..., highlight=, note=)` | the molecule's atoms highlighted in its picture, and the note in a speech bubble beside it, with a leader to the first atom | `{"marked": [atoms], "smiles"}` |
+| `self.mark(text=..., highlight=, note=)` | those words highlighted where they last appear in the transcript, the note in a bubble under them | `{"ok"}`, or `{"error"}` if they aren't there |
 | `self.ask(question, options)` | the input box turns into a choice; ↑↓/enter or a number picks, Esc skips | `{"choice", "index"}` or `{"choice": None, "skipped": True}` |
 | `self.use_server_tool(name, input, run, label, summary=)` | a tool line, a spinner while `run()` works, then `summary(output)` under it | `run()`'s output, or `None` if it raised |
 
@@ -56,9 +58,16 @@ twice as tall as it is wide. The TUI shows the picture with the Kitty graphics p
 `png_bytes` above is your own code; the full example builds a gradient with `zlib`.
 
 Give the picture of a molecule its `smiles` and the user can edit and annotate it where it is: a click on it (or `/edit N`) opens
-molterm's editor over it, and Done puts the result into their next message as `⟦mol N name, edited: <CXSMILES>⟧`, notes and highlights
-included. Your `respond` finds it in `text` (`molterm_tui.app.CONTEXT` is the pattern); the demo agent's `review` in `server/agent.py`
-shows one way to answer.
+molterm's editor in place, the drawing where the picture was, and Done puts the result into their next message as
+`⟦mol N name, edited: <CXSMILES>⟧`, notes and highlights included (the input box shows it short, as `⟦mol N name, edited #k⟧`). Your
+`respond` finds it in `text` (`molterm_tui.app.CONTEXT` is the pattern); the demo agent's `review` in `server/agent.py` shows one way
+to answer.
+
+Either of you can point things out. You, with `self.mark`: atoms of a molecule you showed (indices in its SMILES, from 0, or a SMARTS),
+highlighted in yellow, green, blue or pink, and a note in a speech bubble beside the picture with a leader to the atom; or words in
+the transcript, yours or the user's. `clear=True` removes what you marked first. The user, by dragging across text: it turns blue,
+and `⟦highlighted: "the words"⟧` goes into their message (`molterm_tui.app.QUOTED`). Their notes and highlights on a molecule come
+with its edit, in the CXSMILES.
 
 When the user presses Esc, the turn ends: whatever the agent was waiting on returns, and the agent's next `say`, `show` or `ask`
 raises `Interrupted`, which `TuiAgent.turn` catches. Clean up in a `finally` if you hold something open. An error you don't catch is
@@ -123,14 +132,14 @@ The client is a thin layer over six routes, with the token sent as `Authorizatio
 | `GET /api/v1/sessions/<id>/agent/tool_results/<tool id>?timeout=25` | the TUI's answer to a `tui.*` tool → `{"result" or null, "interrupted", "closed"}` |
 | `GET /api/v1/sessions/<id>/agent` | `{"interrupted", "closed"}` |
 
-A turn is `turn_start`, then your events, then `turn_end`. To call a TUI tool, send a `tool_use` event named `tui.show` or `tui.ask`
+A turn is `turn_start`, then your events, then `turn_end`. To call a TUI tool, send a `tool_use` event named `tui.show`, `tui.ask` or `tui.mark`
 with an `id` of your choosing, then poll for that id's result. A tool with any other name is yours to run: send `tool_use` when it
 starts and `tool_result` when it ends, and the user sees it run.
 
 ## 3. Put a model behind it
 
 `examples/claude_agent.py` is the same class shape, but Claude decides what to do. The TUI's tools are offered to the model under
-names it accepts (`show_panel` and `ask_user`, since tool names can't contain dots). Each `respond` runs the usual tool-use loop:
+names it accepts (`show_panel`, `ask_user` and `point_out`, since tool names can't contain dots). Each `respond` runs the usual tool-use loop:
 
 ```python
 response = self.client.beta.messages.create(model="claude-opus-5-5", max_tokens=16000, system=SYSTEM, tools=TOOLS,
@@ -166,7 +175,7 @@ does, and show its picture with `self.show(..., image=...)`.
 
 | path | |
 |---|---|
-| `sdk/tuiagent/base.py` | `TuiAgent`: the turn loop, `say`, `show`, `ask`, `use_server_tool`, interrupts |
+| `sdk/tuiagent/base.py` | `TuiAgent`: the turn loop, `say`, `show`, `ask`, `mark`, `use_server_tool`, interrupts |
 | `sdk/tuiagent/remote.py` | `RemoteSession` and `run`: a session over HTTP |
 | `examples/hello_agent.py` | the example agent, without dependencies |
 | `examples/claude_agent.py` | the same shape, with Claude choosing the tools |

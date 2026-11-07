@@ -18,7 +18,8 @@ from tuiagent import TuiAgent, run  # noqa: E402
 MODEL = "claude-opus-5-5"
 SYSTEM = ("You are a helpful assistant that talks to the user in a terminal interface. Keep replies short. When something reads "
           "better as a block of its own (a table, a list, code, a summary), put it in a panel with show_panel. When you need the "
-          "user to choose between a few options, use ask_user rather than asking in prose.")
+          "user to choose between a few options, use ask_user rather than asking in prose. To draw the user's eye to words "
+          "already in the conversation, theirs or yours, highlight them with point_out.")
 # The TUI's tools, as the model sees them. Tool names can't contain dots, so the model's show_panel is the TUI's tui.show.
 TOOLS = [
     {"name": "show_panel", "description": "Show a panel in the user's terminal, under the conversation: a title and plain text.",
@@ -30,6 +31,11 @@ TOOLS = [
      "input_schema": {"type": "object", "additionalProperties": False, "required": ["question", "options"],
                       "properties": {"question": {"type": "string"},
                                      "options": {"type": "array", "items": {"type": "string"}}}}},
+    {"name": "point_out", "description": "Highlight words already in the conversation, where they last appear, with a short note in a "
+                                         "speech bubble under them (an empty note for none).",
+     "strict": True,
+     "input_schema": {"type": "object", "additionalProperties": False, "required": ["text", "note"],
+                      "properties": {"text": {"type": "string"}, "note": {"type": "string"}}}},
 ]
 
 
@@ -78,6 +84,8 @@ class ClaudeAgent(TuiAgent):
             result = self.show(call.input["title"], body=call.input["body"])
         elif call.name == "ask_user":
             result = self.ask(call.input["question"], call.input["options"])
+        elif call.name == "point_out":
+            result = self.mark(text=call.input["text"], note=call.input["note"] or None)
         else:
             return {"type": "tool_result", "tool_use_id": call.id, "content": f"No such tool: {call.name}", "is_error": True}
         return {"type": "tool_result", "tool_use_id": call.id, "content": json.dumps(result)}

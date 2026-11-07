@@ -62,8 +62,10 @@ character; its Braille differs only by single dots where the browser's antialias
 `agent/` is a fourth: a Claude Code-like terminal interface for a server-side agent, at http://molterm-agent-dev.localhost (prod:
 `molterm-agent`). The interface is Python, run in the browser by Pyodide and drawn in restty; the server is Flask, with a session and an
 agent for each visitor. The agent uses the interface as tools, `tui.show` to put a panel in the transcript and `tui.ask` to ask the user
-something and wait for the answer. A molecule it shows can be edited and annotated where it is, with a compact `molterm edit` over
-it, and the edit goes into the user's next message. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
+something and wait for the answer, and `tui.mark` to point things out: atoms highlighted, notes in speech bubbles with leaders to
+them, words highlighted in the transcript. A molecule it shows can be edited and annotated where it is, the drawing staying in place
+under a floating strip of tools (or in a box, if you prefer), and the edit goes into the user's next message; dragging across text
+points at it. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
 server or anywhere else over HTTP, and with a model behind it if you like, is in [its tutorial](agent/TUTORIAL.md).
 
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
@@ -381,6 +383,12 @@ A host that talks HTTP can skip the client: `POST /api/v1/edit` takes `box` and 
 With `compact=1` the box has no menu bar, and a strip of the common tools runs along its top (the right button's menus have the rest),
 for a host that edits a molecule where it shows it, as the agent's TUI does; `close=1`, alone, answers with what removes the editor's
 pictures, for when the host closes the box.
+To edit a picture where it is shown instead, without a box, give `inline` (row,col,rows,cols: the drawing's place on the screen) and
+`at` (the picture's place, whose scale and position the drawing matches). The strip of tools then floats over the host's text above
+the drawing, or below it near the top of the screen, with one line for the status and the Done, Cancel and tools buttons; F2 or the
+tools button puts the tools away, leaving the line (`strip=0` starts so). The rest of the screen stays the host's: when a menu closed
+over it, or the layout changed, the output carries `ESC ] 5523;repaint ST`, where the host draws its screen again before the editor
+draws over it, and `ESC ] 5523;tools=0` (or 1) when the tools were put away (or shown), for the host to remember.
 `server/board.py`, behind `/api/v1/tui`, shows one way to use the editor from Python.
 
 The client also reads the terminal's background and text colours, to fit `theme` to them and blend Sixel's edges, and its cell size, because Sixel's
@@ -416,6 +424,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`), and `properties: true` | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`), and if asked `properties` (`mw`, `logp`, `tpsa`, `hbd`, `hba`, `rotb`, `qed`, `ro5`, `pains`, `brenk`) |
 | `POST /api/v1/properties` | JSON `{"inputs": [...]}`, at most 1000 SMILES or molblocks | `{"results": [...]}` in the same order, each `formula` and `properties` as above, or `error` |
 | `GET /api/v1/render.png` | query `input`, `format`, `cols`, `rows`, `theme`, `background`, `foreground`, `cell_width` (pixels per column) | a transparent PNG within cols by rows cells (a cell taken as twice as tall as wide), cropped to its drawing; `X-Molterm-Cols` gives the columns it takes. For programs that place pictures themselves |
+| `POST /api/v1/callouts` | JSON `input` (SMILES or CXSMILES with molterm's annotations), `cols`, `rows`, optional `cell_width`, `theme`, `background`, `foreground`, `mark` (`atoms` or `smarts`, `highlight`, `note`), `clear: true` | `png` (base64, whole cells), `cols`, `rows`, `smiles` (with the annotations and the mark), `notes` (`atom` or `bond`, `text`, `highlight`, `row`), `marked`. Highlights are drawn; each note is left to the host, as a speech bubble, and a leader runs from its atom to the right edge, in the middle of its `row` |
 | `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `kitty`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
 | `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, `background` and `foreground` (`RRGGBB`, the terminal's, to fit the theme to), and for Sixel `cell_width` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |

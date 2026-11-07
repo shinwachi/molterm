@@ -28,8 +28,8 @@ class Bridge:
     def edit(self, fields):
         self.edits.append(json.loads(fields))
 
-    def picture(self, smiles, cols, number):
-        self.pictures.append((smiles, number))
+    def picture(self, request):
+        self.pictures.append(json.loads(request))
 
 
 @pytest.fixture
@@ -214,11 +214,13 @@ def test_a_molecule_shown_is_kept_and_its_place_known(app):
     top, left, rows, cols = app.placed[1]
     from molterm_tui import kitty
     assert kitty.PLACEHOLDER in lines[top] and kitty.PLACEHOLDER not in lines[top - 1] and (left, rows, cols) == (5, 6, 20)
-    assert app.bridge.results == [("m1", {"shown": True, "lines": 7})]
+    assert app.bridge.results == [("m1", {"shown": True, "mol": 1, "lines": 7})]
 
 
 def test_clicking_a_molecule_edits_it_in_a_box_over_its_picture(app):
     show_molecule(app)
+    app.key("/editor box\r")
+    assert "edits it in a box" in screen(app)
     app.key("draft")
     top = app.placed[1][0]
     app.bridge.written.clear()
@@ -240,12 +242,16 @@ def test_clicking_a_molecule_edits_it_in_a_box_over_its_picture(app):
     assert app.bridge.edits[-1] == {"close": "1"}  # first the editor's pictures go
     app.edit_answer("3 \n\x1b_Ga=d\x1b\\")
     assert app.editing is None and "\x1b[?1003l" in "".join(app.bridge.written)
-    assert app.input == "draft⟦mol 1 Ethanol, edited: CCO |atomProp:2.atomNote.OH|⟧ "
-    assert app.bridge.pictures == [("CCO |atomProp:2.atomNote.OH|", 1)]
-    app.picture_answer(1, json.dumps({"png": "B" * 10, "cols": 22, "rows": 7}))
+    assert app.input == "draft⟦mol 1 Ethanol, edited #1⟧ "  # short in the box, in full in the message
+    request = app.bridge.pictures[0]
+    assert request["smiles"] == "CCO |atomProp:2.atomNote.OH|" and request["number"] == 1 and request["cols"] == 80 - 6 - 37
+    app.picture_answer(json.dumps(request), json.dumps({"png": "B" * 10, "cols": 22, "rows": 7, "smiles": request["smiles"],
+                                                        "notes": [{"atom": 2, "text": "OH", "row": 1}]}))
     assert app.molecules[0].image == 2 and "mol 1 · edited" in screen(app)
     from molterm_tui.app import CONTEXT
-    assert CONTEXT.search(app.input).groups() == ("1", "Ethanol", "CCO |atomProp:2.atomNote.OH|")
+    app.key(" ok?\r")
+    assert CONTEXT.search(app.bridge.messages[-1][0]).groups() == ("1", "Ethanol", "CCO |atomProp:2.atomNote.OH|")
+    assert "⟦mol 1 Ethanol, edited #1⟧" in screen(app)
 
 
 def test_cancelling_an_edit_leaves_the_input_alone_and_edit_finds_the_last_molecule(app):
@@ -271,3 +277,94 @@ def test_an_edit_that_fails_says_why_and_the_wheel_scrolls(app):
         app.event({"type": "text_end"})
     app.key("\x1b[<64;5;5M")
     assert app.scroll == 3
+
+
+def test_a_click_edits_inline_with_the_drawing_over_the_picture_and_the_tools_floating_above(app):
+    show_molecule(app)
+    top = app.placed[1][0]
+    app.key(f"\x1b[<0;10;{top + 2}M")
+    fields = app.bridge.edits[0]
+    assert "box" not in fields and fields["strip"] == "1" and fields["smiles"] == "CCO"
+    inline = tuple(int(n) for n in fields["inline"].split(","))
+    at = tuple(int(n) for n in fields["at"].split(","))
+    assert at == (top, 5, 6, 20) and inline[:2] == (top, 3) and inline[2] >= 8 and inline[3] >= 40 and top >= 3  # room above
+    app.bridge.written.clear()
+    app.event({"type": "text", "delta": "meanwhile"})  # the app draws nothing over the editor
+    assert app.bridge.written == []
+    frozen = app.editing["frozen"]
+    app.edit_answer("0 S1\n\x1b]5523;repaint\x1b\\\x1b[3;4H   \x1b]5523;tools=0\x1b\\")
+    written = app.bridge.written[-1]
+    assert written.startswith("\x1b[1;1H" + frozen[0]) and written.endswith("\x1b[3;4H   ")  # the screen again, then the editor
+    assert "5523" not in written and app.tools_shown is False
+    app.key("\x11")
+    app.edit_answer("1 \nOCC")
+    app.edit_answer("3 \n")
+    assert app.editing is None and "\x1b[?1003l\x1b[?1002h" in "".join(app.bridge.written) and "edited #1" in app.input
+    app.key("\x15/edit 1\r")
+    assert app.bridge.edits[-1]["strip"] == "0"  # the tools stay put away, as the user left them
+
+
+def test_the_agent_marks_a_molecule_and_its_notes_hang_in_bubbles_beside_it(app):
+    show_molecule(app)
+    app.event({"type": "tool_use", "id": "k1", "name": "tui.mark",
+               "input": {"mol": 1, "smarts": "CO", "note": "the alcohol", "highlight": "green"}})
+    request = app.bridge.pictures[-1]
+    assert request["mark"] == {"smarts": "CO", "note": "the alcohol", "highlight": "green"} and request["tool"] == "k1"
+    assert "Mark(mol 1: the alcohol)" in screen(app) and app._tool("k1").state == "running"
+    answer = {"png": "C" * 10, "cols": 20, "rows": 6, "smiles": "CCO |atomProp:1.atomNote.the alcohol|", "marked": [1, 2],
+              "notes": [{"atom": 1, "text": "the alcohol", "row": 2}]}
+    app.picture_answer(json.dumps(request), json.dumps(answer))
+    assert app.bridge.results[-1] == ("k1", {"marked": [1, 2], "smiles": answer["smiles"]})
+    assert app.molecules[0].smiles == answer["smiles"]
+    from molterm_tui.screen import cells
+    lines = ["".join(text[:1] for _, text in cells(line)) for line in app.lines()[0]]  # a character a column
+    top = app.placed[1][0]
+    assert lines[top + 2][25:29] == "───┤" and "the alcohol" in lines[top + 2]  # the leader carried on to the bubble, beside it
+    assert lines[top + 1][28] == "╭" and lines[top + 3][28] == "╰"
+    app.event({"type": "tool_use", "id": "k2", "name": "tui.mark", "input": {"mol": 9}})
+    assert app.bridge.results[-1] == ("k2", {"error": "There is no molecule 9."})
+    app.event({"type": "tool_use", "id": "k3", "name": "tui.mark", "input": {"mol": 1, "smarts": "["}})
+    app.picture_failed(json.dumps(app.bridge.pictures[-1]), "That SMARTS can't be read.")
+    assert app.bridge.results[-1] == ("k3", {"error": "That SMARTS can't be read."})
+
+
+def test_the_agent_highlights_text_with_a_note_under_it(app):
+    app.event({"type": "text", "delta": "The amide is the part to watch."})
+    app.event({"type": "text_end"})
+    app.event({"type": "tool_use", "id": "t1", "name": "tui.mark", "input": {"text": "the  amide", "note": "here"}})
+    assert app.bridge.results[-1] == ("t1", {"ok": "Highlighted \"the amide\" with a note"})
+    lines, _ = app.lines()
+    row = next(i for i, line in enumerate(lines) if "The amide is" in strip(line))
+    assert "\x1b[48;2;94;78;28m" in lines[row]  # yellow behind it
+    assert strip(lines[row + 1])[:8] == "╭─┴────╮" and "│ here │" in strip(lines[row + 2])  # the bubble's tail points up at it
+    app.event({"type": "tool_use", "id": "t2", "name": "tui.mark", "input": {"text": "nowhere to be found"}})
+    assert app.bridge.results[-1][1] == {"error": "\"nowhere to be found\" isn't in the transcript."}
+    app.event({"type": "tool_use", "id": "t3", "name": "tui.mark", "input": {"text": "", "clear": True}})
+    assert app.highlights == []
+
+
+def test_dragging_across_text_highlights_it_and_puts_it_in_the_message(app):
+    app.event({"type": "text", "delta": "Imatinib binds the kinase in its inactive form."})
+    app.event({"type": "text_end"})
+    lines, _ = app.lines()
+    row = next(i for i, line in enumerate(lines) if "Imatinib binds" in strip(line))
+    col = strip(lines[row]).index("the kinase")
+    app.key(f"\x1b[<0;{col + 1};{row + 1}M")
+    app.key(f"\x1b[<32;{col + 10};{row + 1}M")
+    assert "\x1b[48;2;70;70;84m" in app.lines()[0][row]  # the selection, while it is dragged
+    app.key(f"\x1b[<0;{col + 10};{row + 1}m")
+    assert app.input == "⟦highlighted: \"the kinase\"⟧ " and app.highlights[0].phrase == "the kinase"
+    assert "\x1b[48;2;32;62;104m" in app.lines()[0][row]  # blue, the user's
+    app.key(f"\x1b[<0;{col + 3};{row + 1}M\x1b[<0;{col + 3};{row + 1}m")  # a click on it takes it away
+    assert app.highlights == []
+    from molterm_tui.app import QUOTED
+    assert QUOTED.findall(app.input) == ["the kinase"]
+
+
+def test_overlays_keep_the_styles_around_them():
+    from molterm_tui.screen import overlay, paint
+    line = "\x1b[31mred text here\x1b[0m"
+    assert strip(overlay(line, 4, "XX")) == "red XXxt here"
+    assert overlay(line, 4, "XX").endswith("\x1b[0m\x1b[31mxt here\x1b[0m")
+    assert strip(overlay("ab", 5, "Z")) == "ab   Z"
+    assert paint("abcdef", 1, 3, "\x1b[44m") == "a\x1b[0m\x1b[44mbc\x1b[0mdef"

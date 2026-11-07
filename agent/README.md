@@ -49,8 +49,9 @@ The TUI tools, which run in the browser:
 
 | tool | input | result |
 |---|---|---|
-| `tui.show` | `title`, and `image` (`png` as base64, `cols`, `rows`) and/or `body` (text, ANSI colours allowed); `smiles` makes the picture that molecule, which the user can edit | `{"shown": true, "lines"}` |
+| `tui.show` | `title`, and `image` (`png` as base64, `cols`, `rows`) and/or `body` (text, ANSI colours allowed); `smiles` makes the picture that molecule, which the user can edit | `{"shown": true, "lines"}`, with `"mol"`, its number, for a molecule |
 | `tui.ask` | `question`, `options` | `{"choice", "index"}`, or `{"choice": null, "skipped": true}` on Esc |
+| `tui.mark` | `mol` and `atoms` (indices in its SMILES) or `smarts`; or `text`. Optional `highlight` (yellow, green, blue, pink), `note`, `clear` | for a molecule `{"marked", "smiles"}`; for text `{"ok"}`; `{"error"}` if there is no such molecule or text |
 
 Tools whose names don't start with `tui.` are the agent's own, and the page only shows their result. `GET /api/v1/tools` lists the
 demo agent's.
@@ -66,8 +67,8 @@ scrolls, crops and redraws with the transcript although the TUI repaints the who
 
 | path | job |
 |---|---|
-| `tui/molterm_tui/app.py` | the interface: transcript, tool calls, spinner, input box, questions, molecules and their editing; keys and events in, frames out |
-| `tui/molterm_tui/keys.py`, `screen.py` | the terminal's key sequences and mouse reports; measuring, wrapping and styling text |
+| `tui/molterm_tui/app.py` | the interface: transcript, tool calls, spinner, input box, questions, molecules and their editing, marks and bubbles; keys and events in, frames out |
+| `tui/molterm_tui/keys.py`, `screen.py` | the terminal's key sequences and mouse reports; measuring, wrapping and styling text, and drawing over styled text (bubbles, highlights) |
 | `tui/molterm_tui/kitty.py` | Kitty pictures: sending one, and its placeholder lines |
 | `server/app.py` | Flask: the page, the TUI's files for Pyodide, sessions and their streams, and the way through to molterm's editor |
 | `server/sessions.py` | a session: event log, inbox, tool results, interrupts |
@@ -80,30 +81,49 @@ scrolls, crops and redraws with the transcript although the TUI repaints the who
 
 A picture shown with its `smiles` is a molecule the TUI keeps: numbered (`mol 1` beside its title), and placed, as the TUI knows which
 rows and columns each one covers on the screen. Clicking one (the TUI turns on the terminal's mouse reporting), or `/edit N` (`/edit`
-alone takes the last), opens molterm's editor over it, in place: a compact version of `molterm edit` in a box over the picture, with a
-strip of tools along its top (selection, eraser, text, bonds, charges, rings) instead of the menu bar and palette. The ChemDraw keys
-work on the atom or bond under the pointer, and the right button's menus have the rest, annotations included: highlights and notes. The
-transcript holds still meanwhile.
+alone takes the last), opens molterm's editor on it, inline: the drawing stays where the picture was, at its scale, and a strip of
+tools (selection, eraser, text, bonds, charges, rings) floats over the text above it, with one line for the status and the Done,
+Cancel and tools buttons. F2 or the tools button puts the tools away, for someone who knows the keys, and the TUI remembers that for
+the next edit. The ChemDraw keys work on the atom or bond under the pointer, and the right button's menus have the rest, annotations
+included: highlights and notes. The transcript holds still meanwhile. `/edit N box`, or `/editor box` for every click, opens the
+compact editor in a box over the picture instead.
 
-**Done** (Ctrl-Q) closes the box, redraws the molecule as edited (`mol 1 · edited`), and puts it into the input box as context for the
-next message, `⟦mol 1 Imatinib, edited: <CXSMILES>⟧`, where the CXSMILES carries the annotations. The user types around it and sends it
-as usual; the demo agent finds it in the message (`server/agent.py`, `_EDITED`), says what was noted, and computes the edited
-molecule's properties. **Cancel** (Ctrl-C) leaves everything as it was.
+**Done** (Ctrl-Q) redraws the molecule as edited (`mol 1 · edited`), and puts it into the input box as context for the next message:
+the box shows `⟦mol 1 Imatinib, edited #1⟧`, and the message carries `⟦mol 1 Imatinib, edited: <CXSMILES>⟧`, where the CXSMILES has
+the annotations. The demo agent finds it (`server/agent.py`, `_EDITED`), says what was noted, and computes the edited molecule's
+properties. **Cancel** (Ctrl-C) leaves everything as it was.
 
-The editor runs on the molterm server (`POST /api/v1/edit` with `compact=1` and a `box`), as it does for `molterm tui`. The page can't
+The editor runs on the molterm server (`POST /api/v1/edit` with `inline` and `at`, or `compact=1` and a `box`), as it does for
+`molterm tui`. Inline, the screen beyond the drawing and the strip stays the TUI's: the editor's output asks for it to be drawn again
+where a menu closed over it (`ESC ] 5523;repaint`), which the TUI does from the screen as it was when the edit began. The page can't
 reach molterm, so the agent server passes the steps on: `POST /api/v1/sessions/<id>/edit` (the editor's fields, as JSON; its answer as
-text) and `POST /api/v1/sessions/<id>/picture` (`{"smiles", "cols"}`, for the redrawn picture). The TUI sends one step at a time,
-holding what is typed or clicked meanwhile for the next. For the terminal to take the TUI's mouse modes, the page is restty's PTY: what
-the TUI writes comes out of a transport the page makes (`pty` in `page.js`), and the terminal's input, keys and mouse reports alike, goes
-back into the TUI.
+text). The TUI sends one step at a time, holding what is typed or clicked meanwhile for the next. For the terminal to take the TUI's
+mouse modes, the page is restty's PTY: what the TUI writes comes out of a transport the page makes (`pty` in `page.js`), and the
+terminal's input, keys and mouse reports alike, goes back into the TUI.
+
+### Pointing things out
+
+A molecule's annotations, the user's from the editor or the agent's from `tui.mark`, are drawn by molterm (`POST /api/v1/callouts`,
+through `POST /api/v1/sessions/<id>/picture`): the highlights in the picture, and, for each note, a leader from its atom to the
+picture's right edge, ending in the middle of a row. The TUI carries the leader on in text to a speech bubble with the note in it,
+beside the picture, turning down or up when bubbles would overlap. Bubbles and highlights are drawn over the transcript each frame, so
+they scroll with it.
+
+Text can be pointed at too. The agent's `tui.mark` with `text` highlights those words where they last appear (the user's own words
+or the agent's), with a note in a bubble hanging under them. The user drags across text: the selection shows as it is dragged, then
+turns blue, and `⟦highlighted: "the words"⟧` goes into the input box; a click on it takes the highlight away. The demo agent shows
+both: it marks a part of the drug it draws, and highlights its own words about dragging, and when the user sends a highlight it says
+what they pointed at and marks it as seen.
 
 To plug in a real model, replace `EmulatedAgent` with one that sends the transcript and `TOOLS` to the model, and turns its tool calls
 into the same `use_tui` and `use_server_tool` calls: the events, the page and the TUI stay as they are.
 
 ## Status
 
-Verified (2026-11-06): `make test`, 41 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; a molecule
-kept, placed, clicked, edited in a box, and put into the input on Done, or left on Cancel; the server's sessions, stream, tool answers,
+Verified (2026-11-07): `make test`, 46 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; a molecule
+kept, placed, clicked, edited inline or in a box, and put into the input on Done, or left on Cancel; the inline editor's repaints and
+its tools put away and remembered; the agent's marks on a molecule, with their bubbles beside it, and on text, with a bubble under it;
+a drag that highlights text and puts it into the message; the server's sessions, stream, tool answers,
 interrupts, the editor's way through to molterm, and the agent's script, its review of an edited molecule included, with molterm stubbed; an agent elsewhere driving a session over a real HTTP port, the token checks, `AGENT`, and
 the Claude example's tool loop and interrupt handling with a stand-in client). In Chrome: the page starts Pyodide and a session, the greeting streams in, "show me a
 drug" brings up the agent's question in place of the input, the chosen drug is drawn by molterm on the server and shown in the
@@ -114,7 +134,13 @@ joined at `/?session=<id>`, counted words, showed a text panel, asked for a colo
 run by the server (`AGENT=examples.hello_agent:HelloAgent`) did the same. In headless Chromium against the dev services: clicking a
 drawn molecule opens the compact editor in place; the hexagon from its strip and a click add a ring; `n` over the oxygen makes it a
 nitrogen; the right button's menu opens inside the box; Done redraws the molecule and puts `⟦mol 1 CCO, edited: CCN⟧` into the input, and
-sending it brings the edited molecule's properties.
+sending it brings the edited molecule's properties. Then (2026-11-07), with imatinib: the agent's mark highlights the
+N-methylpiperazine in the picture, with its note in a bubble at the end of a leader, and its words about dragging get a highlight and
+a bubble under them; a click on the picture edits it inline, the drawing over the picture at about its place and size, the strip
+above it over the transcript; F2 leaves only its line and brings the transcript back under it; the right button's menu spreads over
+the transcript and Escape restores it; `n` over the carbonyl oxygen and Done redraw imatinib as edited, its highlight and bubble kept,
+and put its tag into the input. A drag across "methylpiperazine" showed the selection, turned it blue and put it into the input, and
+sending it made the agent mark it as seen.
 
 ## Open issues
 
@@ -123,9 +149,15 @@ sending it brings the edited molecule's properties.
 - Sessions are in one process's memory: a restart ends them, and the service can't run more than one worker.
 - A session link is its only key on the user's side: anyone with `/?session=<id>` can read and type in it. An agent elsewhere that
   keeps polling keeps its session open past the 30 minutes.
-- While the mouse is reported to the TUI, the terminal doesn't select text with it.
-- The editor's box covers the transcript below a small molecule, as it needs room for the tools and the menus; that part of the
-  transcript shows again on Done or Cancel. Resizing the window while editing cancels the edit.
+- While the mouse is reported to the TUI, the terminal doesn't select text with it; a drag highlights instead, and there is no copy.
+- Inline, the drawing gets at least 8 rows and 40 columns, so around a small molecule it hides some of the transcript until Done;
+  the box editor covers more. The drawing matches the picture's place and scale closely, not exactly (the editor lays atoms out
+  itself, and draws them its own way). Resizing the window while editing cancels the edit.
+- While an inline edit is open the TUI draws nothing of its own: the agent's events wait, as does the spinner, until Done or Cancel.
+- A note's leader is a straight line to the picture's right edge, and may cross other bonds. Bubbles need about 37 columns beside
+  the picture, which is drawn narrower to leave them; in a narrower window the notes aren't shown (the highlights still are).
+- A text highlight is found by its words, so the same words elsewhere in that block are highlighted too. Highlights are of the
+  user's, the agent's and notes' text, not of tool lines or panels.
 - A molecule's tag (`mol N`) is the TUI's own: a model sees it only in the context of a message, not in its own tool calls.
 - DejaVu Sans Mono has no ⏺ or ⎿, so the transcript uses ● and └ for Claude Code's marks.
 - Pyodide takes a few seconds to load on the first visit (about 12 MB, cached after).

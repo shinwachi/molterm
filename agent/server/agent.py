@@ -11,6 +11,13 @@ import re
 import requests
 from tuiagent import TuiAgent
 
+# what the demo agent points out on each drug, with tui.mark: (SMARTS, note)
+FEATURES = {
+    "Aspirin": ("CC(=O)Oc", "acetyl ester: acetylates COX"),
+    "Caffeine": ("Cn", "N-methyls"),
+    "Imatinib": ("N1CCN(C)CC1", "N-methylpiperazine: for solubility"),
+    "Penicillin G": ("O=C1CCN1", "β-lactam: acylates PBPs"),
+}
 SAMPLES = {
     "Aspirin": "CC(=O)Oc1ccccc1C(=O)O",
     "Caffeine": "Cn1cnc2c1c(=O)n(C)c(=O)n2C",
@@ -22,6 +29,7 @@ _ELEMENTS = re.compile(r"Cl|Br|[BCNOSPFI]|[cnosp]")
 # a molecule the user edited where it was shown, as the TUI puts it in their message (molterm_tui.app.context)
 _EDITED = re.compile(r"⟦mol (\d+) (.*?), edited: ([^⟧]+)⟧")
 _NOTES = re.compile(r"atomNote\.([^:|.,]+)")
+_HIGHLIGHTED = re.compile(r"⟦highlighted: \"(.*?)\"⟧")
 # the page's terminal colours, for molterm to fit its picture to, and the pixels a picture gets per column (a cell is twice as tall)
 TERMINAL = {"background": "161615", "foreground": "f0efec"}
 CELL_PIXELS = 16
@@ -57,10 +65,26 @@ class Molterm:
         return {"png": base64.b64encode(png).decode("ascii"), "cols": int(response.headers.get("X-Molterm-Cols", cols)),
                 "rows": max(math.ceil(height / (2 * CELL_PIXELS)), 1)}
 
-    EDIT_FIELDS = ("state", "smiles", "events", "cols", "rows", "box", "title", "cell_width", "cell_height", "close")
+    def callouts(self, smiles, cols, mark=None, clear=False, rows=PICTURE_ROWS):
+        """The molecule's picture with its annotations, its notes left out for the page to put in bubbles beside it, and `mark` added
+        (molterm's /api/v1/callouts): (status, its answer as a dict)."""
+        body = {"input": smiles, "cols": max(min(cols, 100), 20), "rows": rows, "cell_width": CELL_PIXELS, **TERMINAL}
+        if mark:
+            body["mark"] = mark
+        if clear:
+            body["clear"] = True
+        response = requests.post(f"{self.url}/api/v1/callouts", json=body, timeout=self.timeout)
+        try:
+            return response.status_code, response.json()
+        except ValueError:
+            return response.status_code, {"error": {"message": response.text.strip()[:200]}}
+
+    EDIT_FIELDS = ("state", "smiles", "events", "cols", "rows", "box", "inline", "at", "strip", "title", "cell_width", "cell_height",
+                   "close")
 
     def edit(self, fields):
-        """One step of molterm's editor, compact, in a box (see molterm's /api/v1/edit), with this page's colours: (status, text)."""
+        """One step of molterm's editor, in place: compact in a box, or inline (see molterm's /api/v1/edit), with this page's colours:
+        (status, text)."""
         form = {name: str(fields[name]) for name in self.EDIT_FIELDS if fields.get(name) is not None}
         response = requests.post(f"{self.url}/api/v1/edit", data={**form, **TERMINAL, "compact": "1"}, timeout=self.timeout)
         return response.status_code, response.text
@@ -112,8 +136,11 @@ class EmulatedAgent(TuiAgent):
     def respond(self, text, cols):
         words = text.lower()
         edited = _EDITED.search(text)
+        pointed = _HIGHLIGHTED.findall(text)
         if edited:
             self.review(edited.group(2), edited.group(3).strip(), cols)
+        elif pointed:
+            self.point_back(pointed, _HIGHLIGHTED.sub("", text).strip())
         elif looks_like_smiles(text):
             self.draw(text, None, cols)
         elif any(w in words for w in ("drug", "molecule", "show", "draw", "example", "pick")):
@@ -145,9 +172,14 @@ class EmulatedAgent(TuiAgent):
             self.say("molterm couldn't draw it. If that was a SMILES, check it for typos; otherwise the molterm server may be down.")
             return
         # with its SMILES, the TUI knows the picture is this molecule, and lets the user edit and annotate it there
-        self.use_tui("tui.show", {"title": name or smiles, "image": picture, "smiles": smiles}, "Showing")
+        shown = self.use_tui("tui.show", {"title": name or smiles, "image": picture, "smiles": smiles}, "Showing")
         self.say("There it is, drawn by RDKit and shown with the Kitty graphics protocol: oxygen red, nitrogen blue. Click it to "
                  "edit or annotate it, and I'll look at your version.")
+        feature = FEATURES.get(name)
+        if feature and shown.get("mol"):  # point out a part of it, in a bubble, and the words that say so
+            self.mark(mol=shown["mol"], smarts=feature[0], highlight="yellow", note=feature[1])
+            self.say(f"I've pointed out one part of it: the {feature[1].split(':')[0]}. Drag across any text to point at it yourself.")
+            self.mark(text="drag across any text", highlight="green", note="like this: it goes into your message")
         answer = self.use_tui("tui.ask", {"question": f"Do you want the properties of {name or 'this molecule'} too?",
                                           "options": ["Yes", "No"]}, "Waiting for you")
         if answer.get("index") != 0:
@@ -166,6 +198,14 @@ class EmulatedAgent(TuiAgent):
             said += " I see the atoms you highlighted."
         self.say(said + " Here's what your version comes to.")
         self.properties(smiles, f"{name}, edited")
+
+    def point_back(self, pointed, rest):
+        """The user highlighted text in the transcript and sent it: say what they pointed at, and mark it as seen."""
+        for text in pointed:  # before saying it again, so that it is the user's words that are marked
+            self.mark(text=text, highlight="green", note="seen")
+        quoted = ", ".join(f"\"{text}\"" for text in pointed)
+        self.say(f"You pointed at {quoted}" + (f" and said \"{rest}\"." if rest else ".") + " A model would take that as the "
+                 "part of the conversation you mean; I'm only a script, so I've marked it as seen.")
 
     def properties(self, smiles, name):
         values = self.use_server_tool("molterm.properties", {"smiles": smiles}, lambda: self.molterm.properties(smiles), "Computing")

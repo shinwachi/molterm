@@ -195,11 +195,17 @@ def test_the_editor_and_pictures_go_through_the_session(client, monkeypatch):
         return 200, "0 STATE\n\x1b[2;1Hdrawn"
 
     monkeypatch.setattr(server.molterm, "edit", edit)
-    monkeypatch.setattr(server.molterm, "picture", lambda smiles, cols: {"png": "x", "cols": cols, "rows": 3})
+    asked = []
+    monkeypatch.setattr(server.molterm, "callouts", lambda smiles, cols, mark, clear: asked.append((mark, clear))
+                        or ((200, {"png": "x", "cols": cols, "rows": 3}) if smiles != "bad" else (400, {"error": {"message": "nope"}})))
     session_id = client.post("/api/v1/sessions").json["id"]
     response = client.post(f"/api/v1/sessions/{session_id}/edit", json={"smiles": "CCO", "cols": 100, "rows": 40, "box": "3,0,16,99"})
     assert response.status_code == 200 and response.text == "0 STATE\n\x1b[2;1Hdrawn" and sent[0]["smiles"] == "CCO"
     assert client.post(f"/api/v1/sessions/{session_id}/picture", json={"smiles": "CCO", "cols": 50}).json["cols"] == 50
+    marked = client.post(f"/api/v1/sessions/{session_id}/picture", json={"smiles": "CCO", "cols": 50, "mark": {"atoms": [2]}, "clear": True})
+    assert marked.status_code == 200 and asked[-1] == ({"atoms": [2]}, True)
+    failed = client.post(f"/api/v1/sessions/{session_id}/picture", json={"smiles": "bad", "cols": 50})
+    assert failed.status_code == 400 and failed.json["error"]["message"] == "nope"
     assert client.post("/api/v1/sessions/nope/edit", json={}).status_code == 404
     assert client.post(f"/api/v1/sessions/{session_id}/picture", json={"cols": 50}).status_code == 400
 

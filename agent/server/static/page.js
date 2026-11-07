@@ -125,8 +125,9 @@ const bridge = {
     edit: json => post(`/api/v1/sessions/${session}/edit`,
                        { ...JSON.parse(json), cell_width: Math.round(cell.width), cell_height: Math.round(cell.height) })
         .then(text => app.edit_answer(text), error => app.edit_failed(error.message)),
-    picture: (smiles, cols, number) => post(`/api/v1/sessions/${session}/picture`, { smiles, cols })
-        .then(text => app.picture_answer(number, text), error => app.event(JSON.stringify({ type: "error", message: error.message }))),
+    // a molecule's picture with its annotations, the notes left for the TUI to put in bubbles: the TUI's request comes back with the answer
+    picture: request => post(`/api/v1/sessions/${session}/picture`, JSON.parse(request))
+        .then(text => app.picture_answer(request, text), error => app.picture_failed(request, error.message)),
 };
 
 // a POST whose answer is wanted as text, with the server's error message if it failed

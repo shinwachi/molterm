@@ -7,7 +7,8 @@
   POST /api/v1/sessions/<id>/interrupt        stop the agent's turn
   GET  /api/v1/sessions/<id>                  whether the session is open, and where its agent runs
   POST /api/v1/sessions/<id>/edit             one step of molterm's editor, for a molecule edited where it's shown (see the TUI)
-  POST /api/v1/sessions/<id>/picture          {"smiles", "cols"}: a molecule's picture, after an edit  -> {"png", "cols", "rows"}
+  POST /api/v1/sessions/<id>/picture          {"smiles", "cols", "mark", "clear"}: a molecule's picture with its annotations, the
+                                               notes left for the page's bubbles  -> molterm's /api/v1/callouts answer
 
 For an agent that runs elsewhere (sdk/tuiagent/remote.py; see TUTORIAL.md), with the session's token as "Authorization: Bearer":
   POST /api/v1/agents/sessions                       a session with no agent of the server's   -> {"id", "token", "url"}
@@ -193,13 +194,18 @@ def edit(session_id):
 def picture(session_id):
     sessions.get(session_id)
     data = body()
-    smiles, cols = data.get("smiles"), data.get("cols", 72)
+    smiles, cols, mark = data.get("smiles"), data.get("cols", 72), data.get("mark")
     if not isinstance(smiles, str) or not smiles or len(smiles) > MAX_TEXT or not isinstance(cols, int):
         raise SessionError("bad_request", "Send the molecule as \"smiles\", and \"cols\".")
+    if mark is not None and not isinstance(mark, dict):
+        raise SessionError("bad_request", "mark must be an object.")
     try:
-        return jsonify(molterm.picture(smiles, cols))
-    except (requests.RequestException, ValueError) as error:
+        status, answer = molterm.callouts(smiles, cols, mark, data.get("clear") is True)
+    except requests.RequestException as error:
         raise SessionError("unavailable", f"molterm couldn't draw it: {error}", 502)
+    if status != 200:  # molterm's own words, such as a SMARTS it can't read
+        raise SessionError("bad_request", answer.get("error", {}).get("message", "molterm couldn't draw it."))
+    return jsonify(answer)
 
 
 # -- for an agent that runs elsewhere ------------------------------------------------------------------------------------------------

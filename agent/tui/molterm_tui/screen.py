@@ -84,3 +84,59 @@ def pad(text, cols):
     """A line padded with spaces to exactly `cols` columns (cut if longer)."""
     text = truncate(text, cols)
     return text + " " * max(cols - width(text), 0)
+
+
+# Overlays: a line taken apart into its cells, changed, and put back together, so that something can be drawn over styled text.
+
+SGR = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def cells(line):
+    """A line as its cells, [style, text]: the style is the SGR escapes in force there (since the last reset), the text a character
+    and the combining marks after it, or "" for the second column of a wide character. Escapes other than SGR are dropped."""
+    out, state, i = [], "", 0
+    while i < len(line):
+        match = ANSI.match(line, i)
+        if match:
+            code = match.group()
+            if SGR.fullmatch(code):
+                state = "" if code in (RESET, "\x1b[m") else state + code
+            i = match.end()
+            continue
+        char = line[i]
+        i += 1
+        w = char_width(char)
+        if w == 0 and out:
+            out[-1][1] += char
+            continue
+        out.append([state, char])
+        if w == 2:
+            out.append([state, ""])
+    return out
+
+
+def join(cells_):
+    out, state = [], ""
+    for cell_style, text in cells_:
+        if cell_style != state:
+            out.append(RESET + cell_style)
+            state = cell_style
+        out.append(text)
+    return "".join(out) + (RESET if state else "")
+
+
+def paint(line, start, end, code):
+    """The line with columns start to end (not included) given `code` too, such as a background."""
+    parts = cells(line)
+    parts += [["", " "] for _ in range(end - len(parts))]
+    for cell in parts[max(start, 0):end]:
+        cell[0] += code
+    return join(parts)
+
+
+def overlay(line, col, text):
+    """The line with `text` (escapes allowed) written over it from column `col`."""
+    parts, new = cells(line), cells(text)
+    parts += [["", " "] for _ in range(col + len(new) - len(parts))]
+    parts[col:col + len(new)] = new
+    return join(parts)

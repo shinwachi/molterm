@@ -1439,3 +1439,73 @@ def test_a_compact_editor_has_a_strip_of_tools_over_the_drawing_and_no_menu_bar(
     status, text, _ = editor.step(text, "", f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m\x1b[<0;20;20M\x1b[<0;20;20m", 120, 40, CW, CH, box=box, compact=True)
     status, _, smiles = editor.step(text, "", "\x11", 120, 40, CW, CH, box=box, compact=True)
     assert status == editor.QUIT and "c1ccccc1" in smiles and "CCO" in smiles.replace("OCC", "CCO")
+
+
+def test_an_inline_editor_draws_over_the_picture_with_its_tools_floating_over_the_host_text():
+    picture, place = (12, 5, 6, 20), (12, 3, 8, 44)  # the picture, and the drawing's place around it
+    ui = editor.Layout(100, 40, CW, CH, inline=place)
+    assert ui.inline and ui.hosted and (ui.top, ui.left, ui.canvas_rows, ui.canvas_cols) == place
+    assert (ui.palette_top, ui.bar_row, ui.palette_left) == (9, 11, 3) and ui.strip_rows() == [9, 10, 11]  # above, the line next to it
+    assert editor.fits(ui) and ui.palette_at(3 + 1, 9) == editor._ICON_NAMES.index("select")
+    assert [name for name, _, _ in ui.buttons()] == ["tools", "cancel", "done"] and ui.button_at(ui.buttons()[2][2] + 1, 11) == "done"
+    status, text, output = editor.step("", "CCO", "", 100, 40, CW, CH, title="mol 1 · Ethanol", inline=place, at=picture)
+    assert status == editor.CONTINUE and editor.HOST_REPAINT in output and "Done ^Q" in output and "mol 1 · Ethanol" in output
+    assert "\x1b[13;6H" not in output.split(editor.HOST_REPAINT)[0]  # nothing of its own before the host has drawn the screen
+    view = editor.decode(text)["view"]
+    centre_col, centre_row = ui.to_cell(editor.decode(text), view[0], view[1])
+    atoms = editor.decode(text)["atoms"]
+    middle = ((min(a[2] for a in atoms) + max(a[2] for a in atoms)) / 2, (min(a[3] for a in atoms) + max(a[3] for a in atoms)) / 2)
+    col, row = ui.to_cell(editor.decode(text), *middle)
+    assert abs(col - (5 + 10)) < 0.01 and abs(row - (12 + 3)) < 0.01  # the molecule's middle is the picture's
+    assert editor.decode(text)["view"][2] <= editor.graphics.BOND_CELLS  # and no larger than molterm drew it
+    # F2 puts the tools away: the host is told, and the line alone stays, next to the drawing
+    status, text, output = editor.step(text, "", "\x1bOQ", 100, 40, CW, CH, inline=place, at=picture)
+    assert editor.HOST_TOOLS.format(0) in output and editor.HOST_REPAINT in output and "▴ tools F2" in output
+    assert editor.decode(text)["strip"] is False
+    hidden = editor.Layout(100, 40, CW, CH, inline=place, strip=False)
+    assert hidden.strip_rows() == [11] and hidden.palette_rows == 0
+    # a right click's menu may cover the host's text: closing it asks the host to draw it again
+    status, text, output = editor.step(text, "", "\x1b[<2;20;15M\x1b[<2;20;15m", 100, 40, CW, CH, inline=place, at=picture)
+    assert "Highlight" in output or "Undo" in output
+    status, text, output = editor.step(text, "", "\x1b", 100, 40, CW, CH, inline=place, at=picture)
+    assert editor.HOST_REPAINT in output
+    status, _, smiles = editor.step(text, "", "\x11", 100, 40, CW, CH, inline=place, at=picture)
+    assert status == editor.QUIT and smiles.strip() in ("CCO", "OCC")
+    # beginning with the tools away, and a picture at the top of the screen: the strip goes below the drawing
+    status, text, output = editor.step("", "CCO", "", 100, 40, CW, CH, inline=(1, 3, 8, 44), strip=False)
+    assert status == editor.CONTINUE and editor.Layout(100, 40, CW, CH, inline=(1, 3, 8, 44), strip=False).bar_row == 0
+    low = editor.Layout(100, 40, CW, CH, inline=(1, 3, 8, 44))
+    assert (low.bar_row, low.palette_top) == (9, 10)
+
+
+def test_callouts_draw_highlights_and_leave_the_notes_to_the_host():
+    import callouts
+    result = callouts.picture("CC(=O)Nc1ccc(O)cc1", 60, 16, mark={"smarts": "C(=O)N", "highlight": "yellow", "note": "amide"})
+    assert result["marked"] == [1, 2, 3] and result["notes"][0]["atom"] == 1 and result["notes"][0]["text"] == "amide"
+    assert "atomNote.amide" in result["smiles"] and "molterm_highlight.yellow" in result["smiles"]
+    image = Image.open(BytesIO(base64.b64decode(result["png"])))
+    assert image.size == (result["cols"] * editor.graphics.CELL_PIXELS, result["rows"] * 2 * editor.graphics.CELL_PIXELS)  # whole cells
+    row = result["notes"][0]["row"]
+    pixel = image.getpixel((image.width - 1, int((row + 0.5) * 2 * editor.graphics.CELL_PIXELS)))
+    assert pixel[:3] == callouts.LEADER and pixel[3] == 255  # the leader reaches the right edge, in the middle of its row
+    again = callouts.picture(result["smiles"] + "", 60, 16, mark={"atoms": [6], "note": "phenol"})
+    assert sorted(n["text"] for n in again["notes"]) == ["amide", "phenol"]
+    rows = sorted(n["row"] for n in again["notes"])
+    assert rows[1] - rows[0] >= min(callouts.BUBBLE_ROWS, again["rows"] // 2)  # kept apart, for the bubbles
+    assert callouts.picture(again["smiles"], 60, 16, clear=True)["notes"] == []
+    assert callouts._rows([5, 5, 5], 6) == [0, 3, 5] or callouts._rows([5, 5, 5], 6)[-1] <= 5
+    for bad in ({"atoms": [99]}, {"smarts": "["}, {"atoms": [0], "highlight": "plaid"}):
+        with pytest.raises(callouts.CalloutError):
+            callouts.picture("CCO", 60, 16, mark=bad)
+
+
+def test_the_endpoints_edit_inline_and_draw_callouts(client):
+    status, state, output = split(client.post("/api/v1/edit", data=form(smiles="CCO", inline="12,3,8,44", at="12,5,6,20", strip="0")))
+    assert status == editor.CONTINUE and editor.HOST_REPAINT in output and "▴ tools F2" in output
+    assert client.post("/api/v1/edit", data=form(smiles="CCO", inline="12,3")).status_code == 400
+    answer = client.post("/api/v1/callouts", json={"input": "CCO", "cols": 40, "rows": 10, "mark": {"atoms": [2], "note": "OH"},
+                                                   "background": "161615", "foreground": "f0efec"})
+    assert answer.status_code == 200 and answer.json["notes"][0]["text"] == "OH" and answer.json["marked"] == [2]
+    assert client.post("/api/v1/callouts", json={"input": "CCO", "mark": {"smarts": "["}}).json["error"]["code"] == "bad_request"
+    assert client.post("/api/v1/callouts", json={"input": "not a molecule"}).status_code == 400
+    assert client.post("/api/v1/callouts", data="x").status_code == 400
