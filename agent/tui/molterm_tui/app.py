@@ -1,8 +1,9 @@
 """A Claude Code-like terminal interface for a server-side agent, written to run in Pyodide in the browser (or any Python).
 
-The page hands this app the terminal's keys (`key`) and the agent's events from the server (`event`), and gives it a `bridge` to talk
-back through: `write(text)` prints to the terminal, `post_message(text, cols)` sends what the user typed, `post_tool_result(id, json)`
-answers one of the agent's TUI tools, and `interrupt()` stops the agent's turn. The app redraws the whole screen after each change.
+The page hands this app the terminal's keys (`key`), the agent's events from the server (`event`), and the wheel (`wheel`) when the
+terminal keeps it rather than reporting it as a mouse event, and gives it a `bridge` to talk back through: `write(text)` prints to the
+terminal, `post_message(text, cols)` sends what the user typed, `post_tool_result(id, json)` answers one of the agent's TUI tools, and
+`interrupt()` stops the agent's turn. The app redraws the whole screen after each change.
 
 Molecules: a picture shown with a `smiles` is a molecule the app keeps (`molecules`), numbered from 1, and it knows where each is on the
 screen (`placed`). Clicking one, or /edit N, edits it where it is, with molterm's editor running on the molterm server through
@@ -207,6 +208,18 @@ class App:
         if self.busy:
             self.frame += 1
             self.draw()
+
+    def wheel(self, lines):
+        """The transcript scrolled by `lines`, positive back through it.
+
+        A terminal that reports the mouse sends the wheel through `key` like any other input, and `_mouse` handles it. A page whose
+        terminal is one panel among others may keep the wheel for itself instead, and scroll the transcript by calling this. While a
+        molecule is being edited the editor has the screen, and its drawing stays put, so the transcript doesn't move under it.
+        """
+        if self.editing:
+            return
+        self._scroll_by(lines)
+        self.draw()
 
     def key(self, data):
         if self.editing:  # everything goes to the editor, which answers with what to draw
@@ -667,13 +680,17 @@ class App:
 
     # -- keys and the mouse -----------------------------------------------------------------------------------------------------------
 
+    def _scroll_by(self, lines):
+        """Back through the transcript by `lines`, forward again if negative. draw() clamps it to the transcript there is."""
+        self.scroll = max(self.scroll + int(lines), 0)
+
     def _key(self, key):
         if key.name == "mouse":
             self._mouse(*key.mouse)
             return
         if key.name in ("pageup", "pagedown"):
             step = max(self.rows - 6, 1)
-            self.scroll = max(self.scroll + (step if key.name == "pageup" else -step), 0)
+            self._scroll_by(step if key.name == "pageup" else -step)
             return
         if key.name == "ctrl-l":
             self.bridge.write("\x1b[2J")
@@ -685,7 +702,7 @@ class App:
 
     def _mouse(self, button, col, row, pressed):
         if button in (64, 65):  # the wheel
-            self.scroll = max(self.scroll + (3 if button == 64 else -3), 0)
+            self._scroll_by(3 if button == 64 else -3)
             return
         if self.dragging:  # a bubble, moved with the pointer until let go
             d = self.dragging

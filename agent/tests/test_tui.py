@@ -281,6 +281,10 @@ def test_an_edit_that_fails_says_why_and_the_wheel_scrolls(app):
         app.event({"type": "text_end"})
     app.key("\x1b[<64;5;5M")
     assert app.scroll == 3
+    app.wheel(5)  # a page that keeps the wheel to itself scrolls the transcript by calling this
+    assert app.scroll == 8
+    app.wheel(-99)  # and never past the bottom of it
+    assert app.scroll == 0
 
 
 def test_a_click_edits_inline_with_the_drawing_over_the_picture_and_the_tools_floating_above(app):
@@ -511,3 +515,16 @@ def test_notes_made_while_editing_inline_hang_in_bubbles_beside_the_drawing_at_o
     app.edit_answer("0 S2\n\x1b]5523;notes=" + b64.b64encode(json.dumps({"edge": left + cols, "notes": []}).encode()).decode()
                     + "\x1b\\\x1b]5523;repaint\x1b\\")
     assert "the OH" not in strip(app.bridge.written[-1])  # gone with the note
+
+
+def test_the_pages_wheel_leaves_the_transcript_still_while_a_molecule_is_edited(app):
+    show_molecule(app)
+    for n in range(30):
+        app.event({"type": "text", "delta": f"line {n} "})
+        app.event({"type": "text_end"})
+    app.key("/edit 1\r")
+    app.edit_answer("0 S1\n")
+    top = app.editing["inline"][0]
+    scroll = app.scroll
+    app.wheel(5)
+    assert app.scroll == scroll and app.lines() and app.placed[1][0] == top  # the drawing's gap stays under the drawing
