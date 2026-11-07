@@ -546,7 +546,7 @@ def test_notes_made_while_editing_inline_hang_in_bubbles_beside_the_drawing_at_o
 
 
 def test_the_users_own_notes_and_highlights_are_blue_and_the_agents_notes_yellow(app):
-    from molterm_tui.app import NOTE_INK, USER_INK
+    from molterm_tui.app import NOTE_INK, USER_INK, USER_NOTE_BG, WHITE
     show_molecule(app)
     app.event({"type": "tool_use", "id": "k1", "name": "tui.mark", "input": {"mol": 1, "atoms": [1], "note": "theirs"}})
     answer = {"png": "C" * 10, "cols": 20, "rows": 8, "smiles": "CCO", "marked": [1],
@@ -556,7 +556,8 @@ def test_the_users_own_notes_and_highlights_are_blue_and_the_agents_notes_yellow
     theirs = next(line for line in lines if "theirs" in strip(line))
     mine = next(line for line in lines if "mine" in strip(line))
     assert NOTE_INK in theirs and USER_INK not in theirs
-    assert USER_INK + " mine" in mine.replace("\x1b[48;2;26;36;56m", "") or USER_INK in mine.split("mine")[0][-40:]  # its text blue too
+    assert USER_NOTE_BG + WHITE + "mine" in mine and USER_NOTE_BG + WHITE + "– ×" in next(  # white letters and controls, in blue
+        line for line in lines[lines.index(mine) - 2:lines.index(mine)] if "– ×" in strip(line))
     app.event({"type": "text", "delta": "Imatinib binds the kinase in its inactive form."})
     app.event({"type": "text_end"})
     lines, _ = app.lines()
@@ -580,3 +581,158 @@ def test_the_pages_wheel_leaves_the_transcript_still_while_a_molecule_is_edited(
     scroll = app.scroll
     app.wheel(5)
     assert app.scroll == scroll and app.lines() and app.placed[1][0] == top  # the drawing's gap stays under the drawing
+
+
+def press(app, row, col, button=0):
+    app.key(f"\x1b[<{button};{col + 1};{row + 1}M")
+
+
+def release(app, row, col, button=0):
+    app.key(f"\x1b[<{button};{col + 1};{row + 1}m")
+
+
+def move(app, row, col, button=0):
+    app.key(f"\x1b[<{button + 32};{col + 1};{row + 1}M")
+
+
+class Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+def reply(app, text):
+    app.event({"type": "text", "delta": text})
+    app.event({"type": "text_end"})
+
+
+def where(app, text):
+    lines = [strip(line) for line in app.lines()[0]]
+    row = next(i for i, line in enumerate(lines) if text in line)
+    return row, lines[row].index(text)
+
+
+def test_a_drag_takes_whole_words_and_a_pause_takes_exact_letters(app):
+    app.clock = clock = Clock()
+    reply(app, "Imatinib binds the kinase in its inactive form.")
+    row, col = where(app, "binds")
+    press(app, row, col + 2)  # in the middle of "binds"
+    move(app, row, col + 14)  # in the middle of "kinase"
+    assert "hold still for exact letters" in screen(app)
+    release(app, row, col + 14)
+    assert app.highlights[-1].phrase == "binds the kinase"  # whole words, not "nds the kin"
+    row, col = where(app, "inactive")
+    press(app, row, col + 2)
+    move(app, row, col + 5)
+    clock.now += 1  # held still
+    app.tick()
+    assert app.selecting["exact"] and "exact letters" in screen(app)
+    release(app, row, col + 5)
+    assert app.highlights[-1].phrase == "acti"
+
+
+def test_a_drag_across_several_replies_highlights_each_part_as_one(app):
+    reply(app, "The first reply ends here.")
+    reply(app, "The second one starts here.")
+    first, second = where(app, "ends here"), where(app, "second one")
+    press(app, *first)
+    move(app, second[0], second[1] + 3)
+    release(app, second[0], second[1] + 3)
+    assert [h.phrase for h in app.highlights] == ["ends here.", "The second"]
+    assert len({h.gid for h in app.highlights}) == 1 and [c.tag for c in app.chips] == ['⟦highlighted: "ends here. … The second"⟧']
+    click(app, first)  # a click on it takes the whole of it away
+    assert app.highlights == [] and app.chips == []
+
+
+def test_a_right_click_on_the_users_highlight_gives_it_handles_to_drag(app):
+    reply(app, "Imatinib binds the kinase in its inactive form.")
+    row, col = where(app, "the kinase")
+    press(app, row, col)
+    move(app, row, col + 9)
+    release(app, row, col + 9)
+    press(app, row, col + 2, 2)
+    release(app, row, col + 2, 2)
+    assert app.handles and app.highlights == []
+    lines = app.lines()[0]
+    assert strip(lines[row - 1])[col] == "●" and strip(lines[row + 1])[col + 9] == "●"  # above its first letter, below its last
+    assert "drag ● to change it" in screen(app)
+    end = app._knobs["to"]
+    press(app, *end)
+    move(app, end[0], end[1] + 3)  # the end, three letters on: " in"
+    release(app, end[0], end[1] + 3)
+    app.key("\r")
+    assert app.handles is None and app.highlights[0].phrase == "the kinase in" and len(app.chips) == 1
+    assert app.chips[0].tag == '⟦highlighted: "the kinase in"⟧'
+    press(app, row, col + 2, 2)
+    release(app, row, col + 2, 2)
+    app.key("\x1b")  # undone
+    assert app.handles is None and app.highlights[0].phrase == "the kinase in"
+
+
+def test_holding_the_right_button_on_a_highlight_opens_its_menu_for_a_note(app):
+    from molterm_tui.app import USER_NOTE_BG, WHITE
+    app.clock = clock = Clock()
+    reply(app, "Imatinib binds the kinase in its inactive form.")
+    app.event({"type": "tool_use", "id": "t1", "name": "tui.mark", "input": {"text": "inactive form"}})  # the agent's
+    row, col = where(app, "the kinase")
+    press(app, row, col)
+    move(app, row, col + 9)
+    release(app, row, col + 9)
+    press(app, row, col + 2, 2)
+    clock.now += 1
+    app.tick()
+    assert app.menu and [label for label, _ in app.menu["items"]] == [
+        "Change the selection", "Add a note…", "Put it in my message", "Remove the highlight"]
+    release(app, row, col + 2, 2)
+    assert app.menu and not app.handles  # letting go after the menu opened leaves it open
+    app.key("\x1b[B\r")  # Add a note…
+    assert app.prompt and "Note on “the kinase”" in screen(app)
+    _, cursor = app.lines()
+    assert cursor is not None  # a cursor where the note is typed
+    click(app, (1, 1))
+    assert app.flash  # the note waits: a click elsewhere pulses it
+    app.key("the target\r")
+    mine = next(h for h in app.highlights if h.by == "user")
+    assert mine.note == "the target" and mine.note_by == "user" and app.prompt is None
+    bubble = next(line for line in app.lines()[0] if "the target" in strip(line))
+    assert USER_NOTE_BG + WHITE + "the target" in bubble
+    theirs = next(h for h in app.highlights if h.by == "agent")
+    row, col = where(app, "inactive form")
+    press(app, row, col + 1, 2)
+    release(app, row, col + 1, 2)  # the agent's: a click gives its menu, without handles
+    assert "Change the selection" not in [label for label, _ in app.menu["items"]]
+    top, left, _ = app._menu_box()
+    click(app, (top + 3, left + 2))  # Remove the highlight
+    assert theirs not in app.highlights and app.menu is None
+
+
+def test_a_bubbles_menu_edits_its_note_or_puts_it_in_the_message(app):
+    show_molecule(app)
+    answer = {"png": "C" * 10, "cols": 20, "rows": 8, "smiles": "CCO |atomProp:2.atomNote.mine:2.molterm_flags.user|", "marked": [],
+              "notes": [{"atom": 2, "bond": None, "text": "mine", "row": 3, "by": "user"}]}
+    app._repicture(app.molecules[0])
+    app.picture_answer(json.dumps(app.bridge.pictures[-1]), json.dumps(answer))
+    app.lines()
+    _, _, line, left, _ = next(hit for hit in app._bubble_hits if hit[1] == "drag")
+    row, col = line - app._start + 1, left + 3  # in the bubble, on its text
+    press(app, row, col, 2)
+    assert [label for label, _ in app.menu["items"]] == ["Edit the note…", "Put it in my message"]
+    release(app, row, col, 2)
+    app.key("\x1b[B\r")
+    assert app.input == '⟦note on mol 1: "mine"⟧ ' and 'on atom 2 of mol 1 Ethanol' in app.expansions['⟦note on mol 1: "mine"⟧']
+    press(app, row, col, 2)
+    app.key("\r")  # Edit the note…
+    assert app.prompt["text"] == "mine"
+    app.key("\x7f\x7f\x7f\x7fthe OH\r")
+    assert app.bridge.pictures[-1]["mark"] == {"edit": True, "atom": 2, "note": "the OH", "by": "user"}
+
+
+def test_the_line_where_a_question_was_asked_pulses_with_it(app):
+    app.event({"type": "tool_use", "id": "q", "name": "tui.ask", "input": {"question": "Properties too?", "options": ["Yes", "No"]}})
+    asked = next(line for line in app.lines()[0] if "Ask(Properties too?)" in strip(line))
+    click(app, (2, 2))
+    app.tick()
+    pulsing = next(line for line in app.lines()[0] if "Ask(Properties too?)" in strip(line))
+    assert pulsing != asked and "\x1b[48;2;" in pulsing

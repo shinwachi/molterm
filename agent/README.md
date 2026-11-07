@@ -138,14 +138,24 @@ all, and `/notes reset` puts them back where they were.
 Text can be pointed at too. The agent's `tui.mark` with `text` highlights those words where they last appear (the user's own words
 or the agent's), with a note in a bubble hanging under them. The user drags across text: the selection shows as it is dragged, then
 turns blue, its tint and its letters both, as the user's notes are, and waits above the input as a context; a click on the
-highlight takes it away.
+highlight takes it away. A drag takes whole words, so that it never stops in the middle of one; holding still for a moment while
+dragging switches to exact letters (the selection darkens, and the line under the input says so). A drag may run across several
+replies: each gets its part of the highlight, and they go into the message, and away, as one.
+
+The right button points things out further. A right click on the user's own highlight gives it handles, as iOS does: a knob above
+its first letter and one below its last, dragged to change what it covers; Enter or a click elsewhere keeps the change and Esc
+undoes it. Held for half a second, or on the agent's highlight, it opens the highlight's menu: change the selection, add (or edit)
+a note, which hangs in a bubble under it, put it into the message, remove it, or remove all the user's highlights. A right click on
+a bubble opens its menu: edit its note, or put it into the message as a context. A molecule's note, edited, goes to molterm
+(`mark` with `edit`, which sets one atom's or bond's note) and becomes the user's. A note is written in a box in the input's place,
+which, like a question, pulses if something else is clicked. The user's bubbles are blue with white letters and controls.
 
 The input's cursor is the terminal's own, where typing goes: restty draws it solid while the terminal has the keyboard, the cue
 that the user can type, and hollow when it hasn't. It is hidden while a question or an edit has the keys.
 
 A question (`tui.ask`) takes the input's place and holds the keys and the mouse until it is answered: a click on an option answers
-it, and a click anywhere else, or typing it has no use for, makes its box pulse twice (its border brightening, a warm tint inside)
-to show where the answer goes; the wheel still scrolls. A tool that is running, the question's among them, has a dot that fades
+it, and a click anywhere else, or typing it has no use for, makes its box pulse twice (its border brightening, a warm tint inside),
+and the line in the transcript where it was asked with it, to show where the answer goes; the wheel still scrolls. A tool that is running, the question's among them, has a dot that fades
 out and in rather than blinking.
 
 ### Contexts, above the input

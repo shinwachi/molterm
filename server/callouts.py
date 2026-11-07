@@ -5,7 +5,7 @@ its bond) to the picture's right edge, ending in the middle of a row of cells, a
 the note in it. The leaders' rows are kept apart, so that the bubbles have room; the host learns them with the picture.
 
 Annotations travel in the CXSMILES, as everywhere in molterm (see annotate.py), and a `mark` adds some: atoms by index, or those a
-SMARTS matches, highlighted and/or with a note.
+SMARTS matches, highlighted and/or with a note; or, with `edit`, sets the note on one atom or bond as someone rewrote it.
 """
 import base64
 import math
@@ -96,6 +96,31 @@ def add(mol, notes, mark):
     return atoms
 
 
+def edit(mol, notes, mark):
+    """Set the note on one atom ({"atom": i}) or bond ({"bond": [i, j]}) to mark's `note`, as someone wrote it over what was there:
+    an empty note takes it off. A group's note stays the group's; with `by: "user"` it becomes the person's. Returns its atoms."""
+    if mark.get("bond") is not None:
+        pair = mark["bond"]
+        if not (isinstance(pair, list) and len(pair) == 2 and all(isinstance(i, int) and not isinstance(i, bool) for i in pair)
+                and all(0 <= i < mol.GetNumAtoms() for i in pair) and mol.GetBondBetweenAtoms(*pair)):
+            raise CalloutError("bond must be the two atoms of a bond.")
+        ids, name = sorted(pair), "bonds"
+    else:
+        atom = mark.get("atom")
+        if not (isinstance(atom, int) and not isinstance(atom, bool) and 0 <= atom < mol.GetNumAtoms()):
+            raise CalloutError(f"atom must be one of this molecule's atoms, 0 to {mol.GetNumAtoms() - 1}.")
+        ids, name = [atom], "atoms"
+    note = annotate.clean_note(str(mark.get("note") or ""))
+    entry = next((e for e in notes[name] if e[:-2] == ids), None)
+    if entry is None:
+        entry = [*ids, "", ""]
+        notes[name].append(entry)
+    entry[-1] = note
+    annotate.set_flags(notes, ids, (annotate.flags(notes, ids) & {"group"}) | ({"user"} if mark.get("by") == "user" else set()))
+    notes[name] = sorted(e for e in notes[name] if e[-2] or e[-1])
+    return ids
+
+
 def _rows(wanted, rows):
     """Rows for leaders that want these rows (in order of the notes), kept BUBBLE_ROWS apart if they can be, within 0 to rows - 1."""
     if not wanted:
@@ -122,7 +147,7 @@ def picture(text, cols, rows, theme=graphics.DEFAULT_THEME, cell_pixels=graphics
     mol, kept, notes = _read(text)
     if clear:
         notes = annotate.empty()
-    marked = add(mol, notes, mark) if mark else []
+    marked = (edit(mol, notes, mark) if mark.get("edit") else add(mol, notes, mark)) if mark else []
     drawn = Chem.Mol(mol)
     with rdBase.BlockLogs():
         rdDepictor.Compute2DCoords(drawn)

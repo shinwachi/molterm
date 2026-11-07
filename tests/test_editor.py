@@ -1496,6 +1496,22 @@ def test_callouts_draw_highlights_and_leave_the_notes_to_the_host():
     assert result["notes"][0]["by"] == "agent" and result["notes"][0]["group"]  # an agent's, about all it highlighted
 
 
+def test_callouts_edit_one_note_as_the_person_rewrote_it():
+    import callouts
+    noted = "CC(=O)Nc1ccc(O)cc1 |atomProp:1.atomNote.amide:1.molterm_flags.group:1.molterm_highlight.yellow:2.molterm_highlight.yellow|"
+    result = callouts.picture(noted, 60, 16, mark={"edit": True, "atom": 1, "note": "the amide C", "by": "user"})
+    note = result["notes"][0]
+    assert note["text"] == "the amide C" and note["by"] == "user" and note["group"]  # still the group's, now the person's
+    assert "molterm_highlight.yellow" in result["smiles"]
+    bond = callouts.picture("CCO", 40, 10, mark={"edit": True, "bond": [1, 2], "note": "C-O"})
+    assert bond["notes"][0]["bond"] == [1, 2] and bond["notes"][0]["by"] == "agent"
+    gone = callouts.picture(result["smiles"], 60, 16, mark={"edit": True, "atom": 1, "note": ""})
+    assert gone["notes"] == [] and "molterm_highlight.yellow" in gone["smiles"]  # the note off, its highlight kept
+    for bad in ({"edit": True, "atom": 99}, {"edit": True, "bond": [0, 2]}, {"edit": True, "bond": "x"}):
+        with pytest.raises(callouts.CalloutError):
+            callouts.picture("CCO", 40, 10, mark=bad)
+
+
 def test_callouts_draw_the_persons_own_notes_in_their_colour():
     import callouts
     result = callouts.picture("CCO |atomProp:2.atomNote.mine:2.molterm_flags.user|", 40, 10)
