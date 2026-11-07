@@ -765,3 +765,39 @@ def test_the_line_where_a_question_was_asked_pulses_with_it(app):
     app.tick()
     pulsing = next(line for line in app.lines()[0] if "Ask(Properties too?)" in strip(line))
     assert pulsing != asked and "\x1b[48;2;" in pulsing
+
+
+def test_removing_all_of_several_highlights_is_confirmed_first(app):
+    reply(app, "Imatinib binds the kinase in its inactive form.")
+    for word in ("binds", "inactive"):
+        row, col = where(app, word)
+        press(app, row, col)
+        move(app, row, col + len(word) - 1)
+        release(app, row, col + len(word) - 1)
+    assert len(app.highlights) == 2
+    row, col = where(app, "binds")
+    press(app, row, col + 1, 2)
+    assert app.menu["items"][-1][0] == "Remove all my highlights"
+    app.key("\x1b[A\r")  # up, to the last: Remove all my highlights
+    assert "Remove all 2 of your highlights?" in screen(app) and "❯ 2. Keep them" in screen(app)  # keeping them is the default
+    app.key("\r")
+    assert len(app.highlights) == 2 and app.question is None
+    press(app, row, col + 1, 2)
+    app.key("\x1b[A\r1")
+    assert app.highlights == [] and app.chips == [] and app.bridge.results == []  # nothing for the agent
+
+
+def test_clicks_elsewhere_while_a_question_waits_send_chevrons_down_from_the_third_on_every_other_one(app):
+    app.event({"type": "tool_use", "id": "q", "name": "tui.ask", "input": {"question": "Properties too?", "options": ["Yes", "No"]}})
+    counts = []
+    for _ in range(5):
+        click(app, (2, 10))
+        counts.append(bool(app.chevron))
+        if app.chevron:
+            assert "██        ██" in screen(app)
+        for _ in range(20):
+            app.tick()
+    assert counts == [False, False, True, False, True] and "██" not in screen(app)
+    app.key("1")
+    click(app, (2, 10))
+    assert not app.chevron  # answered: nothing waits

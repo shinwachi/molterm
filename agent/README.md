@@ -144,7 +144,8 @@ several lines, paragraphs and replies: each reply gets its part of the highlight
 A highlight is found again by its words, whatever the line breaks, blank lines and indents between them.
 
 The right button (or Ctrl+click, a Mac's right click) opens a highlight's menu: change the selection, add (or edit) a note, which
-hangs in a bubble under it, put it into the message, remove it, or remove all the user's highlights. Changing the selection, for
+hangs in a bubble under it, put it into the message, remove it, or remove all the user's highlights (with more than one, a question in the input's place
+asks first: "Remove all N of your highlights?", keeping them the default). Changing the selection, for
 the user's own, gives it handles, as iOS does: a knob above its first letter and one below its last, dragged to change what it
 covers; Enter or a click elsewhere keeps the change and Esc undoes it. A right click on
 a bubble opens its menu: edit its note, or put it into the message as a context. A molecule's note, edited, goes to molterm
@@ -156,7 +157,9 @@ that the user can type, and hollow when it hasn't. It is hidden while a question
 
 A question (`tui.ask`) takes the input's place and holds the keys and the mouse until it is answered: a click on an option answers
 it, and a click anywhere else, or typing it has no use for, makes its box pulse twice (its border brightening, a warm tint inside),
-and the line in the transcript where it was asked with it, to show where the answer goes; the wheel still scrolls. A tool that is running, the question's among them, has a dot that fades
+and the line in the transcript where it was asked with it, to show where the answer goes; from the third click elsewhere on,
+every other one also sends two large chevrons, solid blocks, sliding down the middle of the screen towards it as they fade in
+and out; the wheel still scrolls. A tool that is running, the question's among them, has a dot that fades
 out and in rather than blinking.
 
 ### Contexts, above the input

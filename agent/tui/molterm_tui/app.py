@@ -45,6 +45,7 @@ from .screen import (ACCENT, BOLD, DIM, GREEN, GREY, ITALIC, RED, RESET, USER_BG
 
 SPINNER = "·✢✳✶✻✽✻✶✳✢"
 FADE_FRAMES = 14  # a running tool's dot fades out and in again over this many ticks (about 1.7 s)
+CHEVRON_FRAMES = 12  # the chevrons' run down the screen, at the third click elsewhere and every other one after
 FLASH_FRAMES = 12  # a question's box pulses twice over this many (about 1.5 s), when something else is clicked
 TOOL_NAMES = {"tui.show": "Show", "tui.ask": "Ask", "tui.mark": "Mark", "molterm.render": "Render", "molterm.properties": "Properties"}
 INPUT_LINES_MAX = 6
@@ -179,6 +180,7 @@ class Question:
     question: str
     options: list
     selected: int = 0
+    answered: object = None  # for the app's own question, such as a confirmation: called with the option's index, or None
 
 
 class App:
@@ -210,6 +212,8 @@ class App:
         self.dragging = None  # a bubble being dragged
         self._bubble_hits, self._chip_hits = [], []
         self.flash = 0  # ticks left of a question's pulse, see _refuse
+        self.chevron = 0  # ticks left of the chevrons pointing down at it, see _refuse
+        self._refusals = 0  # clicks elsewhere while it has waited
         self.clock = time.monotonic  # what pauses and holds are timed by
         self.menu = None  # a context menu: {"row", "col", "items": [(label, action)], "hover"}
         self.prompt = None  # a note being written: {"title", "text", "save"}
@@ -237,14 +241,22 @@ class App:
         """Called a few times a second, to turn the spinner, fade a running tool's dot and pulse a question's box."""
         if self.flash:
             self.flash -= 1
+        if self.chevron:
+            self.chevron -= 1
+            self.draw()
         if self.busy or self.question or self.flash or any(b.kind == "tool" and b.state == "running" for b in self.blocks):
             self.frame += 1
             self.draw()
 
-    def _refuse(self):
+    def _refuse(self, click=False):
         """Something other than the question (or a note being written) was clicked or typed while it waits: its box pulses, and the
-        line where it was asked, to say where the answer goes."""
+        line where it was asked, to say where the answer goes. From the third click on, every other one also sends large chevrons
+        down the middle of the screen, towards it."""
         self.flash = FLASH_FRAMES
+        if click:
+            self._refusals += 1
+            if self._refusals >= 3 and self._refusals % 2 == 1:
+                self.chevron = CHEVRON_FRAMES
 
     def _flash_level(self):
         return abs(math.sin(2 * math.pi * (FLASH_FRAMES - self.flash + 1) / FLASH_FRAMES)) if self.flash else 0.0
@@ -360,10 +372,14 @@ class App:
         if not options:
             self._finish(block, "A question needs options.", error=True)
             return
-        self.question = Question(block.tool_id, str(block.input.get("question", "")), options)
+        self.question, self._refusals = Question(block.tool_id, str(block.input.get("question", "")), options), 0
 
     def _answer(self, index):
         question, self.question = self.question, None
+        self._refusals = 0
+        if question.answered:
+            question.answered(index)
+            return
         block = self._tool(question.tool_id)
         if index is None:
             block.state, block.result = "done", ["(skipped)"]
@@ -768,7 +784,7 @@ class App:
                 if self.question and button == 0 and row in self._option_hits:
                     self._answer(self._option_hits[row])
                 else:
-                    self._refuse()
+                    self._refuse(click=True)
             return
         if self.handles:
             self._handles_mouse(button, col, row, pressed)
@@ -899,6 +915,12 @@ class App:
         for ctx in [c for c in self.chips if c.group == ("text", highlight.gid)]:
             self._drop_context(ctx)
 
+    def _confirm_remove_mine(self):
+        """More than one: asked first, in the input's place, as the agent's questions are."""
+        count = len({h.gid for h in self.highlights if h.by == "user"})
+        self.question = Question("", f"Remove all {count} of your highlights?", [f"Remove {count} highlights", "Keep them"], 1,
+                                 lambda index: self._remove_mine() if index == 0 else None)
+
     def _remove_mine(self):
         for h in [h for h in self.highlights if h.by == "user"]:
             if h in self.highlights:
@@ -940,7 +962,7 @@ class App:
         items.append(("Put it in my message", lambda: self._quote_highlight(group)))
         items.append(("Remove the highlight", lambda: self._remove_group(highlight)))
         if len({h.gid for h in self.highlights if h.by == "user"}) > 1:
-            items.append(("Remove all my highlights", self._remove_mine))
+            items.append(("Remove all my highlights", self._confirm_remove_mine))
         self.menu = {"row": row, "col": col, "items": items, "hover": 0}
 
     def _bubble_menu(self, key, row, col):
@@ -1008,10 +1030,10 @@ class App:
         elif key.name == "ctrl-u":
             prompt["text"] = ""
         elif key.name == "enter":
-            self.prompt = None
+            self.prompt, self._refusals = None, 0
             prompt["save"](_normal(prompt["text"]))
         elif key.name in ("escape", "ctrl-c"):
-            self.prompt = None
+            self.prompt, self._refusals = None, 0
 
     def _prompt_lines(self, cols):
         prompt, inner = self.prompt, cols - 4
@@ -1590,6 +1612,18 @@ class App:
                 if 0 <= row < room and 0 <= col < cols:
                     shown[row] = overlay(shown[row], col, style("●", USER_INK))
                     self._knobs[name] = (row, col)
+        if self.chevron and (self.question or self.prompt):  # pointing down at what waits, sliding down as they fade in and out
+            art = _chevrons()
+            step = CHEVRON_FRAMES - self.chevron
+            level = math.sin(math.pi * (step + 1) / (CHEVRON_FRAMES + 1))
+            ink = _rgb(_mix((60, 40, 34), (255, 170, 130), level)) + BOLD
+            top = max(room - len(art) - 4, 0) // 2 + step // 2
+            left = max((cols - width(art[0])) // 2, 0)
+            for i, line in enumerate(art):
+                if 0 <= top + i < room:
+                    for j, char in enumerate(line):
+                        if char != " ":
+                            shown[top + i] = overlay(shown[top + i], left + j, style(char, ink))
         screen = shown + footer  # the input stays at the bottom, as in Claude Code
         if self.menu:  # over everything
             top, left, inner = self._menu_box()
@@ -1675,6 +1709,18 @@ def _find(lines, phrase):
             line = lines[index]
             spans.append((index, width(line[:first]), width(line[:last + 1])))
     return spans
+
+
+def _chevrons(size=5):
+    """Two large chevrons, one above the other, pointing down: solid strokes two blocks wide, a step in each row."""
+    span = 4 * size
+    one = []
+    for i in range(size):
+        row = [" "] * span
+        for at in (2 * i, span - 2 - 2 * i):
+            row[at:at + 2] = "██"
+        one.append("".join(row))
+    return one + [" " * span] + one
 
 
 def _fade(frame):
