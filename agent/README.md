@@ -155,6 +155,13 @@ which, like a question, pulses if something else is clicked. The user's bubbles 
 The input's cursor is the terminal's own, where typing goes: restty draws it solid while the terminal has the keyboard, the cue
 that the user can type, and hollow when it hasn't. It is hidden while a question or an edit has the keys.
 
+The keys are the terminal's only while it has the focus, and a click on the top bar, on the note under it, or in the frame's margin
+takes them away. The TUI can't say so: it is drawing its own screen, and the one cue there is, that hollow cursor, is hidden exactly
+then, because a TUI waiting for an answer hides the cursor. What is left is a page that has quietly stopped listening, which reads as
+a lost session. So the page gives them back: every click on it is a click on the terminal, since nothing else there wants the
+keyboard (a click that ends a selection is the user taking a copy, and is left alone). A host whose terminal shares the page with
+other things that do want the keyboard cannot do that, and has to say where the keys went instead.
+
 A question (`tui.ask`) takes the input's place and holds the keys and the mouse until it is answered: a click on an option answers
 it, and a click anywhere else, or typing it has no use for, makes its box pulse twice (its border brightening, a warm tint inside),
 and the line in the transcript where it was asked with it, to show where the answer goes; from the third click elsewhere on,

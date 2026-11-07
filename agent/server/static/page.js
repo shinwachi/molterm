@@ -168,7 +168,15 @@ try {
     new ResizeObserver(refit).observe(box);
     window.addEventListener("resize", refit);  // a zoom changes the ratio, and not always the box
     terminal.focus?.();
-    box.addEventListener("click", () => terminal.focus?.());
+    // The keys are the terminal's only while it has the focus, and a click on the top bar, on the note under it, or in the frame's
+    // margin takes them away. The TUI can't say so -- it's drawing its own screen, and the terminal's own cue, a hollow cursor, is
+    // hidden exactly then, because a TUI waiting for an answer hides the cursor -- so what's left is a page that has quietly stopped
+    // listening, and the way back isn't one anybody would guess. This page is nothing but the terminal and nothing else on it wants
+    // the keyboard, so every click is a click on it. A click that ends a selection is the user taking a copy, not asking to type.
+    document.addEventListener("click", event => {
+        if (window.getSelection?.()?.isCollapsed === false) return;
+        if (!event.target.closest?.("a, button, input, textarea, select, [contenteditable]")) terminal.focus?.();
+    });
 } catch (error) {
     show("not running", "err");
     document.getElementById("note").textContent = `The page could not start: ${error.message}`;
