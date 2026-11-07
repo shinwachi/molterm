@@ -365,7 +365,7 @@ class App:
         self.scroll = min(self.scroll, max(len(content) - room, 0))
         end = len(content) - self.scroll
         shown = content[max(end - room, 0):end] if room else []
-        screen = shown + footer
+        screen = shown + [""] * (room - len(shown)) + footer  # the input stays at the bottom, as in Claude Code
         cursor = None
         if not self.question:
             inner = cols - 4

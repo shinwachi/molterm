@@ -59,6 +59,13 @@ def test_it_starts_with_a_banner_and_an_empty_input_box(app):
     assert app.bridge.written[0].startswith("\x1b[?1049h")  # the alternate screen
 
 
+def test_the_input_box_sits_at_the_bottom_of_the_screen(app):
+    lines, (row, _) = app.lines()
+    assert len(lines) == 30
+    assert "/help for shortcuts" in strip(lines[-1]) and "Message the agent" in strip(lines[row])
+    assert row == 30 - 3  # the box's middle line, above its bottom edge and the hints
+
+
 def test_typing_and_enter_send_the_message(app):
     app.event({"type": "session", "id": "abc123"})
     app.key("CCO")

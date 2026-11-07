@@ -70,4 +70,4 @@ screenshots: ## the README's hero shots in docs/images, from the running dev ser
 
 agent-gif: ## the agent's demo, docs/images/molterm-agent.gif, recorded from the running dev agent
 	docker run --rm --network traefik --user $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/docs:/docs $(PLAYWRIGHT) \
-		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 imageio-ffmpeg && PYTHONPATH=/tmp/pw python /docs/screenshots/agent_gif.py'
+		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 pillow && PYTHONPATH=/tmp/pw python /docs/screenshots/agent_gif.py'

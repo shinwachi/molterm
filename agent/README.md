@@ -81,7 +81,7 @@ into the same `use_tui` and `use_server_tool` calls: the events, the page and th
 
 ## Status
 
-Verified (2026-11-06): `make test`, 32 tests (the TUI driven by keys and events; the server's sessions, stream, tool answers, interrupts
+Verified (2026-11-06): `make test`, 33 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; the server's sessions, stream, tool answers, interrupts
 and the agent's script, with molterm stubbed; an agent elsewhere driving a session over a real HTTP port, the token checks, `AGENT`, and
 the Claude example's tool loop and interrupt handling with a stand-in client). In Chrome: the page starts Pyodide and a session, the greeting streams in, "show me a
 drug" brings up the agent's question in place of the input, the chosen drug is drawn by molterm on the server and shown in the
