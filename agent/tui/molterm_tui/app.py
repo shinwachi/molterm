@@ -28,6 +28,7 @@ The agent can use the interface as tools:
   tui.mark {text, highlight, note, last appears in the transcript, with the note in a bubble under it. `clear` removes what was marked
             clear}                 first. Highlights: yellow, green, blue, pink
 """
+import itertools
 import json
 import re
 import time
@@ -46,11 +47,14 @@ EDIT_ROWS = 22  # what it gets when there is room: enough for an atom's menu to 
 EDIT_COLS_MIN = 60
 INLINE_ROWS_MIN, INLINE_COLS_MIN = 8, 40  # an inline editor's drawing, at the least, around the picture
 STRIP_COLS = 56  # its floating strip of tools, at the least (molterm's editor.STRIP_COLS)
+EDIT_INPUT = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[1;3([ABCD])")  # what the TUI keeps for itself while editing inline
 HOST_NOTICE = re.compile(r"\x1b\]5523;([a-z]+)(?:=([0-9]))?\x1b\\")  # what the inline editor tells its host (molterm's HOST_REPAINT)
 HIGHLIGHTS = {"yellow": "\x1b[48;2;94;78;28m", "green": "\x1b[48;2;38;84;44m", "blue": "\x1b[48;2;32;62;104m", "pink": "\x1b[48;2;100;42;70m"}
 SELECTING = "\x1b[48;2;70;70;84m"
 NOTE_INK, NOTE_BG = "\x1b[38;2;229;192;123m", "\x1b[48;2;44;39;30m"  # bubbles, in the colour of molterm's leaders (callouts.LEADER)
 BUBBLE_TEXT = 30  # a bubble's text at its widest
+CHIP, CHIP_ON = "\x1b[48;2;48;52;64m\x1b[38;2;200;204;214m", "\x1b[48;2;56;78;120m\x1b[38;2;240;242;248m"  # a context, put away or in the text
+TAG = "\x1b[48;2;56;78;120m"  # a context's tag in the input's text
 NOTE_ROOM = 3 + 4 + BUBBLE_TEXT  # beside a picture with notes: the leader's turn, a bubble's border and its text
 HELP = """Shortcuts
   enter          send            esc            interrupt the agent, or skip a question
@@ -61,8 +65,12 @@ Molecules
                  F2 puts the tools away or brings them back · Done (ctrl+q) puts it in your message · Cancel (ctrl+c)
   /edit [N]      the same for molecule N, or the last one; /edit N box opens the editor in a box instead
   /editor box    clicks open the box from now on (/editor inline goes back)
+  the line under it  drag it (or alt+arrows while editing) to make the drawing larger or smaller
 Pointing things out
-  drag across text   highlight it, and put it in your message; click a highlight to remove it
+  drag across text   highlight it; it waits above the input, and a click there puts it in your message
+  a bubble           drag it aside; – folds it to ◆ (click to open), × hides it; /notes shows them all again,
+                     /notes hide folds them all, /notes reset puts them back
+  above the input    what you edited or highlighted: click to put it in your message (or take it out), × to drop it
 Commands
   /help          this help       /clear         clear the transcript"""
 
@@ -75,6 +83,14 @@ def context(molecule):
 def tag(molecule):
     """What the input box and the transcript show of it, the CXSMILES with its annotations being long: ⟦mol N name, edited #k⟧."""
     return f"⟦mol {molecule.number} {molecule.name}, edited #{molecule.edits}⟧"
+
+
+@dataclass
+class Context:
+    tag: str  # what the input's text shows
+    full: str  # what the message carries instead
+    label: str  # what its chip above the input says
+    group: tuple = ()  # a newer context of the same group replaces it (an edited molecule's latest edit)
 
 
 def quoted(text):
@@ -119,6 +135,9 @@ class Molecule:
     notes: list = field(default_factory=list)  # its notes, as bubbles: {text, row (of its leader in the picture)}
 
 
+_KEYS = itertools.count(1)
+
+
 @dataclass
 class Highlight:
     block: Block
@@ -126,6 +145,7 @@ class Highlight:
     colour: str = "yellow"
     note: str = ""
     by: str = "agent"  # or "user"
+    key: int = field(default_factory=lambda: next(_KEYS))
 
 
 @dataclass
@@ -157,7 +177,11 @@ class App:
         self.tools_shown = True  # the inline editor's tools, as the user last left them
         self.highlights = []  # text marked in the transcript
         self.selecting = None  # a drag across the transcript: [row, col, row, col] on the screen
-        self.contexts = {}  # an edited molecule's tag in the input -> what the message carries instead, see tag()
+        self.expansions = {}  # a context's tag in the input -> what the message carries instead, see tag()
+        self.chips = []  # the contexts waiting above the input, see Context
+        self.bubbles = {}  # a bubble's key -> how the user left it: {"dx", "dy", "min", "gone"}
+        self.dragging = None  # a bubble being dragged
+        self._bubble_hits, self._chip_hits = [], []
 
     # -- from the page ----------------------------------------------------------------------------------------------------------------
 
@@ -182,6 +206,8 @@ class App:
 
     def key(self, data):
         if self.editing:  # everything goes to the editor, which answers with what to draw
+            if self.editing["mode"] == "inline":
+                data = self._edit_controls(data)
             self.editing["pending"] += data
             self._edit_pump()
             return
@@ -412,23 +438,85 @@ class App:
             box_top = min(max(top - 3, 0), room - rows)  # border and tools above the picture, so the drawing stays about where it was
             place = {"box": (box_top, 0, rows, self.cols - 1), "frozen": screen[:room]}
         else:
-            rows = min(max(molecule.rows, INLINE_ROWS_MIN), room - top)
-            cols = min(max(molecule.cols + 4, INLINE_COLS_MIN), self.cols - 1 - 3)
-            if rows < 4 or self.cols - 1 < STRIP_COLS:
+            if room - above - 1 < 4 or self.cols - 1 < STRIP_COLS:
                 self.blocks.append(Block("note", "The window is too small to edit here; make it larger and try again.", tone="error"))
                 return
-            place = {"inline": (top, 3, rows, cols), "at": (top, 5, min(molecule.rows, rows), molecule.cols), "frozen": screen}
+            place = {"rows": max(molecule.rows, INLINE_ROWS_MIN), "cols": max(molecule.cols + 4, INLINE_COLS_MIN)}
         self.selecting = None
         self.editing = {"molecule": molecule, "mode": mode, **place, "state": "", "pending": "", "first": True, "waiting": False,
-                        "closing": False, "result": None}
+                        "closing": False, "result": None, "relayout": False, "resizing": None}
+        if mode == "inline":  # the drawing takes the picture's place in the transcript, which makes room for it
+            self._place_edit(top)
+            inline = self.editing["inline"]
+            self.editing["at"] = (inline[0], inline[1], min(molecule.rows, inline[2]), molecule.cols)
         self.bridge.write("\x1b[?25l\x1b[?1003h")  # no cursor, and every movement, for the editor's hover and drags
         self.draw()
         self._edit_pump()
 
+    def _place_edit(self, top):
+        """Lay the transcript out around the inline editor's drawing, its top on screen row `top` if it can be, with room above for
+        the tools and below for the line that resizes it; keeps the drawing's place in `inline`."""
+        e, number = self.editing, self.editing["molecule"].number
+        above = 3 if self.tools_shown else 1
+        room = self.rows - len(self._footer(self.cols - 1))
+        top = min(max(top if top is not None else above, above), max(room - 5, 0))
+        e["rows"] = max(min(e["rows"], room - top - 1), 4)
+        e["cols"] = max(min(e["cols"], self.cols - 1 - EDIT_LEFT), 24)
+        self.lines()
+        self.scroll = max(self._content - (self._content_at[number] - top) - self._room, 0)
+        self.lines()
+        e["inline"] = (self.placed.get(number, (top,))[0], EDIT_LEFT, e["rows"], e["cols"])
+
+    def _resize_edit(self, rows, cols):
+        e = self.editing
+        if (rows, cols) == (e["rows"], e["cols"]):
+            return
+        e["rows"], e["cols"] = rows, cols
+        self._place_edit(e["inline"][0])
+        e["relayout"] = True
+        self._edit_pump()
+
+    def _edit_controls(self, data):
+        """Take out of what is typed or clicked what is the TUI's own while editing inline: the line under the drawing, dragged to
+        resize it, and Alt with the arrows. The rest is the editor's."""
+        kept, last = [], 0
+        for match in EDIT_INPUT.finditer(data):
+            kept.append(data[last:match.start()])
+            last = match.end()
+            if not self._edit_control(match):
+                kept.append(match.group())
+        kept.append(data[last:])
+        return "".join(kept)
+
+    def _edit_control(self, match):
+        e = self.editing
+        if e["closing"]:
+            return False
+        top, left, rows, cols = e["inline"]
+        if match.group(5):
+            step = {"A": (-2, 0), "B": (2, 0), "C": (0, 4), "D": (0, -4)}[match.group(5)]
+            self._resize_edit(rows + step[0], cols + step[1])
+            return True
+        button, col, row, pressed = int(match.group(1)), int(match.group(2)) - 1, int(match.group(3)) - 1, match.group(4) == "M"
+        if e["resizing"]:
+            row0, col0 = e["resizing"]
+            new_rows = max(min(rows + row - row0, self._room - top - 1), 4)
+            new_cols = max(min(cols + col - col0, self.cols - 1 - left), 24)
+            if not pressed and not button & 32:  # let go: the drawing takes the new size
+                e["resizing"] = None
+                self._resize_edit(new_rows, new_cols)
+            else:  # where the line would go
+                self.bridge.write(f"\x1b[{top + new_rows + 1};{left + 1}H" + _grip(new_cols, f"{new_rows} × {new_cols}") + RESET)
+            return True
+        if button == 0 and pressed and row == top + rows and left <= col <= left + cols:
+            e["resizing"] = (row, col)
+            return True
+        return False
+
     def _edit_pump(self):
         """Send the editor what has been typed or clicked, one request at a time; what comes meanwhile waits for the next."""
         e = self.editing
-        if not e or e["waiting"] or not (e["first"] or e["pending"] or e["closing"]):
+        if not e or e["waiting"] or not (e["first"] or e["pending"] or e["closing"] or e["relayout"]):
             return
         molecule = e["molecule"]
         if e["closing"]:
@@ -442,7 +530,7 @@ class App:
                 fields.update({"inline": ",".join(str(n) for n in e["inline"]), "at": ",".join(str(n) for n in e["at"]),
                                "strip": "1" if self.tools_shown else "0"})
             fields.update({"smiles": molecule.smiles} if e["first"] else {"state": e["state"]})
-        e["pending"], e["first"], e["waiting"] = "", False, True
+        e["pending"], e["first"], e["waiting"], e["relayout"] = "", False, True, False
         self.bridge.edit(json.dumps(fields))
 
     def edit_answer(self, text):
@@ -470,8 +558,9 @@ class App:
             if match.group(1) == "tools":
                 self.tools_shown = match.group(2) == "1"
                 return ""
-            if match.group(1) == "repaint":
-                return "".join(f"\x1b[{row + 1};1H" + line + RESET + "\x1b[K" for row, line in enumerate(self.editing["frozen"]))
+            if match.group(1) == "repaint":  # the transcript as it is now, around the drawing, and the footer
+                screen = self.editing.get("frozen") or self.lines()[0]
+                return "".join(f"\x1b[{row + 1};1H" + line + RESET + "\x1b[K" for row, line in enumerate(screen)) + "\x1b[?25l"
             return ""
         return HOST_NOTICE.sub(notice, output)
 
@@ -499,14 +588,66 @@ class App:
         molecule = e["molecule"]
         if status == 1 and text and text != molecule.smiles:
             molecule.smiles, molecule.edits = text, molecule.edits + 1
-            self.contexts[tag(molecule)] = context(molecule)  # sent in full, shown short
-            insert = tag(molecule) + " "
-            self.input = self.input[:self.cursor] + insert + self.input[self.cursor:]
-            self.cursor += len(insert)
+            self._add_context(Context(tag(molecule), context(molecule), f"mol {molecule.number} {molecule.name} · edited #{molecule.edits}",
+                                      ("mol", molecule.number)))
             self._repicture(molecule)
         elif status == 2:
             self.blocks.append(Block("note", text or "The editor stopped.", tone="error"))
+        if e["mode"] == "inline" and e.get("inline"):  # the picture back where the drawing was, the transcript closing up below it
+            self.lines()
+            self.scroll = max(self._content - (self._content_at[molecule.number] - e["inline"][0]) - self._room, 0)
         self.draw()
+
+    # -- contexts, waiting above the input to be put into a message -------------------------------------------------------------------
+
+    def _add_context(self, ctx):
+        """A context waits above the input, put away: a click puts it into the text, where its tag stands for it (sent in full)."""
+        for old in [c for c in self.chips if c.tag == ctx.tag or (ctx.group and c.group == ctx.group)]:
+            self._drop_context(old)
+        self.expansions[ctx.tag] = ctx.full
+        self.chips.append(ctx)
+
+    def _drop_context(self, ctx, keep=False):
+        """Take a context's tag out of the text; and the context away too, unless `keep` (it is then put away above the input)."""
+        at = self.input.find(ctx.tag)
+        if at >= 0:
+            end = at + len(ctx.tag) + (1 if self.input[at + len(ctx.tag):at + len(ctx.tag) + 1] == " " else 0)
+            self.input = self.input[:at] + self.input[end:]
+            if self.cursor > at:
+                self.cursor = max(at, self.cursor - (end - at))
+        if not keep and ctx in self.chips:
+            self.chips.remove(ctx)
+
+    def _toggle_context(self, ctx):
+        if ctx.tag in self.input:
+            self._drop_context(ctx, keep=True)
+        else:
+            insert = ("" if not self.input[:self.cursor] or self.input[:self.cursor].endswith(" ") else " ") + ctx.tag + " "
+            self.input = self.input[:self.cursor] + insert + self.input[self.cursor:]
+            self.cursor += len(insert)
+
+    def _chip_lines(self, inner):
+        """The contexts' chips, as lines inside the input box, and where each one's parts are: [(line, start, end, context, part)]."""
+        lines, hits, line, used = [], [], "", 0
+        for ctx in self.chips:
+            shown = ctx.tag in self.input
+            label = f" {'◆' if shown else '◇'} {truncate(ctx.label, 40)} "
+            chip = style(label, CHIP_ON if shown else CHIP) + style("×", CHIP_ON if shown else CHIP, GREY) + style(" ", CHIP_ON if shown else CHIP)
+            size = width(label) + 2
+            if used and used + size + 1 > inner:
+                lines.append(line)
+                line, used = "", 0
+            start = used + (1 if used else 0)
+            line += (" " if used else "") + chip
+            hits.append((len(lines), start, start + width(label), ctx, "toggle"))
+            hits.append((len(lines), start + width(label), start + size, ctx, "dismiss"))
+            used = start + size
+        if self.chips:
+            hint = "  click: into your message · ×: drop"
+            if used + width(hint) <= inner:
+                line += style(hint, GREY)
+            lines.append(line)
+        return lines[-3:], [h for h in hits if h[0] >= len(lines) - 3]
 
     def _close_text(self):
         for block in self.blocks:
@@ -535,10 +676,19 @@ class App:
         if button in (64, 65):  # the wheel
             self.scroll = max(self.scroll + (3 if button == 64 else -3), 0)
             return
+        if self.dragging:  # a bubble, moved with the pointer until let go
+            d = self.dragging
+            state = self.bubbles.setdefault(d["key"], {})
+            state["dx"], state["dy"] = d["dx"] + col - d["col"], d["dy"] + row - d["row"]
+            if not pressed and not button & 32:
+                self.dragging = None
+            return
         if button == 32 and self.selecting:  # dragging, the left button held
             self.selecting[2:] = [row, col]
             return
         if button != 0:
+            return
+        if pressed and self._press_controls(row, col):
             return
         if pressed:
             for number, (top, left, rows, cols) in self.placed.items():
@@ -558,6 +708,27 @@ class App:
                 self.highlights.remove(found)
             return
         self._mark_selection(selection)
+
+    def _press_controls(self, row, col):
+        """A press on a bubble (its –, its ×, or itself, to drag it), a folded bubble, or a context above the input."""
+        for line, start, end, ctx, part in self._chip_hits:
+            if line == row and start <= col < end:
+                (self._toggle_context if part == "toggle" else self._drop_context)(ctx)
+                return True
+        index = self._start + row
+        for key, part, line, start, end in reversed(self._bubble_hits):  # the one drawn last is on top
+            if line == index and start <= col < end:
+                state = self.bubbles.setdefault(key, {})
+                if part == "fold":
+                    state["min"] = True
+                elif part == "hide":
+                    state["gone"] = True
+                elif part == "open":
+                    state["min"] = False
+                else:
+                    self.dragging = {"key": key, "row": row, "col": col, "dx": state.get("dx", 0), "dy": state.get("dy", 0)}
+                return True
+        return False
 
     def _selection_cells(self, selection):
         """The block and the screen cells a drag covered, in reading order: (block, [(content line, start col, end col)])."""
@@ -587,9 +758,7 @@ class App:
         if len(text) < 2 or block.kind not in ("assistant", "user", "note"):
             return
         self.highlights.append(Highlight(block, text, "blue", by="user"))
-        insert = quoted(text)
-        self.input = self.input[:self.cursor] + insert + self.input[self.cursor:]
-        self.cursor += len(insert)
+        self._add_context(Context(quoted(text).strip(), quoted(text).strip(), f"“{truncate(text, 36)}”"))
 
     def _owner_at(self, row):
         """The block a screen row shows, if it is text that can be marked: (block, the column its text starts at)."""
@@ -624,8 +793,11 @@ class App:
             self.cursor += len(key.text)
             self.history_at = None
         elif key.name == "backspace" and self.cursor:
-            self.input = self.input[:self.cursor - 1] + self.input[self.cursor:]
-            self.cursor -= 1
+            before = self.input[:self.cursor]
+            start = before.rfind("⟦") if before.endswith("⟧") else -1
+            gone = self.cursor - start if start >= 0 and before[start:] in self.expansions else 1  # a context's tag goes whole
+            self.input = self.input[:self.cursor - gone] + self.input[self.cursor:]
+            self.cursor -= gone
         elif key.name == "delete":
             self.input = self.input[:self.cursor] + self.input[self.cursor + 1:]
         elif key.name == "left":
@@ -679,13 +851,24 @@ class App:
             self.edit_mode = editor.group(1) or self.edit_mode
             self.blocks.append(Block("note", f"Clicking a molecule edits it {'in a box' if self.edit_mode == 'box' else 'inline'}."))
             return
+        notes = re.fullmatch(r"/notes(?:\s+(hide|reset))?", text)
+        if notes:
+            for state in self.bubbles.values():
+                if notes.group(1) == "hide":
+                    state["min"] = True
+                else:
+                    state["min"] = state["gone"] = False
+                if notes.group(1) == "reset":
+                    state["dx"] = state["dy"] = 0
+            return
         if text == "/clear":
             self.blocks, self.molecules, self.placed, self.highlights = [Block("banner")], [], {}, []
             self.bridge.write("".join(kitty.delete(n) for n in range(1, self.images + 1)))  # the pictures go with their placeholders
             return
         self.history.append(text)
         self.blocks.append(Block("user", text))
-        for short, full in self.contexts.items():
+        self.chips = [c for c in self.chips if c.tag not in text]  # sent, so no longer waiting
+        for short, full in self.expansions.items():
             text = text.replace(short, full)
         self.bridge.post_message(text, self.cols - 6)
 
@@ -751,7 +934,11 @@ class App:
             elif title:
                 title = style(str(title), BOLD)
             block.image_line = 2 if title else 1  # after the tool's line and the title
-            body += ([title] if title else []) + [truncate(line, cols - 5) for line in block.panel]
+            panel = block.panel
+            e = self.editing
+            if molecule and e and e["mode"] == "inline" and e["molecule"] is molecule:  # room for its drawing, and the line under it
+                panel = [""] * e["rows"] + [_grip(e["cols"], "drag this line, or alt+arrows, to resize")] + panel[molecule.rows:]
+            body += ([title] if title else []) + [truncate(line, cols - 5) for line in panel]
         if block.result:
             tone = (RED,) if block.state == "error" else (GREY,)
             body += [style(truncate(line, cols - 5), *tone) for line in block.result]
@@ -761,6 +948,7 @@ class App:
         return lines + [""]
 
     def _footer(self, cols):
+        self._chip_regions = []
         if self.question:
             return self._question_lines(cols)
         lines = []
@@ -773,10 +961,19 @@ class App:
         text_lines = wrap(self.input, inner - 2) if self.input else [""]
         shown = text_lines[-INPUT_LINES_MAX:]
         box = [style("╭" + "─" * (cols - 2) + "╮", GREY)]
+        chips, hits = self._chip_lines(inner)
+        self._chip_regions = [(len(lines) + 1 + line, 2 + start, 2 + end, ctx, part) for line, start, end, ctx, part in hits]
+        box += [style("│ ", GREY) + pad(chip, inner) + style(" │", GREY) for chip in chips]
+        tags = [c.tag for c in self.chips if c.tag in self.input]
         for i, line in enumerate(shown):
             prefix = "> " if i == 0 and len(shown) == len(text_lines) else "  "
             content = line if self.input else style("Message the agent", GREY, ITALIC)
-            box.append(style("│ ", GREY) + pad(prefix + content, inner) + style(" │", GREY))
+            row = style("│ ", GREY) + pad(prefix + content, inner) + style(" │", GREY)
+            for tag_text in tags:  # a context's tag stands out from the typing
+                for found, start, end in _find(shown, tag_text):
+                    if found == i:
+                        row = paint(row, 4 + start, 4 + end, TAG)
+            box.append(row)
         box.append(style("╰" + "─" * (cols - 2) + "╯", GREY))
         hint = "  ? /help for shortcuts" if not self.scroll else f"  scrolled back {self.scroll} lines · pgdn to return"
         right = f"session {self.session[:8]}" if self.session else "connecting…"
@@ -796,11 +993,14 @@ class App:
         return box + [style("  ↑↓ to choose · enter to answer · a number picks · esc to skip", GREY)]
 
     def _bubbles(self, cols):
-        """What is drawn over the transcript: [(content line, col, text)], for the molecules' notes and the highlights' notes."""
-        out = []
+        """What is drawn over the transcript: [(content line, col, text)], for the molecules' notes and the highlights' notes. Each
+        bubble is where the user left it (dragged, folded or hidden); `_bubble_hits` says where its parts are, for the mouse."""
+        out, self._bubble_hits = [], []
+        e = self.editing
+        editing = e["molecule"] if e and e["mode"] == "inline" else None
         for molecule in self.molecules:
             base = self._content_at.get(molecule.number)
-            if base is None or not molecule.notes:
+            if base is None or not molecule.notes or molecule is editing:
                 continue
             x = 5 + molecule.cols  # just past the picture's right edge, where the leaders end
             room = min(cols - x - 3 - 4, BUBBLE_TEXT)
@@ -808,33 +1008,54 @@ class App:
                 continue
             below = None
             for note in sorted(molecule.notes, key=lambda n: int(n.get("row") or 0)):
+                key = ("mol", molecule.number, str(note.get("atom")), str(note.get("bond")), str(note.get("text")))
+                state = self.bubbles.setdefault(key, {})
                 leader = base + int(note.get("row") or 0)
+                if state.get("gone"):
+                    continue
+                if state.get("min"):
+                    out.append((leader, x, style("──◆", NOTE_INK)))
+                    self._bubble_hits.append((key, "open", leader, x, x + 3))
+                    continue
                 rows = _bubble(str(note.get("text") or ""), room)
                 top = leader - 1 if below is None else max(leader - 1, below)
-                joint = top + min(max(leader - top, 1), len(rows) - 2)
-                rows[joint - top] = NOTE_BG + NOTE_INK + "┤" + rows[joint - top][len(NOTE_BG + NOTE_INK) + 1:]
-                if joint == leader:
-                    out.append((leader, x, style("───", NOTE_INK)))
-                else:
-                    down = joint > leader
-                    out.append((leader, x, style("─╮" if down else "─╯", NOTE_INK)))
-                    for row in range(min(leader, joint) + 1, max(leader, joint)):
-                        out.append((row, x + 1, style("│", NOTE_INK)))
-                    out.append((joint, x + 1, style("╰─" if down else "╭─", NOTE_INK)))
-                out += [(top + i, x + 3, row) for i, row in enumerate(rows)]
                 below = top + len(rows)
-        for highlight, line, start, _ in self._painted_first:
+                top = top + state.get("dy", 0)
+                left = max(min(x + 3 + state.get("dx", 0), cols - width(strip(rows[0]))), 0)
+                out += _connector(rows, leader, x, top, left)
+                out += self._place_bubble(key, rows, top, left, cols)
+        for highlight, line, start, end in self._painted_first:
             if not highlight.note:
                 continue
-            room = min(cols - 8, BUBBLE_TEXT)
-            rows = _bubble(highlight.note, room)
-            left = max(min(start - 2, cols - 1 - width(strip(rows[0]))), 0)
-            tail = start - left
-            top = strip(rows[0])
-            if 0 < tail < len(top) - 1:  # the bubble's tail, pointing up at the text
-                rows[0] = style(top[:tail] + "┴" + top[tail + 1:], NOTE_BG, NOTE_INK)
-            out += [(line + 1 + i, left, row) for i, row in enumerate(rows)]
+            key = ("text", highlight.key)
+            state = self.bubbles.setdefault(key, {})
+            if state.get("gone"):
+                continue
+            if state.get("min"):
+                out.append((line, end, style("◆", NOTE_INK)))
+                self._bubble_hits.append((key, "open", line, end, end + 1))
+                continue
+            rows = _bubble(highlight.note, min(cols - 8, BUBBLE_TEXT))
+            size = width(strip(rows[0]))
+            left = max(min(start - 2, cols - 1 - size), 0) + state.get("dx", 0)
+            top = line + 1 + state.get("dy", 0)
+            if top > line and left < start < left + size - 6:  # under the text: a tail pointing up at it, through a line if need be
+                border = strip(rows[0])
+                rows[0] = style(border[:start - left] + "┴" + border[start - left + 1:], NOTE_BG, NOTE_INK)
+                out += [(r, start, style("│", NOTE_INK)) for r in range(line + 1, top)]
+            out += self._place_bubble(key, rows, top, left, cols)
         return out
+
+    def _place_bubble(self, key, rows, top, left, cols):
+        size = width(strip(rows[0]))
+        left = max(min(left, cols - size), 0)
+        inner = size - 4
+        self._bubble_hits.append((key, "drag", top, left, left + size))
+        for i in range(1, len(rows)):
+            self._bubble_hits.append((key, "drag", top + i, left, left + size))
+        self._bubble_hits.append((key, "fold", top, left + inner - 2, left + inner + 1))
+        self._bubble_hits.append((key, "hide", top, left + inner + 1, left + inner + 3))
+        return [(top + i, left, row) for i, row in enumerate(rows)]
 
     def lines(self):
         """The screen's lines, top to bottom, and where the cursor goes (row, col), or None to hide it."""
@@ -853,23 +1074,32 @@ class App:
             firsts.setdefault(id(entry[0]), entry)
         self._painted_first = list(firsts.values())
         footer = self._footer(cols)
-        room = self.rows - len(footer)
+        room, cut = self.rows - len(footer), 0
         if room < 1:
+            cut = len(footer) - self.rows
             footer = footer[-self.rows:]
             room = 0
+        self._chip_hits = [(room + line - cut, start, end, ctx, part) for line, start, end, ctx, part in self._chip_regions
+                           if line >= cut]
         self.scroll = min(self.scroll, max(len(content) - room, 0))
         end = len(content) - self.scroll
         start = max(end - room, 0)
         self._content_lines, self._start = content, start
         shown = content[start:end] if room else []
+        e = self.editing
+        gap = range(0)
+        if e and e["mode"] == "inline" and e["molecule"].number in self._content_at:  # the drawing, its tools and its line
+            first = self._content_at[e["molecule"].number]
+            gap = range(first - 3, first + e["rows"] + 1)
+        shown += [""] * (room - len(shown))  # the empty rows over the input too, where a bubble may be dragged
         for line, col, text in self._bubbles(cols):  # over the transcript, where they are shown
-            if start <= line < end:
+            if start <= line < start + room and line not in gap:
                 shown[line - start] = truncate(overlay(shown[line - start], col, text), cols)
         if self.selecting:
             _, spans = self._selection_cells(self.selecting)
             for line, a, b in spans:
                 shown[line - start] = paint(shown[line - start], a, min(b, cols), SELECTING)
-        screen = shown + [""] * (room - len(shown)) + footer  # the input stays at the bottom, as in Claude Code
+        screen = shown + footer  # the input stays at the bottom, as in Claude Code
         self._room, self._content = room, len(content)
         self.placed = {}
         for molecule in self.molecules:  # where each molecule's picture is, for a click to find it
@@ -935,8 +1165,35 @@ def _find(lines, phrase):
 def _bubble(text, room):
     """A speech bubble's lines, the text wrapped to `room` columns at most."""
     lines = wrap(text, room) or [""]
-    inner = max(width(line) for line in lines)
+    inner = max(max(width(line) for line in lines), 6)
     ink = NOTE_BG + NOTE_INK
-    return ([style("╭" + "─" * (inner + 2) + "╮", NOTE_BG, NOTE_INK)]
+    return ([style("╭" + "─" * (inner - 3) + " – × ╮", NOTE_BG, NOTE_INK)]  # its controls: fold, and hide
             + [ink + "│ " + RESET + NOTE_BG + pad(line, inner) + ink + " │" + RESET for line in lines]
             + [style("╰" + "─" * (inner + 2) + "╯", NOTE_BG, NOTE_INK)])
+
+
+EDIT_LEFT = 5  # the inline drawing's first column: the picture's
+
+
+def _grip(cols, label):
+    """The line under an inline drawing, which resizes it."""
+    label = f" {label} "
+    side = max(cols - 1 - width(label), 0)
+    return style("╌" * (side // 2) + label + "╌" * (side - side // 2) + "◢", GREY)
+
+
+def _connector(rows, leader, x, top, left):
+    """The leader carried on in text from the picture's edge (row `leader`, column `x`) to a bubble at (top, left), joining it at
+    its side; nothing if the bubble was dragged to the left of the edge."""
+    turn = left - 2
+    if turn < x:
+        return []
+    joint = top + min(max(leader - top, 1), len(rows) - 2)
+    rows[joint - top] = NOTE_BG + NOTE_INK + "┤" + rows[joint - top][len(NOTE_BG + NOTE_INK) + 1:]
+    if joint == leader:
+        return [(leader, x, style("─" * (left - x), NOTE_INK))]
+    down = joint > leader
+    out = [(leader, x, style("─" * (turn - x) + ("╮" if down else "╯"), NOTE_INK))]
+    out += [(row, turn, style("│", NOTE_INK)) for row in range(min(leader, joint) + 1, max(leader, joint))]
+    out.append((joint, turn, style(("╰" if down else "╭") + "─" * (left - turn - 1), NOTE_INK)))
+    return out

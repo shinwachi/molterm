@@ -58,15 +58,16 @@ twice as tall as it is wide. The TUI shows the picture with the Kitty graphics p
 `png_bytes` above is your own code; the full example builds a gradient with `zlib`.
 
 Give the picture of a molecule its `smiles` and the user can edit and annotate it where it is: a click on it (or `/edit N`) opens
-molterm's editor in place, the drawing where the picture was, and Done puts the result into their next message as
-`⟦mol N name, edited: <CXSMILES>⟧`, notes and highlights included (the input box shows it short, as `⟦mol N name, edited #k⟧`). Your
+molterm's editor in place, the drawing where the picture was. On Done the edit waits above the input; when the user clicks it into
+their message, the message carries `⟦mol N name, edited: <CXSMILES>⟧`, notes and highlights included (the input box shows it short,
+as `⟦mol N name, edited #k⟧`). Your
 `respond` finds it in `text` (`molterm_tui.app.CONTEXT` is the pattern); the demo agent's `review` in `server/agent.py` shows one way
 to answer.
 
 Either of you can point things out. You, with `self.mark`: atoms of a molecule you showed (indices in its SMILES, from 0, or a SMARTS),
 highlighted in yellow, green, blue or pink, and a note in a speech bubble beside the picture with a leader to the atom; or words in
 the transcript, yours or the user's. `clear=True` removes what you marked first. The user, by dragging across text: it turns blue,
-and `⟦highlighted: "the words"⟧` goes into their message (`molterm_tui.app.QUOTED`). Their notes and highlights on a molecule come
+and when they click it into a message, the message carries `⟦highlighted: "the words"⟧` (`molterm_tui.app.QUOTED`). Their notes and highlights on a molecule come
 with its edit, in the CXSMILES.
 
 When the user presses Esc, the turn ends: whatever the agent was waiting on returns, and the agent's next `say`, `show` or `ask`

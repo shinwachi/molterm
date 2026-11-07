@@ -1509,3 +1509,16 @@ def test_the_endpoints_edit_inline_and_draw_callouts(client):
     assert client.post("/api/v1/callouts", json={"input": "CCO", "mark": {"smarts": "["}}).json["error"]["code"] == "bad_request"
     assert client.post("/api/v1/callouts", json={"input": "not a molecule"}).status_code == 400
     assert client.post("/api/v1/callouts", data="x").status_code == 400
+
+
+def test_an_inline_drawing_made_larger_keeps_the_molecule_where_it_was():
+    place, picture = (12, 5, 8, 44), (12, 5, 6, 20)
+    status, text, _ = editor.step("", "CCO", "", 100, 40, CW, CH, inline=place, at=picture)
+    s = editor.decode(text)
+    before = [editor.Layout(100, 40, CW, CH, inline=place).to_cell(s, a[2], a[3]) for a in s["atoms"]]
+    larger = (12, 5, 14, 60)
+    status, text, output = editor.step(text, "", "", 100, 40, CW, CH, inline=larger, at=picture)
+    s = editor.decode(text)
+    after = [editor.Layout(100, 40, CW, CH, inline=larger).to_cell(s, a[2], a[3]) for a in s["atoms"]]
+    assert all(abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6 for a, b in zip(before, after))
+    assert editor.HOST_REPAINT in output and s["canvas"] == list(larger)

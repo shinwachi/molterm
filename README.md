@@ -64,8 +64,8 @@ character; its Braille differs only by single dots where the browser's antialias
 agent for each visitor. The agent uses the interface as tools, `tui.show` to put a panel in the transcript and `tui.ask` to ask the user
 something and wait for the answer, and `tui.mark` to point things out: atoms highlighted, notes in speech bubbles with leaders to
 them, words highlighted in the transcript. A molecule it shows can be edited and annotated where it is, the drawing staying in place
-under a floating strip of tools (or in a box, if you prefer), and the edit goes into the user's next message; dragging across text
-points at it. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
+under a floating strip of tools (or in a box, if you prefer) and resizable, the transcript making room; the edit, like text the
+user drags across, waits above the input until they click it into a message. Bubbles can be dragged, folded and hidden. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
 server or anywhere else over HTTP, and with a model behind it if you like, is in [its tutorial](agent/TUTORIAL.md).
 
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
@@ -388,7 +388,8 @@ To edit a picture where it is shown instead, without a box, give `inline` (row,c
 the drawing, or below it near the top of the screen, with one line for the status and the Done, Cancel and tools buttons; F2 or the
 tools button puts the tools away, leaving the line (`strip=0` starts so). The rest of the screen stays the host's: when a menu closed
 over it, or the layout changed, the output carries `ESC ] 5523;repaint ST`, where the host draws its screen again before the editor
-draws over it, and `ESC ] 5523;tools=0` (or 1) when the tools were put away (or shown), for the host to remember.
+draws over it, and `ESC ] 5523;tools=0` (or 1) when the tools were put away (or shown), for the host to remember. A host may change
+`inline` between steps, to resize the drawing: what was at its top left corner stays there.
 `server/board.py`, behind `/api/v1/tui`, shows one way to use the editor from Python.
 
 The client also reads the terminal's background and text colours, to fit `theme` to them and blend Sixel's edges, and its cell size, because Sixel's

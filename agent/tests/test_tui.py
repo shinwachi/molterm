@@ -242,16 +242,19 @@ def test_clicking_a_molecule_edits_it_in_a_box_over_its_picture(app):
     assert app.bridge.edits[-1] == {"close": "1"}  # first the editor's pictures go
     app.edit_answer("3 \n\x1b_Ga=d\x1b\\")
     assert app.editing is None and "\x1b[?1003l" in "".join(app.bridge.written)
-    assert app.input == "draft⟦mol 1 Ethanol, edited #1⟧ "  # short in the box, in full in the message
+    assert app.input == "draft" and [c.label for c in app.chips] == ["mol 1 Ethanol · edited #1"]  # waiting above the input
     request = app.bridge.pictures[0]
     assert request["smiles"] == "CCO |atomProp:2.atomNote.OH|" and request["number"] == 1 and request["cols"] == 80 - 6 - 37
     app.picture_answer(json.dumps(request), json.dumps({"png": "B" * 10, "cols": 22, "rows": 7, "smiles": request["smiles"],
                                                         "notes": [{"atom": 2, "text": "OH", "row": 1}]}))
     assert app.molecules[0].image == 2 and "mol 1 · edited" in screen(app)
     from molterm_tui.app import CONTEXT
-    app.key(" ok?\r")
+    assert "◇ mol 1 Ethanol · edited #1" in screen(app)
+    click(app, chip(app))  # into the message, short in the box, in full in what is sent
+    assert app.input == "draft ⟦mol 1 Ethanol, edited #1⟧ " and "◆ mol 1 Ethanol" in screen(app)
+    app.key("ok?\r")
     assert CONTEXT.search(app.bridge.messages[-1][0]).groups() == ("1", "Ethanol", "CCO |atomProp:2.atomNote.OH|")
-    assert "⟦mol 1 Ethanol, edited #1⟧" in screen(app)
+    assert "⟦mol 1 Ethanol, edited #1⟧" in screen(app) and app.chips == []  # sent, so no longer waiting
 
 
 def test_cancelling_an_edit_leaves_the_input_alone_and_edit_finds_the_last_molecule(app):
@@ -287,19 +290,20 @@ def test_a_click_edits_inline_with_the_drawing_over_the_picture_and_the_tools_fl
     assert "box" not in fields and fields["strip"] == "1" and fields["smiles"] == "CCO"
     inline = tuple(int(n) for n in fields["inline"].split(","))
     at = tuple(int(n) for n in fields["at"].split(","))
-    assert at == (top, 5, 6, 20) and inline[:2] == (top, 3) and inline[2] >= 8 and inline[3] >= 40 and top >= 3  # room above
+    assert at == (top, 5, 6, 20) and inline[:2] == (top, 5) and inline[2] >= 8 and inline[3] >= 40 and top >= 3  # room above
     app.bridge.written.clear()
     app.event({"type": "text", "delta": "meanwhile"})  # the app draws nothing over the editor
     assert app.bridge.written == []
-    frozen = app.editing["frozen"]
+    now = app.lines()[0]
     app.edit_answer("0 S1\n\x1b]5523;repaint\x1b\\\x1b[3;4H   \x1b]5523;tools=0\x1b\\")
     written = app.bridge.written[-1]
-    assert written.startswith("\x1b[1;1H" + frozen[0]) and written.endswith("\x1b[3;4H   ")  # the screen again, then the editor
+    assert written.startswith("\x1b[1;1H" + now[0]) and written.endswith("\x1b[3;4H   ")  # the screen again, then the editor
+    assert "meanwhile" in written  # as it is now
     assert "5523" not in written and app.tools_shown is False
     app.key("\x11")
     app.edit_answer("1 \nOCC")
     app.edit_answer("3 \n")
-    assert app.editing is None and "\x1b[?1003l\x1b[?1002h" in "".join(app.bridge.written) and "edited #1" in app.input
+    assert app.editing is None and "\x1b[?1003l\x1b[?1002h" in "".join(app.bridge.written) and app.chips[0].full.endswith("edited: OCC⟧")
     app.key("\x15/edit 1\r")
     assert app.bridge.edits[-1]["strip"] == "0"  # the tools stay put away, as the user left them
 
@@ -336,7 +340,7 @@ def test_the_agent_highlights_text_with_a_note_under_it(app):
     lines, _ = app.lines()
     row = next(i for i, line in enumerate(lines) if "The amide is" in strip(line))
     assert "\x1b[48;2;94;78;28m" in lines[row]  # yellow behind it
-    assert strip(lines[row + 1])[:8] == "╭─┴────╮" and "│ here │" in strip(lines[row + 2])  # the bubble's tail points up at it
+    assert strip(lines[row + 1])[:10] == "╭─┴─ – × ╮" and "│ here   │" in strip(lines[row + 2])  # its tail points up at it
     app.event({"type": "tool_use", "id": "t2", "name": "tui.mark", "input": {"text": "nowhere to be found"}})
     assert app.bridge.results[-1][1] == {"error": "\"nowhere to be found\" isn't in the transcript."}
     app.event({"type": "tool_use", "id": "t3", "name": "tui.mark", "input": {"text": "", "clear": True}})
@@ -353,12 +357,19 @@ def test_dragging_across_text_highlights_it_and_puts_it_in_the_message(app):
     app.key(f"\x1b[<32;{col + 10};{row + 1}M")
     assert "\x1b[48;2;70;70;84m" in app.lines()[0][row]  # the selection, while it is dragged
     app.key(f"\x1b[<0;{col + 10};{row + 1}m")
-    assert app.input == "⟦highlighted: \"the kinase\"⟧ " and app.highlights[0].phrase == "the kinase"
+    assert app.input == "" and app.highlights[0].phrase == "the kinase"  # it waits above the input
+    assert [c.tag for c in app.chips] == ["⟦highlighted: \"the kinase\"⟧"] and "◇ “the kinase”" in screen(app)
+    click(app, chip(app))
+    assert app.input == "⟦highlighted: \"the kinase\"⟧ "
+    app.key("\x7f\x7f")  # the space, then the whole tag
+    assert app.input == "" and len(app.chips) == 1
+    click(app, chip(app))
+    click(app, chip(app, "dismiss"))  # × drops it, from the text too
+    assert app.input == "" and app.chips == []
     assert "\x1b[48;2;32;62;104m" in app.lines()[0][row]  # blue, the user's
     app.key(f"\x1b[<0;{col + 3};{row + 1}M\x1b[<0;{col + 3};{row + 1}m")  # a click on it takes it away
     assert app.highlights == []
-    from molterm_tui.app import QUOTED
-    assert QUOTED.findall(app.input) == ["the kinase"]
+
 
 
 def test_overlays_keep_the_styles_around_them():
@@ -368,3 +379,76 @@ def test_overlays_keep_the_styles_around_them():
     assert overlay(line, 4, "XX").endswith("\x1b[0m\x1b[31mxt here\x1b[0m")
     assert strip(overlay("ab", 5, "Z")) == "ab   Z"
     assert paint("abcdef", 1, 3, "\x1b[44m") == "a\x1b[0m\x1b[44mbc\x1b[0mdef"
+
+
+def click(app, at):
+    row, col = at
+    app.key(f"\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m")
+
+
+def chip(app, part="toggle"):
+    app.lines()
+    row, start, _, _, _ = next(h for h in app._chip_hits if h[4] == part)
+    return row, start + 1
+
+
+def test_the_inline_drawing_is_resized_and_the_transcript_makes_room():
+    app = App(Bridge(), 100, 50)
+    app.start()
+    show_molecule(app)
+    app.event({"type": "text", "delta": "after the picture"})
+    app.event({"type": "text_end"})
+    app.key("/edit 1\r")
+    app.edit_answer("0 S1\n")
+    top, left, rows, cols = app.editing["inline"]
+
+    def below():
+        return next(i for i, line in enumerate(app.lines()[0]) if "after the picture" in strip(line))
+    before = below()
+    assert "drag this line" in strip(app.lines()[0][top + rows])  # the line under the drawing
+    app.key("\x1b[1;3B")  # alt+down: two rows more, and what is below moves down to make room
+    fields = app.bridge.edits[-1]
+    assert fields["inline"] == f"{top},{left},{rows + 2},{cols}" and fields["state"] == "S1" and fields["events"] == ""
+    assert below() == before + 2 and app.editing["inline"][0] == top  # the drawing stays where it is
+    app.edit_answer("0 S2\n\x1b]5523;repaint\x1b\\")
+    assert "after the picture" in app.bridge.written[-1]
+    grip = top + rows + 2
+    app.key(f"\x1b[<0;10;{grip + 1}M")
+    app.key(f"\x1b[<32;18;{grip + 4}M")  # dragged: where the line would go
+    assert "◢" in app.bridge.written[-1] and f"{rows + 5} × {cols + 8}" in strip(app.bridge.written[-1])
+    app.key(f"\x1b[<0;18;{grip + 4}m")
+    assert app.editing["inline"][2:] == (rows + 5, cols + 8) and app.bridge.edits[-1]["events"] == ""  # none of it went to the editor
+    app.edit_answer("0 S3\n")
+    app.key("x")
+    assert app.bridge.edits[-1]["events"] == "78"
+    app.edit_answer("0 S4\n")
+    app.key("\x03")  # Cancel: the picture where the drawing was, and the transcript closes up
+    app.edit_answer("3 \n")
+    app.edit_answer("3 \n")
+    assert app.editing is None and app.placed[1][0] == top and below() == before - (8 + 1 - 6)  # the gap and its line, less the picture
+
+
+def test_bubbles_fold_hide_and_move_out_of_the_way(app):
+    app.event({"type": "text", "delta": "The amide is the part to watch."})
+    app.event({"type": "text_end"})
+    app.event({"type": "tool_use", "id": "t1", "name": "tui.mark", "input": {"text": "amide", "note": "here"}})
+    lines, _ = app.lines()
+    row = next(i for i, line in enumerate(lines) if "The amide is" in strip(line))
+    border = strip(lines[row + 1])
+    left = border.index("╭")
+    click(app, (row + 1, border.index("–")))  # folded: a mark after the text, which opens it again
+    lines, _ = app.lines()
+    assert "here" not in strip(lines[row + 2]) and "◆" in strip(lines[row])
+    click(app, (row, strip(lines[row]).index("◆")))
+    assert "│ here" in strip(app.lines()[0][row + 2])
+    app.key(f"\x1b[<0;{left + 3};{row + 3}M")  # dragged by its body, three rows down and ten across
+    app.key(f"\x1b[<32;{left + 13};{row + 6}M")
+    app.key(f"\x1b[<0;{left + 13};{row + 6}m")
+    lines = [strip(line) for line in app.lines()[0]]
+    assert "│ here" in lines[row + 5] and lines[row + 5].index("│ here") == left + 10
+    click(app, (row + 4, lines[row + 4].index("×")))  # hidden, until /notes
+    assert not any("here" in line for line in (strip(x) for x in app.lines()[0]))
+    app.key("/notes\r")
+    assert any("│ here" in strip(line) for line in app.lines()[0])
+    app.key("/notes hide\r")
+    assert not any("│ here" in strip(line) for line in app.lines()[0])

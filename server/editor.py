@@ -394,6 +394,11 @@ def check_state(s):
         if s[name] is not None:
             _integer(s[name], 1000)
     _check_flag(s.setdefault("strip", True))
+    canvas = s.setdefault("canvas", None)
+    if canvas is not None and (not isinstance(canvas, list) or len(canvas) != 4):
+        raise StateError("A choice in the drawing is not valid.")
+    for number in canvas or ():
+        _integer(number, 10_000)
     if s["button"] not in (None, "done", "cancel", "copy", "tools", *dict(WINDOW_BUTTONS)):
         raise StateError("A choice in the drawing is not valid.")
     if not isinstance(s["shown"], dict) or not all(k in LAYERS and isinstance(v, str) and len(v) <= 64 for k, v in s["shown"].items()):
@@ -3089,6 +3094,19 @@ def _fit(s, ui):
     s["view"] = [(min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, max(zoom, ZOOM_RANGE[0])]
 
 
+def _keep_corner(s, ui):
+    """When a host makes an inline editor's drawing larger or smaller, what was at its top left corner stays there, so that the
+    molecule stays put on the screen while the drawing's edges move."""
+    place = [ui.top, ui.left, ui.canvas_rows, ui.canvas_cols]
+    old = s.get("canvas")
+    if old and old != place:
+        ratio = ui.cell_height / ui.cell_width
+        x, y, zoom = s["view"]
+        corner_x, corner_y = x - old[3] / 2 / zoom, y + old[2] / 2 * ratio / zoom
+        s["view"][:2] = [corner_x + ui.canvas_cols / 2 / zoom, corner_y - ui.canvas_rows / 2 * ratio / zoom]
+    s["canvas"] = place
+
+
 def _fit_to(s, ui, at):
     """Draw the molecule over a picture of it at `at` (row, col, rows, cols on the screen), at the picture's scale as near as can be:
     molterm draws a picture with graphics.BOND_CELLS columns to a bond, smaller if it must fit."""
@@ -3723,6 +3741,8 @@ def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None,
         return Layout(cols, rows, cell_width, cell_height, pixels, box, title, compact=compact, inline=inline, strip=s["strip"])
 
     ui = layout()
+    if ui.inline:
+        _keep_corner(s, ui)
     if box and not fits(ui):
         return FAILED, "", "The box is too small for the editor."
     if ui.canvas_rows < 4 or ui.canvas_cols < 20:
