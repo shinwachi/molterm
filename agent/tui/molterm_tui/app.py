@@ -28,6 +28,8 @@ The agent can use the interface as tools:
   tui.mark {text, highlight, note, last appears in the transcript, with the note in a bubble under it. `clear` removes what was marked
             clear}                 first. Highlights: yellow, green, blue, pink
 """
+import base64
+import heapq
 import itertools
 import json
 import re
@@ -48,7 +50,7 @@ EDIT_COLS_MIN = 60
 INLINE_ROWS_MIN, INLINE_COLS_MIN = 8, 40  # an inline editor's drawing, at the least, around the picture
 STRIP_COLS = 56  # its floating strip of tools, at the least (molterm's editor.STRIP_COLS)
 EDIT_INPUT = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[1;3([ABCD])")  # what the TUI keeps for itself while editing inline
-HOST_NOTICE = re.compile(r"\x1b\]5523;([a-z]+)(?:=([0-9]))?\x1b\\")  # what the inline editor tells its host (molterm's HOST_REPAINT)
+HOST_NOTICE = re.compile(r"\x1b\]5523;([a-z]+)(?:=([^\x1b]*))?\x1b\\")  # what the inline editor tells its host (molterm's HOST_REPAINT)
 HIGHLIGHTS = {"yellow": "\x1b[48;2;94;78;28m", "green": "\x1b[48;2;38;84;44m", "blue": "\x1b[48;2;32;62;104m", "pink": "\x1b[48;2;100;42;70m"}
 SELECTING = "\x1b[48;2;70;70;84m"
 NOTE_INK, NOTE_BG = "\x1b[38;2;229;192;123m", "\x1b[48;2;44;39;30m"  # bubbles, in the colour of molterm's leaders (callouts.LEADER)
@@ -181,7 +183,7 @@ class App:
         self.chips = []  # the contexts waiting above the input, see Context
         self.bubbles = {}  # a bubble's key -> how the user left it: {"at" (rows, cols from its anchor), "min", "gone"}
         self._bubble_places = {}  # a bubble's key -> (top, left, anchor row, anchor col), as last drawn
-        self.focused = True  # the terminal has the keyboard: the input's cursor shows
+        self._routes, self._gap = {}, None  # the lines found to bubbles, kept while what they cross doesn't change
         self.dragging = None  # a bubble being dragged
         self._bubble_hits, self._chip_hits = [], []
 
@@ -190,12 +192,7 @@ class App:
     def start(self):
         self.started = True
         # the alternate screen, pastes marked as pastes, and the mouse reported (SGR) with drags, to pick a molecule or mark text
-        self.bridge.write("\x1b[?1049h\x1b[?2004h\x1b[?1002h\x1b[?1006h" + kitty.send_cursor())
-        self.draw()
-
-    def focus(self, focused):
-        """The page says whether the terminal has the keyboard: the input's cursor shows only when it has."""
-        self.focused = bool(focused)
+        self.bridge.write("\x1b[?1049h\x1b[?2004h\x1b[?1002h\x1b[?1006h")
         self.draw()
 
     def resize(self, cols, rows):
@@ -456,7 +453,7 @@ class App:
             self._place_edit(top)
             inline = self.editing["inline"]
             self.editing["at"] = (inline[0], inline[1], min(molecule.rows, inline[2]), molecule.cols)
-        self.bridge.write("\x1b[?25l" + kitty.hide_cursor() + "\x1b[?1003h")  # no cursor, and every movement, for the editor
+        self.bridge.write("\x1b[?25l\x1b[?1003h")  # no cursor, and every movement, for the editor's hover and drags
         self.draw()
         self._edit_pump()
 
@@ -562,6 +559,13 @@ class App:
     def _from_editor(self, output):
         """The editor's output, with what it tells its host acted on: the screen drawn again where it asks, the tools remembered."""
         def notice(match):
+            if match.group(1) == "notes":  # the notes made while editing, for bubbles beside the drawing now
+                try:
+                    told = json.loads(base64.b64decode(match.group(2) or ""))
+                    self.editing["notes"], self.editing["edge"] = list(told["notes"]), int(told["edge"])
+                except (ValueError, KeyError, TypeError):
+                    pass
+                return ""
             if match.group(1) == "tools":
                 self.tools_shown = match.group(2) == "1"
                 return ""
@@ -672,7 +676,7 @@ class App:
             self.scroll = max(self.scroll + (step if key.name == "pageup" else -step), 0)
             return
         if key.name == "ctrl-l":
-            self.bridge.write("\x1b[2J" + kitty.send_cursor())
+            self.bridge.write("\x1b[2J")
             return
         if self.question:
             self._question_key(key)
@@ -1008,13 +1012,19 @@ class App:
         out, self._bubble_hits, self._bubble_places, taken = [], [], {}, []
         e = self.editing
         editing = e["molecule"] if e and e["mode"] == "inline" else None
+        groups = []  # (molecule, its notes, the content line their rows count from, the column their leaders end at)
         for molecule in self.molecules:
             base = self._content_at.get(molecule.number)
-            if base is None or not molecule.notes or molecule is editing:
+            if base is None:
                 continue
-            x = 5 + molecule.cols  # just past the picture's right edge, where the leaders end
+            if molecule is editing:  # the notes as they are being made, from the editor, at the drawing's right edge
+                notes = [{"text": n.get("text"), "row": int(n.get("row") or 0) - e["inline"][0], "atom": "edit"} for n in e.get("notes") or ()]
+                groups.append((molecule, notes, base, e.get("edge", EDIT_LEFT + e["cols"])))
+            elif molecule.notes:
+                groups.append((molecule, molecule.notes, base, 5 + molecule.cols))  # just past the picture, where the leaders end
+        for molecule, notes, base, x in groups:
             room = min(max(cols - x - 3 - 4, 12), BUBBLE_TEXT)
-            for note in sorted(molecule.notes, key=lambda n: int(n.get("row") or 0)):
+            for note in sorted(notes, key=lambda n: int(n.get("row") or 0)):
                 key = ("mol", molecule.number, str(note.get("atom")), str(note.get("bond")), str(note.get("text")))
                 state = self.bubbles.setdefault(key, {})
                 leader = base + int(note.get("row") or 0)
@@ -1033,7 +1043,7 @@ class App:
                     lefts = range(x + 3, max(min(cols - size, x + 15), x + 3) + 1, 3)
                     top, left = self._free_place(tops, lefts, len(rows), size, taken, (leader - 1, x + 3), cols)
                 taken.append((top, left, len(rows), size))
-                out += self._place_bubble(key, rows, top, left, (leader, x), "left", cols)
+                out += self._place_bubble(key, rows, top, left, (leader, x), "left", cols, taken=taken)
         for highlight, line, start, end in self._painted_first:
             if not highlight.note:
                 continue
@@ -1054,7 +1064,7 @@ class App:
                 lefts = range(max(start - 22, 0), max(min(start + 30, cols - size), 0) + 1, 2)
                 top, left = self._free_place(tops, lefts, len(rows), size, taken, (line + 1, max(start - 2, 0)), cols)
             taken.append((top, left, len(rows), size))
-            out += self._place_bubble(key, rows, top, left, (line, start), "text", cols, end)
+            out += self._place_bubble(key, rows, top, left, (line, start), "text", cols, end, taken)
         return out
 
     def _free_place(self, tops, lefts, height, size, taken, near, cols):
@@ -1082,7 +1092,7 @@ class App:
             cache[index] = "".join((text[:1] or " ") if text[:1] != kitty.PLACEHOLDER else "▒" for _, text in cells(line))
         return cache[index]
 
-    def _place_bubble(self, key, rows, top, left, anchor, kind, cols, end=None):
+    def _place_bubble(self, key, rows, top, left, anchor, kind, cols, end=None, taken=()):
         """The bubble's rows, its parts for the mouse, and the line joining it to its anchor: a molecule's leader at the picture's
         edge, coming from the left, or highlighted text, which it leaves from below, above, or its end."""
         size, height = width(strip(rows[0])), len(rows)
@@ -1112,8 +1122,92 @@ class App:
             start, entry = (row, end), "left"
         else:
             start, entry = (row, max(col - 1, 0)), "right"
-        return out + [(r, c, style(char, *((NOTE_BG,) if joint else ()), NOTE_INK), None)
-                      for r, c, char, joint in _route(start, entry, top, left, height, size)]
+        route = self._find_route(start, entry, top, left, height, size, taken, cols)
+        if route is None:
+            route = _route(start, entry, top, left, height, size)
+        return out + [(r, c, style(char, *((NOTE_BG,) if joint else ()), NOTE_INK), None) for r, c, char, joint in route]
+
+    def _find_route(self, start, entry, top, left, height, size, taken, cols):
+        """The line from `start` to the bubble that goes through the least text: blank cells cost least, then punctuation and
+        lines, then letters and digits; it doesn't cross bubbles, and crosses a picture or the drawing being edited only if it must.
+        [(row, col, character, on the bubble's edge)], or None if there is no way within reach."""
+        bottom, right = top + height - 1, left + size - 1
+        if top <= start[0] <= bottom and left <= start[1] <= right:
+            return []
+        r0, r1 = min(start[0], top) - 4, max(start[0], bottom) + 4
+        c0, c1 = max(min(start[1], left) - 12, 0), min(max(start[1], right) + 12, cols - 1)
+        rows = tuple(self._plain(r)[c0:c1 + 1] for r in range(r0, r1 + 1))
+        memo = (start, entry, top, left, height, size, tuple(taken), rows, self._gap)
+        if memo in self._routes:
+            return self._routes[memo]
+
+        def price(r, c):
+            if any(t <= r < t + h and l <= c < l + w for t, l, h, w in taken):
+                return None
+            if self._gap and r in self._gap[0] and self._gap[1] <= c < self._gap[2]:
+                return 600
+            text = rows[r - r0]
+            char = text[c - c0] if c - c0 < len(text) else " "
+            return 1 if char == " " else 600 if char == "▒" else 25 if char.isalnum() else 3
+        goals = {}
+        for r in range(top + 1, bottom):
+            goals[(r, left - 1)], goals[(r, right + 1)] = ("right", (r, left, "┤")), ("left", (r, right, "├"))
+        for c in range(left + 1, max(right - 6, left + 1) + 1):
+            goals[(top - 1, c)] = ("down", (top - 1 + 1, c, "┴"))
+        for c in range(left + 1, right):
+            goals[(bottom + 1, c)] = ("up", (bottom, c, "┬"))
+        first = price(*start)
+        if first is None:
+            return None
+        ticket = itertools.count()
+        heap, best, parent = [(first, next(ticket), start, entry)], {(start, entry): first}, {}
+        found = None
+        while heap:
+            spent, _, cell, came = heapq.heappop(heap)
+            if cell == "done":
+                found = came
+                break
+            if spent > best.get((cell, came), 1e18):
+                continue
+            if cell in goals:
+                going, _ = goals[cell]
+                total = spent + (0 if going == _OPPOSITE[came] else 4)
+                if total < best.get(("done", cell), 1e18):
+                    best[("done", cell)] = total
+                    parent[("done", cell)] = (cell, came)
+                    heapq.heappush(heap, (total, next(ticket), "done", cell))
+            for going, (dr, dc) in _SIDES.items():
+                if going == came:
+                    continue
+                r, c = cell[0] + dr, cell[1] + dc
+                if not (r0 <= r <= r1 and c0 <= c <= c1):
+                    continue
+                step = price(r, c)
+                if step is None:
+                    continue
+                total = spent + step + (0 if going == _OPPOSITE[came] else 4)
+                state = ((r, c), _OPPOSITE[going])
+                if total < best.get(state, 1e18):
+                    best[state], parent[state] = total, (cell, came)
+                    heapq.heappush(heap, (total, next(ticket), (r, c), _OPPOSITE[going]))
+        if found is None:
+            self._routes[memo] = None
+            return None
+        walk, state = [], parent[("done", found)]
+        while state:
+            walk.append(state)
+            state = parent.get(state)
+        walk.reverse()
+        going, edge = goals[found]
+        route = []
+        for i, (cell, came) in enumerate(walk):
+            out_side = going if i == len(walk) - 1 else _step(cell, walk[i + 1][0])
+            route.append((*cell, _LINES.get(frozenset((came, out_side)), "─" if came in ("left", "right") else "│"), False))
+        route.append((*edge, True))
+        if len(self._routes) > 500:
+            self._routes.clear()
+        self._routes[memo] = route
+        return route
 
     def lines(self):
         """The screen's lines, top to bottom, and where the cursor goes (row, col), or None to hide it."""
@@ -1145,13 +1239,14 @@ class App:
         self._content_lines, self._start, self._plain_lines = content, start, {}
         shown = content[start:end] if room else []
         e = self.editing
-        gap = range(0)
+        gap, self._gap = range(0), None
         if e and e["mode"] == "inline" and e["molecule"].number in self._content_at:  # the drawing, its tools and its line
             first = self._content_at[e["molecule"].number]
             gap = range(first - 3, first + e["rows"] + 1)
+            self._gap = (gap, EDIT_LEFT, EDIT_LEFT + e["cols"])
         shown += [""] * (room - len(shown))  # the empty rows over the input too, where a bubble may be dragged
-        for line, col, text, interior in self._bubbles(cols):  # over the transcript, where they are shown
-            if start <= line < start + room and line not in gap and col >= 0:
+        for line, col, text, interior in self._bubbles(cols):  # over the transcript, where they are shown, and beside the drawing
+            if start <= line < start + room and col >= 0 and not (line in gap and col < EDIT_LEFT + e["cols"]):
                 shown[line - start] = truncate(_cover(shown[line - start], col, text, interior), cols)
         if self.selecting:
             _, spans = self._selection_cells(self.selecting)
@@ -1185,12 +1280,13 @@ class App:
             frozen = self.editing["frozen"]
             footer = self._footer(self.cols - 1)[-(self.rows - len(frozen)):]
             screen = frozen + [""] * (self.rows - len(frozen) - len(footer)) + footer
-            return "\x1b[?25l" + kitty.hide_cursor() + "".join(f"\x1b[{row + 1};1H" + line + RESET + "\x1b[K"
-                                                              for row, line in enumerate(screen) if not top <= row < top + rows)
+            return "\x1b[?25l" + "".join(f"\x1b[{row + 1};1H" + line + RESET + "\x1b[K"
+                                          for row, line in enumerate(screen) if not top <= row < top + rows)
         screen, cursor = self.lines()
         out = "\x1b[?25l\x1b[H" + "\r\n".join(line + RESET + "\x1b[K" for line in screen) + "\x1b[J"
-        # the terminal's own cursor stays hidden: an outline over the cell shows where typing goes, and leaves its character readable
-        out += kitty.place_cursor(*cursor) if cursor and self.focused else kitty.hide_cursor()
+        # the terminal's cursor where typing goes: solid while the terminal has the keyboard, hollow when it hasn't (restty does that)
+        if cursor:
+            out += f"\x1b[{cursor[0] + 1};{cursor[1] + 1}H\x1b[?25h"
         return out
 
     def draw(self):

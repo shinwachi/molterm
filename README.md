@@ -24,8 +24,16 @@ TUI renderer for chemical structures using RDKit and advanced text graphics
 
 ![The agent's terminal interface: asked for a drug, it offers a choice, draws imatinib and shows its properties](docs/images/molterm-agent.gif)
 
+![The agent's marks: part of imatinib highlighted, a note in a speech bubble at the end of a leader, the agent's words highlighted, and the user's highlight waiting above the input](docs/images/molterm-agent-bubbles.png)
+
+![Imatinib edited where it is shown: the drawing in the picture's place, a floating strip of tools, and notes in bubbles beside it](docs/images/molterm-agent-inline.png)
+
+![Editing in place: a note added to the carbonyl oxygen appears in a bubble at once, the drawing is made larger, and Done sends the edit to the agent](docs/images/molterm-agent-annotate.gif)
+
+![Pointing things out: a bubble dragged aside, text dragged across and clicked into a message, and the agent marking it as seen](docs/images/molterm-agent-point.gif)
+
 The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium, and `make agent-gif` records the
-agent's GIF.
+agent's GIFs and shots.
 
 Created 2026-10-31 from a Flask project template.
 
@@ -389,7 +397,9 @@ the drawing, or below it near the top of the screen, with one line for the statu
 tools button puts the tools away, leaving the line (`strip=0` starts so). The rest of the screen stays the host's: when a menu closed
 over it, or the layout changed, the output carries `ESC ] 5523;repaint ST`, where the host draws its screen again before the editor
 draws over it, and `ESC ] 5523;tools=0` (or 1) when the tools were put away (or shown), for the host to remember. A host may change
-`inline` between steps, to resize the drawing: what was at its top left corner stays there.
+`inline` between steps, to resize the drawing: what was at its top left corner stays there. Inline, notes are the host's to show:
+the drawing has, for each, a leader from its atom to its right edge, and the output carries `ESC ] 5523;notes=<base64 JSON>` with
+`edge` and `notes` (`text`, `row`), followed by a repaint, whenever they change.
 `server/board.py`, behind `/api/v1/tui`, shows one way to use the editor from Python.
 
 The client also reads the terminal's background and text colours, to fit `theme` to them and blend Sixel's edges, and its cell size, because Sixel's

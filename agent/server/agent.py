@@ -5,6 +5,7 @@ tools: `tui.show` puts a drawing in the transcript, and `tui.ask` asks the user 
 make the same calls with the same events; only the deciding would differ.
 """
 import base64
+import html
 import math
 import re
 
@@ -189,7 +190,7 @@ class EmulatedAgent(TuiAgent):
 
     def review(self, name, smiles, cols):
         """The user edited a molecule shown earlier: say what they marked, and compute their version's properties."""
-        notes = _NOTES.findall(smiles)
+        notes = [html.unescape(note) for note in _NOTES.findall(smiles)]  # as CXSMILES escapes them: &#44; for a comma
         marked = "molterm_highlight" in smiles
         said = f"You edited {name}."
         if notes:

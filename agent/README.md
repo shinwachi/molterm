@@ -22,6 +22,9 @@ make test                # the tests, in the container
 make build up ENV=prod   # production -> http://molterm-agent.localhost, against the production molterm server
 ```
 
+`make agent-gif` in the main folder records the demos above from the running dev agent (`docs/screenshots/agent_gif.py` and
+`agent_features.py`, in headless Chromium).
+
 A real domain goes in a git-ignored `env/<env>.local.env`, as for the other services (see the main README). The image fetches Pyodide
 0.28.3 (Python 3.13, as the server), restty and the DejaVu fonts from npm at build time, each checked against its sha256.
 
@@ -79,6 +82,10 @@ scrolls, crops and redraws with the transcript although the TUI repaints the who
 
 ### Molecules, edited where they are shown
 
+![Imatinib edited where it is shown: the drawing in the picture's place, a floating strip of tools, and the notes in bubbles beside it](../docs/images/molterm-agent-inline.png)
+
+![A note added to the carbonyl oxygen appears in a bubble at once; Alt+↓ makes the drawing larger, the transcript making room; Done, and the edit clicked into a message brings the agent's review](../docs/images/molterm-agent-annotate.gif)
+
 A picture shown with its `smiles` is a molecule the TUI keeps: numbered (`mol 1` beside its title), and placed, as the TUI knows which
 rows and columns each one covers on the screen. Clicking one (the TUI turns on the terminal's mouse reporting), or `/edit N` (`/edit`
 alone takes the last), opens molterm's editor on it, inline: the drawing takes the picture's place in the transcript, at its scale, and a strip of
@@ -86,7 +93,8 @@ tools (selection, eraser, text, bonds, charges, rings) floats over the text abov
 Cancel and tools buttons. F2 or the tools button puts the tools away, for someone who knows the keys, and the TUI remembers that for
 the next edit. The line under the drawing resizes it: drag it (down and across), or Alt with the arrows. The transcript makes room,
 what is below moving down, and the molecule stays where it is. The ChemDraw keys work on the atom or bond under the pointer, and the right button's menus have the rest, annotations
-included: highlights and notes. `/edit N box`, or `/editor box` for every click, opens the
+included: highlights and notes. A note made there shows at once in a bubble beside the drawing, at the end of a leader from its atom
+(drawn in the drawing by molterm, which leaves the note's text to the TUI), and moves with the drawing. `/edit N box`, or `/editor box` for every click, opens the
 compact editor in a box over the picture instead.
 
 **Done** (Ctrl-Q) redraws the molecule as edited (`mol 1 · edited`), in the place of the drawing, and the edit waits above the
@@ -106,14 +114,20 @@ terminal's input, keys and mouse reports alike, goes back into the TUI.
 
 ### Pointing things out
 
+![The agent's marks: the N-methylpiperazine highlighted, its note in a bubble at the end of a leader, the agent's words highlighted with a note, and the user's highlight waiting above the input](../docs/images/molterm-agent-bubbles.png)
+
+![A bubble dragged aside, its leader following; "N-methylpiperazine" dragged across, clicked into a message, and marked as seen by the agent](../docs/images/molterm-agent-point.gif)
+
 A molecule's annotations, the user's from the editor or the agent's from `tui.mark`, are drawn by molterm (`POST /api/v1/callouts`,
 through `POST /api/v1/sessions/<id>/picture`): the highlights in the picture, and, for each note, a leader from its atom to the
 picture's right edge, ending in the middle of a row. The TUI carries the leader on in text to a speech bubble with the note in it,
 beside the picture, turning down or up when bubbles would overlap. Bubbles and highlights are drawn over the transcript each frame, so
 they scroll with it. A bubble goes where it covers the least text near what it points at (beside a picture, in a blank line, beside a short line),
 and where it can't help covering some, that text shows faintly in the bubble's margins and empty room, so the user knows there is
-more under it. A bubble can be moved out of the way: drag it, and the line from its atom or text follows it anywhere, into the
-nearest side of the bubble (a molecule's turns at the picture's edge, so as not to cut through the picture); fold it with its `–`
+more under it. The line from its atom or text to the bubble is the cheapest path over the screen's cells: blank
+cells cost least, then punctuation and lines, then letters and digits, with a little more for each turn, and it goes around other
+bubbles and, if it can, around pictures and the drawing being edited; so it slips through the blank column beside a reply rather
+than over its words. A bubble can be moved out of the way: drag it, and its line follows it anywhere; fold it with its `–`
 to a ◆ at the leader's end (a click opens it again), or hide it with its `×`. `/notes` shows them all again, `/notes hide` folds them
 all, and `/notes reset` puts them back where they were.
 
@@ -121,10 +135,8 @@ Text can be pointed at too. The agent's `tui.mark` with `text` highlights those 
 or the agent's), with a note in a bubble hanging under them. The user drags across text: the selection shows as it is dragged, then
 turns blue, and waits above the input as a context; a click on the highlight takes it away.
 
-The input's cursor is an outline over its cell, so the character under it stays readable, and it shows only while the terminal
-has the keyboard (the page tells the TUI, `App.focus`). restty draws a hollow cursor only for an unfocused terminal, and no escape
-sequence asks for one, so the TUI draws its own: a small transparent picture (`kitty.outline`, a PNG made with the standard library),
-placed directly over the cell above the text, the terminal's cursor staying hidden.
+The input's cursor is the terminal's own, where typing goes: restty draws it solid while the terminal has the keyboard, the cue
+that the user can type, and hollow when it hasn't. It is hidden while a question or an edit has the keys.
 
 ### Contexts, above the input
 
@@ -141,12 +153,12 @@ into the same `use_tui` and `use_server_tool` calls: the events, the page and th
 
 ## Status
 
-Verified (2026-11-07): `make test`, 50 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; a molecule
+Verified (2026-11-07): `make test`, 51 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; a molecule
 kept, placed, clicked, edited inline or in a box, and put into the input on Done, or left on Cancel; the inline editor's repaints and
 its tools put away and remembered; the agent's marks on a molecule, with their bubbles beside it, and on text, with a bubble under it;
 a drag that highlights text and leaves it as a context; contexts put into the text, taken out, dropped and sent in full;
 bubbles folded, opened, dragged, hidden and shown again, placed clear of text, their lines routed to any side, and text under
-them shown faintly; the outline cursor, hidden without focus; the inline drawing resized by keys and by its line, the transcript making
+them shown faintly, their lines routed through blank cells; notes made while editing inline, in bubbles at once; the inline drawing resized by keys and by its line, the transcript making
 room and closing up after; the server's sessions, stream, tool answers,
 interrupts, the editor's way through to molterm, and the agent's script, its review of an edited molecule included, with molterm stubbed; an agent elsewhere driving a session over a real HTTP port, the token checks, `AGENT`, and
 the Claude example's tool loop and interrupt handling with a stand-in client). In Chrome: the page starts Pyodide and a session, the greeting streams in, "show me a
@@ -170,7 +182,10 @@ into the text; while editing inline, Alt+↓ twice and a drag of the line under 
 and the molecule staying put, and Done put the picture back in place with the transcript closed up. Then: the cursor shows as an outline
 with the letter under it readable; the agent's note on its own words sits beside the short lines below them, covering nothing; a
 molecule's bubble dragged below and left of the picture, and up over its title, kept its line (beside the picture, not through it),
-and the text it covered showed faintly in its margins.
+and the text it covered showed faintly in its margins. Then: a note added to imatinib's carbonyl oxygen while editing inline
+(right button, Note..., typed, Enter) appeared at once in a bubble beside the drawing, at the end of a leader from the oxygen, beside
+the agent's note on the N-methylpiperazine; the agent's note on its own words hangs from a line that runs down the blank column
+beside the tool lines below, not over them; the cursor in the input is solid while it has the keyboard.
 
 ## Open issues
 

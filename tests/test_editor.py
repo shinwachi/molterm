@@ -1522,3 +1522,20 @@ def test_an_inline_drawing_made_larger_keeps_the_molecule_where_it_was():
     after = [editor.Layout(100, 40, CW, CH, inline=larger).to_cell(s, a[2], a[3]) for a in s["atoms"]]
     assert all(abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6 for a, b in zip(before, after))
     assert editor.HOST_REPAINT in output and s["canvas"] == list(larger)
+
+
+def test_an_inline_editor_tells_its_host_the_notes_for_bubbles_and_draws_their_leaders():
+    import base64 as b64
+    place = (12, 5, 10, 44)
+    status, text, output = editor.step("", "CCO |atomProp:2.atomNote.the OH|", "", 100, 40, CW, CH, inline=place, at=(12, 5, 6, 20))
+    told = json.loads(b64.b64decode(re.search(r"5523;notes=([A-Za-z0-9+/=]+)", output).group(1)))
+    assert told["edge"] == 5 + 44 and [n["text"] for n in told["notes"]] == ["the OH"] and 12 <= told["notes"][0]["row"] < 22
+    assert output.index("5523;notes") < output.index(editor.HOST_REPAINT)  # told before the host draws
+    # an unchanged drawing says nothing more; a note taken away is told, with a repaint for the host's bubbles
+    status, text, output = editor.step(text, "", "", 100, 40, CW, CH, inline=place)
+    assert "5523;notes" not in output
+    s = editor.decode(text)
+    s["notes"] = editor.annotate.empty()
+    status, text, output = editor.step(editor.encode(s), "", "", 100, 40, CW, CH, inline=place)
+    told = json.loads(b64.b64decode(re.search(r"5523;notes=([A-Za-z0-9+/=]+)", output).group(1)))
+    assert told["notes"] == [] and editor.HOST_REPAINT in output

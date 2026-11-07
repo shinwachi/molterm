@@ -341,9 +341,13 @@ def test_the_agent_highlights_text_with_a_note_under_it(app):
     lines, _ = app.lines()
     row = next(i for i, line in enumerate(lines) if "The amide is" in strip(line))
     assert "\x1b[48;2;94;78;28m" in lines[row]  # yellow behind it
-    top = next(i for i, line in enumerate(lines) if "│ here   │" in strip(line)) - 1  # where it covers no text
+    top = next(i for i, line in enumerate(lines) if re.search("[│┤├] here   │", strip(line))) - 1  # where it covers no text
     anchor = strip(lines[row]).index("amide") - 4
-    assert top > row and strip(lines[top])[anchor] == "┴" and all(strip(lines[r])[anchor] == "│" for r in range(row + 1, top))
+    plain = [strip(line) for line in lines]
+    assert top > row and plain[row + 1][anchor] in "│╯╰"  # a line leaves the text from below its first word
+    between = "".join(plain[r][:12] for r in range(row + 1, top))
+    assert "┴" in plain[top] and not re.search("[A-Za-z]", "".join(c for c in between if c in "│─╭╮╯╰"))  # and reaches the bubble's top
+    assert "Mark(" in plain[row + 2] and "Highlighted" in plain[row + 3]  # through the blank column beside them, not over them
     app.event({"type": "tool_use", "id": "t2", "name": "tui.mark", "input": {"text": "nowhere to be found"}})
     assert app.bridge.results[-1][1] == {"error": "\"nowhere to be found\" isn't in the transcript."}
     app.event({"type": "tool_use", "id": "t3", "name": "tui.mark", "input": {"text": "", "clear": True}})
@@ -437,14 +441,14 @@ def test_bubbles_fold_hide_and_move_out_of_the_way(app):
     app.event({"type": "tool_use", "id": "t1", "name": "tui.mark", "input": {"text": "amide", "note": "here"}})
     lines, _ = app.lines()
     row = next(i for i, line in enumerate(lines) if "The amide is" in strip(line))
-    top = next(i for i, line in enumerate(lines) if "│ here" in strip(line)) - 1
+    top = next(i for i, line in enumerate(lines) if re.search("[│┤├] here", strip(line))) - 1
     border = strip(lines[top])
     left = border.index("╭")
     click(app, (top, border.index("–")))  # folded: a mark after the text, which opens it again
     lines, _ = app.lines()
     assert not any("│ here" in strip(line) for line in lines) and "◆" in strip(lines[row])
     click(app, (row, strip(lines[row]).index("◆")))
-    assert "│ here" in strip(app.lines()[0][top + 1])
+    assert re.search("[│┤├] here", strip(app.lines()[0][top + 1]))
     app.key(f"\x1b[<0;{left + 3};{top + 2}M")  # dragged by its body, three rows down and ten across
     app.key(f"\x1b[<32;{left + 13};{top + 5}M")
     app.key(f"\x1b[<0;{left + 13};{top + 5}m")
@@ -484,14 +488,26 @@ def test_a_bubble_goes_where_there_is_no_text_and_any_text_under_it_shows_faintl
     assert [(r, c) for r, c, _, _ in route[:4]] == [(5, 10), (4, 10), (3, 10), (2, 10)] and route[-1][2] == "├"
 
 
-def test_the_cursor_is_an_outline_over_the_cell_while_the_terminal_has_the_keyboard(app):
-    from molterm_tui import kitty
-    assert "a=t,f=100,i=7900" in app.bridge.written[0]
+
+def test_the_cursor_is_the_terminals_own_where_typing_goes(app):
     app.key("hi")
     _, (row, col) = app.lines()
-    assert app.bridge.written[-1].endswith(kitty.place_cursor(row, col)) and "\x1b[?25h" not in app.bridge.written[-1]
-    app.focus(False)
-    assert app.bridge.written[-1].endswith(kitty.hide_cursor())
-    import base64
-    png = base64.b64decode(kitty.outline())
-    assert png.startswith(b"\x89PNG") and int.from_bytes(png[16:20], "big") == 20
+    assert app.bridge.written[-1].endswith(f"\x1b[{row + 1};{col + 1}H\x1b[?25h")  # restty draws it solid while focused
+
+
+def test_notes_made_while_editing_inline_hang_in_bubbles_beside_the_drawing_at_once(app):
+    import base64 as b64
+    show_molecule(app)
+    app.key("/edit 1\r")
+    top, left, rows, cols = app.editing["inline"]
+    told = {"edge": left + cols, "notes": [{"text": "the OH", "row": top + 2}]}
+    notice = "\x1b]5523;notes=" + b64.b64encode(json.dumps(told).encode()).decode() + "\x1b\\"
+    app.edit_answer("0 S1\n" + notice + "\x1b]5523;repaint\x1b\\\x1b[1;1Heditor")
+    written = app.bridge.written[-1]
+    assert "the OH" in strip(written) and "5523" not in written and written.endswith("\x1b[1;1Heditor")  # in the repaint
+    lines = [strip(line) for line in app.lines()[0]]
+    row = next(i for i, line in enumerate(lines) if "the OH" in line)
+    assert lines[row].index("the OH") > left + cols and lines[top + 2][left + cols] in "─╮╯"  # beside it, the leader carried on
+    app.edit_answer("0 S2\n\x1b]5523;notes=" + b64.b64encode(json.dumps({"edge": left + cols, "notes": []}).encode()).decode()
+                    + "\x1b\\\x1b]5523;repaint\x1b\\")
+    assert "the OH" not in strip(app.bridge.written[-1])  # gone with the note

@@ -4,7 +4,7 @@
 #   make prod              run VERSION in production -> http://molterm.localhost
 #   make release [BUMP=minor|major]   bump VERSION, commit, tag vX.Y.Z, build the prod image
 #   make screenshots       the README's hero shots, from the dev services
-#   make agent-gif         the agent's demo GIF, from the dev agent
+#   make agent-gif         the agent's demo GIFs and hero shots, from the dev agent
 #   make <target> ENV=<env>           any target against env/<env>.env (+ docker-compose.<env>.yml if present)
 APP     := molterm
 SERVICE := molterm
@@ -68,6 +68,7 @@ screenshots: ## the README's hero shots in docs/images, from the running dev ser
 	docker run --rm --network traefik --user $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/docs:/docs $(PLAYWRIGHT) \
 		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 && PYTHONPATH=/tmp/pw python /docs/screenshots/shoot.py $(SHOTS)'
 
-agent-gif: ## the agent's demo, docs/images/molterm-agent.gif, recorded from the running dev agent
+agent-gif: ## the agent's demos, docs/images/molterm-agent*.gif and .png, from the running dev agent (GIFS="annotate point" for those only)
 	docker run --rm --network traefik --user $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/docs:/docs $(PLAYWRIGHT) \
-		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 pillow && PYTHONPATH=/tmp/pw python /docs/screenshots/agent_gif.py'
+		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 pillow && export PYTHONPATH=/tmp/pw && \
+		       if [ -z "$(GIFS)" ]; then python /docs/screenshots/agent_gif.py; fi && python /docs/screenshots/agent_features.py $(GIFS)'

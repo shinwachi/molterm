@@ -169,9 +169,6 @@ try {
     window.addEventListener("resize", refit);  // a zoom changes the ratio, and not always the box
     terminal.focus?.();
     box.addEventListener("click", () => terminal.focus?.());
-    // the input's cursor, an outline, shows while the terminal has the keyboard
-    box.addEventListener("focusin", () => app?.focus(true));
-    box.addEventListener("focusout", () => app?.focus(false));
 } catch (error) {
     show("not running", "err");
     document.getElementById("note").textContent = `The page could not start: ${error.message}`;

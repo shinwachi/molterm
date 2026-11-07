@@ -35,7 +35,7 @@ def record(page, script):
     return frames
 
 
-def save(frames, box):
+def save(frames, box, out=OUT):
     crop = tuple(round(v) for v in (box["x"], box["y"], box["x"] + box["width"], box["y"] + box["height"]))
     images, times = [], []
     for t, png in frames:
@@ -52,8 +52,8 @@ def save(frames, box):
         strip.paste(image, (0, i * image.height))
     palette = strip.quantize(colors=256, method=Image.Quantize.MEDIANCUT)
     frames = [image.quantize(palette=palette, dither=Image.Dither.NONE) for image in images]
-    frames[0].save(OUT, save_all=True, append_images=frames[1:], duration=durations, loop=0, optimize=False)
-    print(f"-> {OUT}: {len(frames)} frames, {sum(durations) / 1000:.1f} s, {os.path.getsize(OUT) // 1024} KB", flush=True)
+    frames[0].save(out, save_all=True, append_images=frames[1:], duration=durations, loop=0, optimize=False)
+    print(f"-> {out}: {len(frames)} frames, {sum(durations) / 1000:.1f} s, {os.path.getsize(out) // 1024} KB", flush=True)
 
 
 def main():

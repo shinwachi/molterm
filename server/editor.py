@@ -32,6 +32,7 @@ from rdkit.Chem.Draw import rdMolDraw2D
 from rdkit.Geometry import Point2D
 
 import annotate
+import callouts
 import editor_icons
 import graphics
 import markush
@@ -78,11 +79,14 @@ DRAG_START = 0.35  # bond lengths the pointer must travel before a press counts 
 MERGE = 0.25  # a new ring atom this close to an existing one becomes that atom
 MAX_LABEL = 32
 PRESS_MODES = ("draw", "move", "marquee", "pan", "none")
-LAYERS = ("palette", "structure", "overlay", "text", "backing")
+LAYERS = ("palette", "structure", "overlay", "text", "backing", "notes")
 MIN_BOX_COLS = 36  # room for the buttons on the bottom edge
 STRIP_COLS, STRIP_WIDE = 56, 96  # an inline editor's strip at its narrowest, for its line of status and buttons, and when there is room
 HOST_REPAINT = "\x1b]5523;repaint\x1b\\"  # to an inline editor's host: draw your screen again here, and the editor draws over it
 HOST_TOOLS = "\x1b]5523;tools={}\x1b\\"  # to an inline editor's host: the tools were shown (1) or put away (0), to remember
+# to an inline editor's host: the notes, which it shows in bubbles beside the drawing while it is edited, as base64 of JSON
+# {"edge": the column the leaders end at, "notes": [{"text", "row"}]}; each leader, drawn in the picture, ends in the middle of its row
+HOST_NOTES = "\x1b]5523;notes={}\x1b\\"
 WINDOW_BUTTONS = (("minimize", " _ "), ("maximize", " □ "))  # on the top edge of a box its host can move: the host acts on them
 RESIZE_GRIP = "◢"
 
@@ -1824,13 +1828,55 @@ def draw_structure(s, ui, theme):
             valid = Chem.MolFromMolBlock(to_molblock(s["atoms"], s["bonds"]), removeHs=False)
         if valid is not None:
             annotate.label_stereo(mol, valid)
+    if ui.inline:  # the host shows the notes, in bubbles at the ends of leaders drawn here
+        notes = {**notes, "atoms": [[i, h, ""] for i, h, _ in notes["atoms"]], "bonds": [[a, b, h, ""] for a, b, h, _ in notes["bonds"]]}
     highlights = annotate.apply(mol, notes)
     with rdBase.BlockLogs():
         Chem.ReapplyMolBlockWedging(mol)
         drawer.DrawMolecule(mol, **highlights)
     _decorate(s, drawer, points, graphics.palette(theme)[-1])
+    if ui.inline:
+        _draw_leaders(s, ui, drawer)
     drawer.FinishDrawing()
     return drawer.GetDrawingText()
+
+
+def inline_notes(s, ui):
+    """An inline editor's notes, for its host's bubbles: [(text, the anchor's model point, the row its leader ends on)], for the
+    notes whose atom or bond is on the drawing. The rows are kept apart, as molterm's callouts keeps them."""
+    found = []
+    for ident, _, text in s["notes"]["atoms"]:
+        atom = _atom(s, ident)
+        if text and atom:
+            found.append((text, (atom[2], atom[3])))
+    for first, second, _, text in s["notes"]["bonds"]:
+        a, b = _atom(s, first), _atom(s, second)
+        if text and a and b:
+            found.append((text, ((a[2] + b[2]) / 2, (a[3] + b[3]) / 2)))
+    shown = []
+    for text, point in found:
+        col, row = ui.to_cell(s, *point)
+        if ui.left <= col < ui.left + ui.canvas_cols and ui.top <= row < ui.top + ui.canvas_rows:
+            shown.append((text, point, int(row) - ui.top))
+    rows = callouts._rows([row for _, _, row in shown], ui.canvas_rows)
+    return [(text, point, ui.top + row) for (text, point, _), row in zip(shown, rows)]
+
+
+def _draw_leaders(s, ui, drawer):
+    """Each note's leader, from its atom to the drawing's right edge, in the middle of its row: where the host's bubble takes it on."""
+    colour = tuple(c / 255 for c in callouts.LEADER)
+    edge = ui.left + ui.canvas_cols
+    for _, (x, y), row in inline_notes(s, ui):
+        col, at_row = ui.to_cell(s, x, y)
+        level = row + 0.5
+        bend = min(col + abs(level - at_row) * ui.cell_height / ui.cell_width, edge)
+        path = [ui.to_model(s, col, at_row), ui.to_model(s, bend, level), ui.to_model(s, edge, level)]
+        drawer.SetColour((*colour, 1.0))
+        drawer.SetLineWidth(2)
+        for (x0, y0), (x1, y1) in zip(path, path[1:]):
+            drawer.DrawLine(Point2D(x0 * 1.5, y0 * 1.5), Point2D(x1 * 1.5, y1 * 1.5))
+        drawer.SetFillPolys(True)
+        drawer.DrawArc(Point2D(x * 1.5, y * 1.5), 0.12, 0, 360)
 
 
 def _with_attachments(s, mol):
@@ -2163,6 +2209,12 @@ def frame(s, ui, theme):
             "overlay": digest(marks, s["view"]), "text": digest(popups, menu_bar, status, ui.title, s["button"])}
     if ui.boxed:
         keys["backing"] = digest()
+    notes_told = ""
+    if ui.inline:
+        told = {"edge": ui.left + ui.canvas_cols, "notes": [{"text": text, "row": row} for text, _, row in inline_notes(s, ui)]}
+        keys["notes"] = digest(told)
+        if told["notes"] or s["shown"].get("notes"):
+            notes_told = HOST_NOTES.format(base64.b64encode(json.dumps(told).encode()).decode())
     tmux = placeholders.active.get()
     if tmux:
         # one picture a cell: the marks go into the drawing, and the box's backing isn't needed, as its cells cover what's below
@@ -2183,7 +2235,7 @@ def frame(s, ui, theme):
             out.append(images_gone())
             out.extend(ui.at(row, -1, " " * (ui.cols + 2)) for row in range(-1, ui.rows + 1))
         elif ui.inline:  # all but the editor's own places are
-            out.append(images_gone() + _host_backdrop(ui))
+            out.append(images_gone() + notes_told + _host_backdrop(ui))
         else:
             out.append("\x1b[2J")  # which also removes the images, so all of them are sent again
         s["size"] = size
@@ -2206,9 +2258,12 @@ def frame(s, ui, theme):
             out.append(_place("overlay", s, ui, draw_overlay(s, ui, marks), ui.canvas_cols, ui.canvas_rows, ui.top, ui.left))
         else:
             out.append(f"\x1b_Ga=d,d=I,i={_IDS['overlay'] + s['flips'].get('overlay', 0)},q=2\x1b\\")
-    if s["shown"].get("text") != keys["text"]:
+    notes_changed = ui.inline and s["shown"].get("notes") != keys["notes"]
+    if s["shown"].get("text") != keys["text"] or notes_changed:
         covered = s["cover"]
-        if covered and ui.inline:  # a menu may have covered the host's text too
+        if notes_changed and not resized:  # the host draws its bubbles again, with the rest of its screen
+            out.append(notes_told + _host_backdrop(ui))
+        elif covered and ui.inline:  # a menu may have covered the host's text too
             out.append(_host_backdrop(ui))
         elif covered:  # plain cells again, so that the images show through where a menu was
             for row in range(ui.top, ui.top + ui.canvas_rows):
