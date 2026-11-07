@@ -1091,10 +1091,11 @@ class App:
     def _handles_mouse(self, button, col, row, pressed):
         handles = self.handles
         if button == 32 and handles["drag"]:  # the knob is a row off the text: above the first letter, below the last
-            name = handles["drag"]
-            other = handles["to" if name == "from" else "from"]
-            first = tuple(handles[name]) <= tuple(other)
-            handles[name] = (self._start + row + (1 if first else -1), col)
+            index = self._start + row
+            if handles["drag"] == "from":  # the start stays at or before the end, the selection a letter at the least
+                handles["from"] = min((index + 1, col), tuple(handles["to"]))
+            else:
+                handles["to"] = max((index - 1, col), tuple(handles["from"]))
             return
         if button != 0:
             return
@@ -1105,6 +1106,11 @@ class App:
                     return
             self._end_handles(keep=True)  # a press elsewhere is done with them
             return
+        if handles["drag"]:  # let go: the knobs snap back to the selection's first and last letters, wherever the pointer was
+            letters = [(index, i) for _, spans in self._selection_spans(handles) for index, a, b in spans
+                       for i in range(a, b) if self._plain(index)[i] != " "]
+            if letters:  # spaces at either end aren't letters to snap to
+                handles["from"], handles["to"] = letters[0], letters[-1]
         handles["drag"] = None
 
     def _end_handles(self, keep):
@@ -1606,7 +1612,7 @@ class App:
                         shown[line - start] = paint(shown[line - start], a, min(b, cols), WORDS if chosen.get("words") else SELECTING)
         self._knobs = {}
         if self.handles:  # as iOS has them: a knob just above the selection's first letter, and one just below its last
-            ends = sorted((tuple(self.handles[name]), name) for name in ("from", "to"))
+            ends = [(tuple(self.handles["from"]), "from"), (tuple(self.handles["to"]), "to")]  # never crossed: see _handles_mouse
             for ((line, col), name), step in zip(ends, (-1, 1)):
                 row = line + step - start
                 if 0 <= row < room and 0 <= col < cols:

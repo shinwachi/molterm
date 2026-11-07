@@ -694,7 +694,23 @@ def test_a_right_click_on_the_users_highlight_gives_it_handles_to_drag(app):
     end = app._knobs["to"]
     press(app, *end)
     move(app, end[0], end[1] + 3)  # the end, three letters on: " in"
-    release(app, end[0], end[1] + 3)
+    move(app, end[0] + 1, end[1] + 4)  # and on, a row below, past the space after "in"
+    move(app, end[0], end[1] + 4)
+    release(app, end[0], end[1] + 4)
+    app.lines()
+    assert app._knobs["to"] == (end[0], end[1] + 3)  # let go: the knob snaps back under the last letter, "n"
+    start = app._knobs["from"]
+    press(app, *start)
+    move(app, start[0] + 2, start[1] + 30)  # the start dragged past the end, and below it: it stops at the end
+    assert app.handles["from"] == app.handles["to"]
+    move(app, start[0], start[1])
+    release(app, start[0], start[1])
+    end = app._knobs["to"]
+    press(app, *end)
+    move(app, end[0] - 3, 0)  # and the end, up and past the start: it stops at the start
+    assert app.handles["to"] == app.handles["from"]
+    move(app, end[0], end[1])
+    release(app, end[0], end[1])
     app.key("\r")
     assert app.handles is None and app.highlights[0].phrase == "the kinase in" and len(app.chips) == 1
     assert app.chips[0].tag == '⟦highlighted: "the kinase in"⟧'

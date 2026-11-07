@@ -147,7 +147,7 @@ The right button (or Ctrl+click, a Mac's right click) opens a highlight's menu: 
 hangs in a bubble under it, put it into the message, remove it, or remove all the user's highlights (with more than one, a question in the input's place
 asks first: "Remove all N of your highlights?", keeping them the default). Changing the selection, for
 the user's own, gives it handles, as iOS does: a knob above its first letter and one below its last, dragged to change what it
-covers; Enter or a click elsewhere keeps the change and Esc undoes it. A right click on
+covers, neither going past the other, and snapping back to the first and last letters when let go; Enter or a click elsewhere keeps the change and Esc undoes it. A right click on
 a bubble opens its menu: edit its note, or put it into the message as a context. A molecule's note, edited, goes to molterm
 (`mark` with `edit`, which sets one atom's or bond's note) and becomes the user's. A note is written in a box in the input's place,
 which, like a question, pulses if something else is clicked. The user's bubbles are blue with white letters and controls.
