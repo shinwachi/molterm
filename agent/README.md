@@ -7,6 +7,8 @@ question and wait for the answer. For now the agent is an emulation, a script th
 working: it draws molecules with the molterm server and shows them as pictures (the Kitty graphics protocol, which restty draws), and
 asks before showing their properties.
 
+![Asked for a drug, the agent offers a choice, draws imatinib and shows its properties](../docs/images/molterm-agent.gif)
+
 **To write an agent of your own** and run it on the server or anywhere else, see [TUTORIAL.md](TUTORIAL.md): a base class (`sdk/tuiagent`,
 the standard library only), an example agent, and one with Claude behind it.
 

@@ -4,6 +4,7 @@
 #   make prod              run VERSION in production -> http://molterm.localhost
 #   make release [BUMP=minor|major]   bump VERSION, commit, tag vX.Y.Z, build the prod image
 #   make screenshots       the README's hero shots, from the dev services
+#   make agent-gif         the agent's demo GIF, from the dev agent
 #   make <target> ENV=<env>           any target against env/<env>.env (+ docker-compose.<env>.yml if present)
 APP     := molterm
 SERVICE := molterm
@@ -15,7 +16,7 @@ BUMP    ?= patch
 export APP_TAG := $(if $(filter prod,$(ENV)),$(VERSION),$(ENV))
 COMPOSE := docker compose -p $(APP)-$(ENV) --env-file env/$(ENV).env $(if $(wildcard env/$(ENV).local.env),--env-file env/$(ENV).local.env) -f docker-compose.yml $(if $(wildcard docker-compose.$(ENV).yml),-f docker-compose.$(ENV).yml)
 
-.PHONY: help init build up down restart logs ps login test dev prod release screenshots
+.PHONY: help init build up down restart logs ps login test dev prod release screenshots agent-gif
 
 help: ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*## "}{printf "  %-9s %s\n",$$1,$$2}'
@@ -66,3 +67,7 @@ PLAYWRIGHT := mcr.microsoft.com/playwright/python:v1.49.1-noble
 screenshots: ## the README's hero shots in docs/images, from the running dev services (SHOTS="a.png b.png" for some)
 	docker run --rm --network traefik --user $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/docs:/docs $(PLAYWRIGHT) \
 		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 && PYTHONPATH=/tmp/pw python /docs/screenshots/shoot.py $(SHOTS)'
+
+agent-gif: ## the agent's demo, docs/images/molterm-agent.gif, recorded from the running dev agent
+	docker run --rm --network traefik --user $$(id -u):$$(id -g) -e HOME=/tmp -v $(CURDIR)/docs:/docs $(PLAYWRIGHT) \
+		sh -c 'pip install -q --target /tmp/pw playwright==1.49.1 imageio-ffmpeg && PYTHONPATH=/tmp/pw python /docs/screenshots/agent_gif.py'

@@ -22,7 +22,10 @@ TUI renderer for chemical structures using RDKit and advanced text graphics
 
 ![molterm in the browser: RDKit as WebAssembly, no server](docs/images/web.png)
 
-The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium.
+![The agent's terminal interface: asked for a drug, it offers a choice, draws imatinib and shows its properties](docs/images/molterm-agent.gif)
+
+The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium, and `make agent-gif` records the
+agent's GIF.
 
 Created 2026-10-31 from a Flask project template.
 
