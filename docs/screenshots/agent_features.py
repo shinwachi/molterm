@@ -2,8 +2,8 @@
 
     docs/images/molterm-agent-annotate.gif  a molecule edited where it is shown: a note added, its bubble at once, the drawing made
                                             larger, Done, and the edit clicked into a message for the agent
-    docs/images/molterm-agent-point.gif     pointing things out: a bubble dragged aside, text dragged across, its context clicked
-                                            into a message, and the agent marking it as seen
+    docs/images/molterm-agent-point.gif     pointing things out: a bubble dragged aside, text dragged across and highlighted from
+                                            its menu, its context clicked into a message, and the agent marking it as seen
     docs/images/molterm-agent-inline.png    the inline editor, with its notes in bubbles beside the drawing
     docs/images/molterm-agent-bubbles.png   the agent's marks: a highlighted part of the molecule, notes in bubbles, and a context
 
@@ -112,7 +112,11 @@ def point(p):
         pause(1.5)
         drag(430, 378, 600, 440)                 # the agent's bubble, out of the way
         pause(1.5)
-        drag(290, 597, 412, 597)                 # "N-methylpiperazine": highlighted, waiting above the input
+        drag(290, 597, 412, 597)                 # "N-methylpiperazine": handles, and a menu under them
+        pause(2)
+        page.keyboard.press("ArrowUp")           # its last item: Highlight
+        pause(0.6)
+        page.keyboard.press("Enter")             # highlighted, waiting above the input
         pause(2)
         shot(page, "molterm-agent-bubbles.png")
         click(100, 737)                          # into the message

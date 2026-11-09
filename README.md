@@ -30,7 +30,7 @@ TUI renderer for chemical structures using RDKit and advanced text graphics
 
 ![Editing in place: a note added to the carbonyl oxygen appears in a bubble at once, the drawing is made larger, and Done sends the edit to the agent](docs/images/molterm-agent-annotate.gif)
 
-![Pointing things out: a bubble dragged aside, text dragged across and clicked into a message, and the agent marking it as seen](docs/images/molterm-agent-point.gif)
+![Pointing things out: a bubble dragged aside, text dragged across, highlighted from its menu and clicked into a message, and the agent marking it as seen](docs/images/molterm-agent-point.gif)
 
 The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium, and `make agent-gif` records the
 agent's GIFs and shots.

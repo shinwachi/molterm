@@ -118,7 +118,7 @@ terminal's input, keys and mouse reports alike, goes back into the TUI.
 
 ![The agent's marks: the N-methylpiperazine highlighted, its note in a bubble at the end of a leader, the agent's words highlighted with a note, and the user's highlight waiting above the input](../docs/images/molterm-agent-bubbles.png)
 
-![A bubble dragged aside, its leader following; "N-methylpiperazine" dragged across, clicked into a message, and marked as seen by the agent](../docs/images/molterm-agent-point.gif)
+![A bubble dragged aside, its leader following; "N-methylpiperazine" dragged across, highlighted from its menu, clicked into a message, and marked as seen by the agent](../docs/images/molterm-agent-point.gif)
 
 A molecule's annotations, the user's from the editor or the agent's from `tui.mark`, are drawn by molterm (`POST /api/v1/callouts`,
 through `POST /api/v1/sessions/<id>/picture`): the highlights in the picture, and, for each note, a leader from its atom to the
