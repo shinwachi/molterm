@@ -1,7 +1,7 @@
 """Record the agent's pointing and editing features, from the running dev agent: `make agent-gif` (with agent_gif.py).
 
-    docs/images/molterm-agent-annotate.gif  a molecule edited where it is shown: a note added, its bubble at once, the drawing made
-                                            larger, Done, and the edit clicked into a message for the agent
+    docs/images/molterm-agent-annotate.gif  a molecule edited where it is shown: a note typed in its bubble on two lines, the drawing
+                                            made larger, Done, and the edit clicked into a message for the agent
     docs/images/molterm-agent-point.gif     pointing things out: a bubble dragged aside, text dragged across and highlighted from
                                             its menu, its context clicked into a message, and the agent marking it as seen
     docs/images/molterm-agent-inline.png    the inline editor, with its notes in bubbles beside the drawing
@@ -81,9 +81,12 @@ def annotate(p):
         pause(1.5)
         click(247, 695)                          # Note...
         pause(1)
-        page.keyboard.type("carbonyl O, H-bond acceptor", delay=70)
-        pause(0.5)
-        page.keyboard.press("Enter")             # the bubble, at once
+        page.keyboard.type("carbonyl O", delay=70)  # typed in its bubble, at the end of its leader
+        pause(0.4)
+        page.keyboard.press("Shift+Enter")       # a second line
+        page.keyboard.type("H-bond acceptor", delay=70)
+        pause(0.8)
+        page.keyboard.press("Enter")             # kept
         pause(3)
         shot(page, "molterm-agent-inline.png")
         page.keyboard.press("Alt+ArrowDown")     # a larger drawing, the transcript making room
