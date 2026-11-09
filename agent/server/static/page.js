@@ -190,6 +190,16 @@ try {
     // hidden exactly then, because a TUI waiting for an answer hides the cursor -- so what's left is a page that has quietly stopped
     // listening, and the way back isn't one anybody would guess. This page is nothing but the terminal and nothing else on it wants
     // the keyboard, so every click is a click on it. A click that ends a selection is the user taking a copy, not asking to type.
+    // Shift+Enter starts a new line in a note. A terminal sends it as a plain Enter unless asked for more (the kitty keyboard
+    // protocol, xterm's modifyOtherKeys), and asking would change how every other key comes, so the page sends it itself, as the kitty
+    // protocol writes it, before the terminal sees the key.
+    window.addEventListener("keydown", event => {
+        if (event.key !== "Enter" || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+        if (!box.contains(document.activeElement)) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        app?.key("\x1b[13;2u");
+    }, true);
     document.addEventListener("click", event => {
         if (window.getSelection?.()?.isCollapsed === false) return;
         if (!event.target.closest?.("a, button, input, textarea, select, [contenteditable]")) terminal.focus?.();

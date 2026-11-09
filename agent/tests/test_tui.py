@@ -744,16 +744,18 @@ def test_a_right_click_on_a_highlight_opens_its_menu_for_a_note(app):
     release(app, row, col + 2, 2)
     assert app.menu and not app.handles  # letting go leaves it open
     app.key("\x1b[B\r")  # Add a note…
-    assert app.prompt and "Note on “the kinase”" in screen(app)
-    _, cursor = app.lines()
-    assert cursor is not None  # a cursor where the note is typed
-    click(app, (1, 1))
-    assert app.flash  # the note waits: a click elsewhere pulses it
-    app.key("the target\r")
+    assert app.writing and "shift+enter a new line" in screen(app)
+    lines, cursor = app.lines()
+    assert cursor is None and any("\x1b[7m " in line for line in lines)  # an empty bubble, its cursor in it
+    app.key("the")
+    app.key("\x1b[13;2u")  # shift+enter: a new line, still writing
+    app.key("target")
+    assert any("│ target " in strip(line) and "\x1b[7m " in line for line in app.lines()[0])
+    click(app, (1, 1))  # a click elsewhere keeps it
     mine = next(h for h in app.highlights if h.by == "user")
-    assert mine.note == "the target" and mine.note_by == "user" and app.prompt is None
-    bubble = next(line for line in app.lines()[0] if "the target" in strip(line))
-    assert USER_NOTE_BG + WHITE + "the target" in bubble
+    assert mine.note == "the\ntarget" and mine.note_by == "user" and app.writing is None
+    lines = [line for line in app.lines()[0] if "│ the " in strip(line) or "│ target " in strip(line)]
+    assert len(lines) == 2 and USER_NOTE_BG + WHITE + "the" in lines[0]  # its two lines, white on blue
     theirs = next(h for h in app.highlights if h.by == "agent")
     row, col = where(app, "inactive form")
     press(app, row, col + 1, 2)
@@ -780,9 +782,15 @@ def test_a_bubbles_menu_edits_its_note_or_puts_it_in_the_message(app):
     assert app.input == '⟦note on mol 1: "mine"⟧ ' and 'on atom 2 of mol 1 Ethanol' in app.expansions['⟦note on mol 1: "mine"⟧']
     press(app, row, col, 2)
     app.key("\r")  # Edit the note…
-    assert app.prompt["text"] == "mine"
-    app.key("\x7f\x7f\x7f\x7fthe OH\r")
-    assert app.bridge.pictures[-1]["mark"] == {"edit": True, "atom": 2, "note": "the OH", "by": "user"}
+    assert app.writing["text"] == "mine"
+    app.key("\x7f\x7f\x7f\x7fthe OH")
+    assert any(" the OH" in strip(line) and "\x1b[7m " in line for line in app.lines()[0])  # rewritten in its bubble, where it is
+    app.key("\x1b[13;2udonor\r")
+    assert app.bridge.pictures[-1]["mark"] == {"edit": True, "atom": 2, "note": "the OH\ndonor", "by": "user"}
+    pictures = len(app.bridge.pictures)
+    press(app, row, col, 2)
+    app.key("\rgone\x1b")  # Edit the note…, typed, and cancelled
+    assert len(app.bridge.pictures) == pictures and app.writing is None
 
 
 def test_the_line_where_a_question_was_asked_pulses_with_it(app):
@@ -930,7 +938,7 @@ def test_a_selection_has_handles_at_once_and_its_menu_notes_it_as_a_highlight(ap
     release(app, end[0], end[1] + 3)
     assert app.menu and [label for label, _ in app.menu["items"]] == ["Copy", "Add a note…", "Highlight"]
     app.key("\x1b[B\r")  # Add a note…
-    assert app.handles is None and app.highlights[0].phrase == "the kinase in" and "Note on “the kinase in”" in screen(app)
+    assert app.handles is None and app.highlights[0].phrase == "the kinase in" and app.writing["key"] == ("text", app.highlights[0].key)
     app.key("the target\r")
     assert app.highlights[0].note == "the target" and [c.tag for c in app.chips] == ['⟦highlighted: "the kinase in"⟧']
     assert any(USER_NOTE_BG + WHITE + "the target" in line for line in app.lines()[0])
@@ -943,3 +951,25 @@ def test_a_selection_has_handles_at_once_and_its_menu_notes_it_as_a_highlight(ap
     release(app, row, col + 7)
     app.key("\x1b")  # esc: the menu and the selection go
     assert app.handles is None and app.menu is None and len(app.highlights) == 1
+
+
+def test_a_note_being_written_in_the_inline_editor_shows_in_its_bubble_with_a_cursor(app):
+    import base64
+    show_molecule(app)
+    app.key("/edit 1\r")
+    app.edit_answer("0 S1\n")
+    place = app.editing["inline"]
+    told = {"edge": place[1] + place[3], "notes": [{"text": "the OH\nH-bond", "row": app.editing["inline"][0] + 2, "by": "user", "draft": True}]}
+    app.edit_answer("0 S2\n\x1b]5523;notes=" + base64.b64encode(json.dumps(told).encode()).decode() + "\x1b\\")
+    lines = app.lines()[0]
+    assert any(" the OH" in strip(line) for line in lines)
+    assert any("│ H-bond" in strip(line) and "\x1b[7m " in line for line in lines)  # the cursor after its last letter
+
+
+def test_shift_enter_is_read_as_terminals_send_it():
+    assert [k.name for k in keys.parse("\x1b[13;2u\x1b[27;2;13~\r")] == ["shift-enter", "shift-enter", "enter"]
+
+
+def test_shift_enter_starts_a_new_line_in_the_message_too(app):
+    app.key("one\x1b[13;2utwo\r")
+    assert app.bridge.messages[-1][0] == "one\ntwo"

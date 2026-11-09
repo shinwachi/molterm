@@ -49,6 +49,16 @@ def test_notes_round_trip_through_cxsmiles_that_rdkit_reads():
     assert annotate.split(text) == ("CC(=O)Nc1ccc(O)cc1", NOTED)
 
 
+def test_a_note_keeps_its_lines_through_cxsmiles():
+    notes = {"atoms": [[2, "", "the OH\nH-bond donor"]], "bonds": [], "show": []}
+    text = annotate.write("CCO", notes)
+    assert text == "CCO |atomProp:2.atomNote.the OH&#10;H-bond donor|"
+    assert Chem.MolFromSmiles(text).GetAtomWithIdx(2).GetProp("atomNote") == "the OH\nH-bond donor"  # RDKit reads it as one note
+    assert annotate.split(text)[1] == notes
+    assert annotate.clean_note("\n a\x1b\r\nb  \n\n") == "a\nb"  # line breaks kept, blank ends and control characters not
+    assert annotate.clean_note("\n".join("abcdefgh")).count("\n") == annotate.MAX_NOTE_LINES - 1
+
+
 def test_a_smiles_without_notes_is_written_as_it_was():
     assert annotate.write("OCC", annotate.empty()) == "OCC"
     assert annotate.split("OCC") == ("OCC", annotate.empty())
@@ -60,7 +70,8 @@ def test_notes_on_atoms_or_bonds_that_are_not_there_are_dropped_when_read():
 
 @pytest.mark.parametrize("bad", [{"atoms": [[0, "red", ""]], "bonds": [], "show": []}, {"atoms": [[0, "", ""]], "bonds": [], "show": []},
                                  {"atoms": [], "bonds": [[2, 1, "blue", ""]], "show": []}, {"atoms": [], "bonds": [], "show": ["x"]},
-                                 {"atoms": [[0, "", "a\x1bb"]], "bonds": [], "show": []}, {"atoms": [[0, "", "x" * 41]], "bonds": [], "show": []},
+                                 {"atoms": [[0, "", "a\x1bb"]], "bonds": [], "show": []}, {"atoms": [[0, "", "x" * (annotate.MAX_NOTE + 1)]], "bonds": [], "show": []},
+                                 {"atoms": [[0, "", "a\n\nb\n"]], "bonds": [], "show": []},
                                  {"atoms": [[0, "", "a"], [0, "", "b"]], "bonds": [], "show": []}, {"atoms": []}, [], None])
 def test_bad_notes_are_refused(bad):
     with pytest.raises(annotate.NoteError):

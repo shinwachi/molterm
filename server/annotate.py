@@ -25,14 +25,15 @@ from rdkit.Chem.Draw import rdMolDraw2D
 
 import markush
 
-MAX_NOTE = 40
+MAX_NOTE = 120
+MAX_NOTE_LINES = 6
 MAX_NOTES = 400
 HIGHLIGHTS = {"yellow": (1.0, 0.82, 0.25), "green": (0.45, 0.82, 0.45), "blue": (0.45, 0.68, 1.0), "pink": (1.0, 0.55, 0.72)}
 SHOWN = ("numbers", "cip")
 _HIGHLIGHT_ALPHA = 0.55
 _NOTE, _HIGHLIGHT, _SHOW, _FLAGS = "atomNote", "molterm_highlight", "molterm_show", "molterm_flags"
 FLAGS = ("user", "group")
-_ESCAPES = str.maketrans({c: f"&#{ord(c)};" for c in "&:;|,"})  # as RDKit writes them
+_ESCAPES = str.maketrans({c: f"&#{ord(c)};" for c in "&:;|,\n"})  # as RDKit writes them, a line break as &#10;
 EXPORT_SIZE = (600, 450)
 
 
@@ -49,8 +50,15 @@ def is_empty(notes):
 
 
 def clean_note(text):
-    """A note as it can be kept: printable, on one line, and short."""
-    return "".join(c for c in text if c.isprintable())[:MAX_NOTE].strip()
+    """A note as it can be kept: printable, short, and on a few lines at most (its line breaks are kept, other control characters
+    are not, nor blank lines before or after it)."""
+    lines = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = ["".join(c for c in line if c.isprintable()).rstrip() for line in lines]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines[:MAX_NOTE_LINES])[:MAX_NOTE].strip()
 
 
 def check(notes, limit=10**6):
@@ -242,7 +250,7 @@ def apply(mol, notes):
         if index >= count:
             continue
         if note:
-            mol.GetAtomWithIdx(index).SetProp("atomNote", note)
+            mol.GetAtomWithIdx(index).SetProp("atomNote", note.replace("\n", " "))  # drawn by RDKit, on one line
         if highlight:
             atoms.append(index)
             atom_colours[index] = (*HIGHLIGHTS[highlight], _HIGHLIGHT_ALPHA)
@@ -251,7 +259,7 @@ def apply(mol, notes):
         if not bond:
             continue
         if note:
-            bond.SetProp("bondNote", note)
+            bond.SetProp("bondNote", note.replace("\n", " "))
         if highlight:
             bonds.append(bond.GetIdx())
             bond_colours[bond.GetIdx()] = (*HIGHLIGHTS[highlight], _HIGHLIGHT_ALPHA)

@@ -69,6 +69,7 @@ WORDS = "\x1b[48;2;64;84;130m"  # a selection of whole words, after a double cli
 MENU, MENU_ON = "\x1b[48;2;40;42;50m\x1b[38;2;220;222;228m", "\x1b[48;2;56;78;120m\x1b[38;2;255;255;255m"
 DOUBLE = 0.4  # seconds between two presses in the same place, for a double click
 BUBBLE_TEXT = 30  # a bubble's text at its widest
+NOTE_MAX, NOTE_LINES = 200, 6  # a note on text at its longest; molterm keeps a note on a molecule to 120 (annotate.MAX_NOTE)
 CHIP, CHIP_ON = "\x1b[48;2;48;52;64m\x1b[38;2;200;204;214m", "\x1b[48;2;56;78;120m\x1b[38;2;240;242;248m"  # a context, put away or in the text
 TAG = "\x1b[48;2;56;78;120m"  # a context's tag in the input's text
 NOTE_ROOM = 3 + 4 + BUBBLE_TEXT  # beside a picture with notes: the leader's turn, a bubble's border and its text
@@ -217,7 +218,7 @@ class App:
         self._refusals = 0  # clicks elsewhere while it has waited
         self.clock = time.monotonic  # what pauses and holds are timed by
         self.menu = None  # a context menu: {"row", "col", "items": [(label, action)], "hover"}
-        self.prompt = None  # a note being written: {"title", "text", "save"}
+        self.writing = None  # a note being written in its bubble: {"key" (the bubble's), "text", "save"}
         self.handles = None  # a highlight's selection being changed: {"from", "to" (content line, col), "old", "drag"}
         self._pressed = (0.0, None)  # the last left press, (when, where), for a double click
         self.notice = None  # a word on the line under the input for a moment, (text, until): what was copied
@@ -759,8 +760,8 @@ class App:
             return
         if self.menu:
             self._menu_key(key)
-        elif self.prompt:
-            self._prompt_key(key)
+        elif self.writing:
+            self._writing_key(key)
         elif self.question:
             self._question_key(key)
         elif self.handles and key.name in ("enter", "escape"):
@@ -792,7 +793,11 @@ class App:
                 elif menu.get("handles"):
                     self.handles = None  # a press elsewhere: the selection goes with its menu
             return
-        if self.question or self.prompt:  # they have the keys and the mouse until answered: a click on an option answers, any other pulses
+        if self.writing and pressed and button in (0, 2, 16):  # a note being written: a press anywhere but on it keeps it, then acts
+            if self._bubble_at(row, col) == self.writing["key"]:
+                return
+            self._end_writing(keep=True)
+        if self.question:  # it has the keys and the mouse until answered: a click on an option answers, any other pulses
             if pressed and button in (0, 2):
                 if self.question and button == 0 and row in self._option_hits:
                     self._answer(self._option_hits[row])
@@ -1078,41 +1083,50 @@ class App:
     # -- writing a note --------------------------------------------------------------------------------------------------------------
 
     def _note_text(self, highlight):
+        """Write the highlight's note where it hangs, in its bubble (an empty one, for a new note)."""
         def save(text):
-            highlight.note, highlight.note_by = text[:200], "user"
-            self.bubbles.pop(("text", highlight.key), None)  # shown, if it was folded or hidden
-        self.prompt = {"title": f"Note on “{truncate(highlight.phrase, 40)}”", "text": highlight.note, "save": save}
+            highlight.note, highlight.note_by = text, "user"
+        self._write(("text", highlight.key), highlight.note, save)
 
     def _note_molecule(self, molecule, note):
+        """Rewrite a note on a molecule in its bubble, beside the picture; molterm puts it in the picture's CXSMILES."""
         target = {"atom": note["atom"]} if note.get("atom") is not None else {"bond": note.get("bond")}
 
         def save(text):
             self._repicture(molecule, {"edit": True, **target, "note": text, "by": "user"})
-        self.prompt = {"title": f"Note on mol {molecule.number} {molecule.name}", "text": str(note.get("text") or ""), "save": save}
+        key = ("mol", molecule.number, str(note.get("atom")), str(note.get("bond")), str(note.get("text")))
+        self._write(key, str(note.get("text") or ""), save)
 
-    def _prompt_key(self, key):
-        prompt = self.prompt
+    def _write(self, key, text, save):
+        state = self.bubbles.setdefault(key, {})
+        state.pop("gone", None), state.pop("min", None)  # shown, if it was folded or hidden
+        self.writing = {"key": key, "text": text or "", "save": save}
+
+    def _writing_key(self, key):
+        """Typing in the bubble: enter keeps the note (an empty one takes it off), shift+enter starts a new line, esc cancels."""
+        writing = self.writing
+        text = writing["text"]
         if key.name in ("text", "paste") and not key.alt:
-            prompt["text"] += key.text.replace("\n", " ")
+            text += key.text if key.name == "paste" else key.text.replace("\n", " ")
+        elif key.name == "shift-enter" or (key.name == "enter" and key.alt):  # alt+enter too, for a terminal that can't tell shift
+            text += "\n"
         elif key.name == "backspace":
-            prompt["text"] = prompt["text"][:-1]
+            text = text[:-1]
         elif key.name == "ctrl-u":
-            prompt["text"] = ""
+            text = ""
         elif key.name == "enter":
-            self.prompt, self._refusals = None, 0
-            prompt["save"](_normal(prompt["text"]))
+            self._end_writing(keep=True)
+            return
         elif key.name in ("escape", "ctrl-c"):
-            self.prompt, self._refusals = None, 0
+            self._end_writing(keep=False)
+            return
+        lines = text.split("\n")
+        writing["text"] = "\n".join(lines[:NOTE_LINES])[:NOTE_MAX]
 
-    def _prompt_lines(self, cols):
-        prompt, inner = self.prompt, cols - 4
-        shown = prompt["text"][-(inner - 3):]
-        edge, paper = self._flash_colours()
-        rows = [style(truncate(prompt["title"], inner), BOLD), "> " + shown]
-        box = [style("╭" + "─" * (cols - 2) + "╮", edge)]
-        box += [style("│ ", edge) + (paint(pad(row, inner), 0, inner, paper) if paper else pad(row, inner)) + style(" │", edge) for row in rows]
-        box.append(style("╰" + "─" * (cols - 2) + "╯", edge))
-        return box + [style("  enter keeps it · an empty note takes it off · esc cancels", GREY)]
+    def _end_writing(self, keep):
+        writing, self.writing = self.writing, None
+        if keep:
+            writing["save"](_clean_note(writing["text"]))
 
     def _flash_colours(self):
         """A modal box's border and the tint inside it: pulsing, brightening towards white and warming, then settled."""
@@ -1135,15 +1149,16 @@ class App:
         self._put_in_message(Context(quoted(text).strip(), full, f"“{truncate(text, 36)}”", ("text", group[0].gid)))
 
     def _quote_note(self, highlight):
-        tag = f"⟦note: \"{truncate(highlight.note, 40)}\"⟧"
-        self._put_in_message(Context(tag, f"⟦the note \"{highlight.note}\" on \"{highlight.phrase}\"⟧", f"note “{truncate(highlight.note, 30)}”"))
+        note = _normal(highlight.note)  # its lines as one, for the input's text and the chip
+        tag = f"⟦note: \"{truncate(note, 40)}\"⟧"
+        self._put_in_message(Context(tag, f"⟦the note \"{highlight.note}\" on \"{highlight.phrase}\"⟧", f"note “{truncate(note, 30)}”"))
 
     def _quote_molecule_note(self, molecule, note):
         text = str(note.get("text") or "")
         where = f"atom {note['atom']}" if note.get("atom") is not None else f"the bond between atoms {note.get('bond')}"
-        tag = f"⟦note on mol {molecule.number}: \"{text}\"⟧"
+        tag = f"⟦note on mol {molecule.number}: \"{_normal(text)}\"⟧"
         full = f"⟦the note \"{text}\" on {where} of mol {molecule.number} {molecule.name}: {molecule.smiles}⟧"
-        self._put_in_message(Context(tag, full, f"mol {molecule.number} note “{truncate(text, 24)}”"))
+        self._put_in_message(Context(tag, full, f"mol {molecule.number} note “{truncate(_normal(text), 24)}”"))
 
     # -- a highlight's handles ---------------------------------------------------------------------------------------------------------
 
@@ -1234,7 +1249,7 @@ class App:
             self.cursor = len(self.input)
         elif key.name == "ctrl-u":
             self.input, self.cursor = "", 0
-        elif key.name == "enter" and key.alt:
+        elif (key.name == "enter" and key.alt) or key.name == "shift-enter":  # a new line, as in a note
             self.input = self.input[:self.cursor] + "\n" + self.input[self.cursor:]
             self.cursor += 1
         elif key.name == "enter":
@@ -1391,8 +1406,6 @@ class App:
         self._chip_regions = []
         if self.question:
             return self._question_lines(cols)
-        if self.prompt:
-            return self._prompt_lines(cols)
         lines = []
         if self.busy:
             seconds = int(time.monotonic() - self.busy_since)
@@ -1422,6 +1435,8 @@ class App:
             hint = "  whole words · let go for its menu" if self.selecting["words"] else "  let go for its menu · double-click and drag: whole words"
         elif self.notice and self.clock() < self.notice[1]:
             hint = "  " + self.notice[0]
+        elif self.writing:
+            hint = "  enter keeps the note · shift+enter a new line · esc cancels"
         elif self.handles:
             hint = ("  drag ● to change it · choose from its menu · esc lets it go" if self.handles.get("selection")
                     else "  drag ● to change it · enter or a click keeps it · esc undoes")
@@ -1460,25 +1475,28 @@ class App:
             if base is None:
                 continue
             if molecule is editing:  # the notes as they are being made, from the editor, at the drawing's right edge
-                notes = [{"text": n.get("text"), "row": int(n.get("row") or 0) - e["inline"][0], "atom": "edit", "by": n.get("by")}
-                         for n in e.get("notes") or ()]
+                notes = [{"text": n.get("text"), "row": int(n.get("row") or 0) - e["inline"][0], "atom": "edit", "by": n.get("by"),
+                          "draft": bool(n.get("draft"))} for n in e.get("notes") or ()]
                 groups.append((molecule, notes, base, e.get("edge", EDIT_LEFT + e["cols"])))
             elif molecule.notes:
                 groups.append((molecule, molecule.notes, base, 5 + molecule.cols))  # just past the picture, where the leaders end
         for molecule, notes, base, x in groups:
             room = min(max(cols - x - 3 - 4, 12), BUBBLE_TEXT)
             for note in sorted(notes, key=lambda n: int(n.get("row") or 0)):
-                key = ("mol", molecule.number, str(note.get("atom")), str(note.get("bond")), str(note.get("text")))
-                colours = USER if note.get("by") == "user" else AGENT
+                draft = bool(note.get("draft"))  # being written in the editor, which has the keys
+                key = ("mol", molecule.number, str(note.get("atom")), str(note.get("bond")), "\x00draft" if draft else str(note.get("text")))
+                colours = USER if note.get("by") == "user" or draft else AGENT
                 state = self.bubbles.setdefault(key, {})
                 leader = base + int(note.get("row") or 0)
-                if state.get("gone"):
+                writing = self.writing and self.writing["key"] == key
+                if not (draft or writing) and state.get("gone"):
                     continue
-                if state.get("min"):
+                if not (draft or writing) and state.get("min"):
                     out.append((leader, x, style("──◆", colours[0]), None))
                     self._bubble_hits.append((key, "open", leader, x, x + 3))
                     continue
-                rows = _bubble(str(note.get("text") or ""), room, colours)
+                text = self.writing["text"] if writing else str(note.get("text") or "")
+                rows = _bubble(text, room, colours, cursor=draft or writing)
                 size = width(strip(rows[0]))
                 if "at" in state:
                     top, left = leader + state["at"][0], max(min(x + state["at"][1], cols - size), 0)
@@ -1489,18 +1507,19 @@ class App:
                 taken.append((top, left, len(rows), size))
                 out += self._place_bubble(key, rows, top, left, (leader, x), "left", cols, taken=taken, colours=colours)
         for highlight, line, start, end in self._painted_first:
-            if not highlight.note:
-                continue
             key = ("text", highlight.key)
-            colours = USER if highlight.by == "user" else AGENT
-            state = self.bubbles.setdefault(key, {})
-            if state.get("gone"):
+            writing = self.writing and self.writing["key"] == key
+            if not (highlight.note or writing):
                 continue
-            if state.get("min"):
+            colours = USER if highlight.by == "user" or writing else AGENT
+            state = self.bubbles.setdefault(key, {})
+            if not writing and state.get("gone"):
+                continue
+            if not writing and state.get("min"):
                 out.append((line, end, style("◆", colours[0]), None))
                 self._bubble_hits.append((key, "open", line, end, end + 1))
                 continue
-            rows = _bubble(highlight.note, min(cols - 8, BUBBLE_TEXT), colours)
+            rows = _bubble(self.writing["text"] if writing else highlight.note, min(cols - 8, BUBBLE_TEXT), colours, cursor=writing)
             size = width(strip(rows[0]))
             if "at" in state:
                 top, left = line + state["at"][0], max(min(start + state["at"][1], cols - size), 0)
@@ -1550,7 +1569,8 @@ class App:
         out = []
         for i, line in enumerate(rows):  # its margins and the room after its text may show faintly what it covers, not between words
             text = strip(line)[2:size - 2].rstrip()
-            out.append((top + i, left, line, (colours, [1, *range(2 + width(text), size - 1)]) if 0 < i < height - 1 else None))
+            used = width(text) + (1 if "\x1b[7m" in line else 0)  # a note being written: its cursor isn't room to show through
+            out.append((top + i, left, line, (colours, [1, *range(2 + used, size - 1)]) if 0 < i < height - 1 else None))
         row, col = anchor
         tail = min(max(col, left + 1), max(left + size - 7, left + 1))
         if kind == "text" and top == row + 1 and left < col < left + size - 1:  # right under the text: a tail up at it
@@ -1709,7 +1729,7 @@ class App:
                 if 0 <= row < room and 0 <= col < cols:
                     shown[row] = overlay(shown[row], col, style("●", USER_INK))
                     self._knobs[name] = (row, col)
-        if self.chevron and (self.question or self.prompt):  # pointing down at what waits, sliding down as they fade in and out
+        if self.chevron and self.question:  # pointing down at what waits, sliding down as they fade in and out
             art = _chevrons()
             step = CHEVRON_FRAMES - self.chevron
             level = math.sin(math.pi * (step + 1) / (CHEVRON_FRAMES + 1))
@@ -1739,9 +1759,7 @@ class App:
             if top + molecule.rows > 0 and top < len(shown):
                 self.placed[molecule.number] = (top, 5, molecule.rows, molecule.cols)
         cursor = None
-        if self.prompt:  # after the text being written: a solid cursor, for typing
-            cursor = (room - cut + 2, 4 + width(self.prompt["text"][-(cols - 7):])) if room - cut + 2 >= 0 else None
-        elif not self.question and not self.editing and not self.menu:
+        if not self.question and not self.editing and not self.menu and not self.writing:  # (a note is written with its own cursor)
             inner = cols - 4
             before = wrap(self.input[:self.cursor], inner - 2) if self.input[:self.cursor] else [""]
             if self.input[:self.cursor].endswith(" "):
@@ -1833,15 +1851,35 @@ def _rgb(colour, background=False):
     return f"\x1b[{48 if background else 38};2;{colour[0]};{colour[1]};{colour[2]}m"
 
 
-def _bubble(text, room, colours=AGENT):
-    """A speech bubble's lines, the text wrapped to `room` columns at most: an agent's, or with USER the user's own, white letters
-    and controls in a blue bubble."""
+def _bubble(text, room, colours=AGENT, cursor=False):
+    """A speech bubble's lines, the text wrapped to `room` columns at most, its line breaks kept: an agent's, or with USER the user's
+    own, white letters and controls in a blue bubble. With `cursor`, it is being written: a block after the last letter."""
     ink, paper, _, letters, controls = colours
     lines = wrap(text, room) or [""]
-    inner = max(max(width(line) for line in lines), 6)
+    if cursor and (text.endswith("\n") or text == ""):
+        lines = lines if text == "" else [*lines, ""]  # wrap leaves out a line break at the very end, where the cursor is
+    if cursor and width(lines[-1]) >= room:
+        lines.append("")  # no room left on the line: the cursor starts the next
+    inner = max(max(width(line) for line in lines) + (1 if cursor else 0), 6)
+
+    def row(i, line):
+        body = pad(line, inner)
+        if cursor and i == len(lines) - 1:  # reversed: the paper's colour on the letters' (lighter than the paper)
+            body = line + "\x1b[7m \x1b[27m" + " " * (inner - width(line) - 1)
+        return paper + ink + "│ " + RESET + paper + letters + body + RESET + paper + ink + " │" + RESET
     return ([style("╭" + "─" * (inner - 3) + " ", paper, ink) + style("– ×", paper, controls) + style(" ╮", paper, ink)]  # fold, hide
-            + [paper + ink + "│ " + RESET + paper + letters + pad(line, inner) + RESET + paper + ink + " │" + RESET for line in lines]
+            + [row(i, line) for i, line in enumerate(lines)]
             + [style("╰" + "─" * (inner + 2) + "╯", paper, ink)])
+
+
+def _clean_note(text):
+    """A note as it is kept: its lines without trailing spaces, no blank lines before or after, and NOTE_LINES at most."""
+    lines = [line.rstrip() for line in text.split("\n")]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines[:NOTE_LINES])[:NOTE_MAX].strip()
 
 
 EDIT_LEFT = 5  # the inline drawing's first column: the picture's

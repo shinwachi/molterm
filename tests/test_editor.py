@@ -1567,3 +1567,21 @@ def test_an_inline_editor_tells_its_host_the_notes_for_bubbles_and_draws_their_l
     status, text, output = editor.step(editor.encode(s), "", "", 100, 40, CW, CH, inline=place)
     told = json.loads(b64.b64decode(re.search(r"5523;notes=([A-Za-z0-9+/=]+)", output).group(1)))
     assert told["notes"] == [] and editor.HOST_REPAINT in output
+
+
+def test_a_note_is_written_in_its_bubble_inline_with_shift_enter_for_a_new_line():
+    import base64 as b64
+    place = (12, 5, 10, 44)
+    status, text, output = editor.step("", "CCO", "", 100, 40, CW, CH, inline=place, at=(12, 5, 6, 20))
+    s = editor.decode(text)
+    s["prompt"] = {"targets": [["a", 2]], "text": "", "kind": "note"}  # Note... on the oxygen
+    status, text, output = editor.step(editor.encode(s), "", "the OH\x1b[13;2uH-bond", 100, 40, CW, CH, inline=place)
+    told = json.loads(b64.b64decode(re.findall(r"5523;notes=([A-Za-z0-9+/=]+)", output)[-1]))
+    assert told["notes"] == [{"text": "the OH\nH-bond", "row": told["notes"][0]["row"], "by": "user", "draft": True}]
+    assert "Shift+Enter a new line" in output and editor.HOST_REPAINT in output  # the bar says where it is typed, and the host draws it
+    status, text, output = editor.step(text, "", "\x1b[27;2;13~ donor\r", 100, 40, CW, CH, inline=place)  # xterm's shift+enter too
+    s = editor.decode(text)
+    assert s["prompt"] is None and s["notes"]["atoms"] == [[2, "", "the OH\nH-bond\n donor"]]
+    told = json.loads(b64.b64decode(re.findall(r"5523;notes=([A-Za-z0-9+/=]+)", output)[-1]))
+    assert "draft" not in told["notes"][0] and told["notes"][0]["text"] == "the OH\nH-bond\n donor"
+    assert editor.parse_events("\x1b[13;2u")[0] == [("key", "shift-enter")]

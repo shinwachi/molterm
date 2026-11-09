@@ -153,6 +153,17 @@ several lines, paragraphs and replies: each reply gets its part of the highlight
 it, couldn't.)
 A highlight is found again by its words, whatever the line breaks, blank lines and indents between them.
 
+A note is written where it goes, in its bubble: Add a note… (or Edit the note…) opens the bubble, empty for a new note, with a
+cursor after its last letter, and what is typed appears there. Shift+Enter starts a new line (up to six; Alt+Enter too, for a
+terminal that can't tell Shift+Enter from Enter), Enter keeps the note, an empty one takes it off, and Esc leaves it as it was; a
+click anywhere else keeps it too. The same goes for a note on a molecule: Edit the note… on its bubble rewrites it there, and
+molterm writes it into the picture's CXSMILES; and while a molecule is edited inline, the editor's Note… (on an atom or bond, or
+its highlighted group) shows the note being written in a bubble at the end of its leader, the editor telling the TUI the text
+as it is typed (`"draft": true` in its notes notice). Notes on text keep to 200 characters, notes on a molecule to 120 (molterm's
+limit). Terminals send Shift+Enter as a plain Enter unless asked for more, and asking would change how every key comes, so the page
+sends it itself, as the kitty keyboard protocol writes it (`ESC [ 13 ; 2 u`); the TUI and molterm's editor also read xterm's
+`ESC [ 27 ; 2 ; 13 ~`. In the input, Shift+Enter starts a new line of the message as Alt+Enter does.
+
 The right button (or Ctrl+click, a Mac's right click) opens a highlight's menu: change the selection, add (or edit) a note, which
 hangs in a bubble under it, put it into the message, remove it, or remove all the user's highlights (with more than one, a question in the input's place
 asks first: "Remove all N of your highlights?", keeping them the default). Changing the selection, for
@@ -233,7 +244,10 @@ menu; Copy fired the page's copy with "session: …\n Tips: type a message …" 
 terminal, and the line under the input said how much was copied; Add it as context put the same text above the input as a chip.
 Then: words on the tips line selected had handles at once and the menu (Copy, Add a note…, Highlight) under the lower knob; dragging
 that knob on put the menu away and letting go brought it back under the new end; Add a note… highlighted them in blue, the note in a
-blue bubble under them, and Highlight did the same without the note, the chip above the input both times.
+blue bubble under them, and Highlight did the same without the note, the chip above the input both times. Then: in the inline
+editor, Note… on imatinib's carbonyl oxygen showed an empty blue bubble at the end of its leader, "carbonyl O", Shift+Enter and
+"H-bond acceptor" were typed into it on two lines with the cursor after them, and Enter and Done kept both lines in the picture's
+bubble; Add a note… on "N-methylpiperazine" wrote "solubility" and "basic N" the same way, in its bubble under the words.
 
 ## Open issues
 

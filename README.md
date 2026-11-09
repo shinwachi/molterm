@@ -281,7 +281,8 @@ place for bond properties: other programs keep them as atom properties without k
   to copy just those atoms and the bonds between them, annotate them or delete them.
 - **Annotations, drawn by RDKit:** highlights in four colours and short notes on atoms and bonds, from an atom's or bond's menu, a
   selection's menu or the **Annotate** menu, which also shows atom numbers and CIP stereo labels (R, S, E, Z). They are undone like any
-  other change, follow their atoms through Clean Up, and go when their atom or bond goes.
+  other change, follow their atoms through Clean Up, and go when their atom or bond goes. A note can have a few lines: Shift+Enter
+  starts a new one (kept in the CXSMILES as `&#10;`, which RDKit reads; RDKit draws such a note on one line).
 - **Copying:** **File** copies the drawing as SMILES, SVG or PNG, or all three at once; see [Copying](#copying) below.
 - The SMILES, formula, MW and cLogP update below the drawing. Atoms RDKit can't accept, such as an oxygen with three bonds, get a red
   box, so a drawing can be invalid on its way to being finished. Ctrl-Q then stays in the editor and says why. Ctrl-C leaves anyway, printing
@@ -401,7 +402,8 @@ over it, or the layout changed, the output carries `ESC ] 5523;repaint ST`, wher
 draws over it, and `ESC ] 5523;tools=0` (or 1) when the tools were put away (or shown), for the host to remember. A host may change
 `inline` between steps, to resize the drawing: what was at its top left corner stays there. Inline, notes are the host's to show:
 the drawing has, for each, a leader from its atom to its right edge, and the output carries `ESC ] 5523;notes=<base64 JSON>` with
-`edge` and `notes` (`text`, `row`, `by`), followed by a repaint, whenever they change. A note written in the editor is the
+`edge` and `notes` (`text`, `row`, `by`), followed by a repaint, whenever they change; the note being written is among them, its
+text as typed so far, with `"draft": true`, for the host to show in its bubble while the status line says how to finish it. A note written in the editor is the
 person's own (`by: "user"`, its leader blue; an agent's are amber), and one made with Note Highlighted Group... (offered on an atom or bond in
 a highlighted group) is about the group, its leader from the group's middle. Both travel in the CXSMILES, as
 `molterm_flags` (`user`, `group`) on the note's atom, or `molterm_bond_<n>_flags` for a bond's.
@@ -570,7 +572,7 @@ Open issues:
 - In a window under 64 columns or 16 rows, the box takes the whole window. In a narrow box the help text is cut at the edge.
 - Pictures reach the clipboard only in Kitty: Ghostty, iTerm2 and others don't take OSC 5522 and get the text alone, and say nothing.
   The SVG and PNG are drawn at one size, with RDKit's own colours rather than the terminal's theme.
-- Notes are cut at 40 characters and a drawing holds at most 400 annotations. Atom numbers in the editor follow the drawing's order, which
+- Notes are cut at 120 characters and six lines, and a drawing holds at most 400 annotations. Atom numbers in the editor follow the drawing's order, which
   after saving becomes the order of the written SMILES, so the numbers can change on Done. A bond note sits in RDKit's colour for notes.
 - Annotation needs a menu: there are no keys for it, as ChemDraw's tables have none.
 - The window can only be resized from its right and bottom edges, not its left or top. There is one window at a time, and the minimize and

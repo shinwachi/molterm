@@ -60,7 +60,9 @@ def parse(data):
                 i = j + 1
                 continue
             alt = len(parts) > 1 and parts[1] in ("3", "4")
-            if final == "~":
+            if (final, params) in (("u", "13;2"), ("~", "27;2;13")):  # shift+enter: kitty's keys, xterm's modifyOtherKeys (and the page)
+                keys.append(Key("shift-enter"))
+            elif final == "~":
                 keys.append(Key(_TILDE.get(parts[0], "unknown"), alt=alt))
             else:
                 keys.append(Key(_CSI.get(final, "unknown"), alt=alt))

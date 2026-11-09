@@ -85,7 +85,8 @@ STRIP_COLS, STRIP_WIDE = 56, 96  # an inline editor's strip at its narrowest, fo
 HOST_REPAINT = "\x1b]5523;repaint\x1b\\"  # to an inline editor's host: draw your screen again here, and the editor draws over it
 HOST_TOOLS = "\x1b]5523;tools={}\x1b\\"  # to an inline editor's host: the tools were shown (1) or put away (0), to remember
 # to an inline editor's host: the notes, which it shows in bubbles beside the drawing while it is edited, as base64 of JSON
-# {"edge": the column the leaders end at, "notes": [{"text", "row"}]}; each leader, drawn in the picture, ends in the middle of its row
+# {"edge": the column the leaders end at, "notes": [{"text", "row", "by", and "draft": true for the note being written, its text as
+# typed so far, which the host shows with a cursor where it is typed}]}; each leader, drawn in the picture, ends in the middle of its row
 HOST_NOTES = "\x1b]5523;notes={}\x1b\\"
 WINDOW_BUTTONS = (("minimize", " _ "), ("maximize", " □ "))  # on the top edge of a box its host can move: the host acts on them
 RESIZE_GRIP = "◢"
@@ -1847,10 +1848,15 @@ def inline_notes(s, ui):
     highlighted group for a group's note. The rows are kept apart, as molterm's callouts keeps them."""
     found = []
     entries = [([ident], text) for ident, _, text in s["notes"]["atoms"]] + [([a, b], text) for a, b, _, text in s["notes"]["bonds"]]
+    draft = _draft(s)  # a note being written is shown where it will go, as it is typed, flagged "draft"
+    if draft:
+        entries = [(ids, text) for ids, text in entries if ids != draft] + [(draft, s["prompt"]["text"])]
     for ids, text in entries:
         flags = annotate.flags(s["notes"], ids)
+        if ids == draft:
+            flags = {"user", "draft"} | ({"group"} if s["prompt"].get("group") else set())
         chosen = [_atom(s, i) for i in (_group(s, ["a", *ids] if len(ids) == 1 else ["b", *ids]) if "group" in flags else ids)]
-        if text and all(chosen):
+        if (text or ids == draft) and all(chosen):
             found.append((text, (sum(a[2] for a in chosen) / len(chosen), sum(a[3] for a in chosen) / len(chosen)), flags))
     shown = []
     for text, point, flags in found:
@@ -1859,6 +1865,15 @@ def inline_notes(s, ui):
             shown.append((text, point, int(row) - ui.top, flags))
     rows = callouts._rows([row for _, _, row, _ in shown], ui.canvas_rows)
     return [(text, point, ui.top + row, flags) for (text, point, _, flags), row in zip(shown, rows)]
+
+
+def _draft(s):
+    """The atom ([atom]) or bond ([atom, atom]) whose note is being written, the first if it is for several, or None."""
+    prompt = s["prompt"]
+    if prompt is None or prompt.get("kind", "note") != "note" or not prompt["targets"]:
+        return None
+    target = prompt["targets"][0]
+    return list(target[1:2]) if target[0] == "a" else sorted(target[1:])
 
 
 def _draw_leaders(s, ui, drawer):
@@ -2074,7 +2089,10 @@ def _status(s, ui, smiles, problem, colours, cols=None):
     if s["prompt"] is not None:
         count = len(s["prompt"]["targets"])
         title, hint = _PROMPT_TEXT[s["prompt"].get("kind", "note")]
-        shown = _fit_text(s["prompt"]["text"], cols - len(title) - 4)
+        if ui.inline and _draft(s):  # its host shows it in a bubble at the end of its leader, where it is typed
+            return (f"\x1b[1mNote\x1b[0m{dim}: Enter keeps it · Shift+Enter a new line · Esc cancels\x1b[0m",
+                    f"{dim}{_fit_text('An empty note takes it off.', cols)}\x1b[0m")
+        shown = _fit_text(s["prompt"]["text"].replace("\n", " ⏎ "), cols - len(title) - 4)
         where = "this atom or bond" if count == 1 else f"these {count} atoms and bonds"
         if s["prompt"].get("group"):
             where = "the highlighted group"
@@ -2212,13 +2230,14 @@ def frame(s, ui, theme):
     popups = _popups(s, ui, colours)
     menu_bar = "" if ui.compact else _menu_bar(s, ui, colours)
     status = _bar(s, ui, smiles, problem, colours) if ui.inline else _status(s, ui, smiles, problem, colours)
-    keys = {"palette": digest(active, s["tip"]), "structure": digest(s["atoms"], s["bonds"], s["view"], s["notes"]),
+    keys = {"palette": digest(active, s["tip"]), "structure": digest(s["atoms"], s["bonds"], s["view"], s["notes"], ui.inline and _draft(s)),
             "overlay": digest(marks, s["view"]), "text": digest(popups, menu_bar, status, ui.title, s["button"])}
     if ui.boxed:
         keys["backing"] = digest()
     notes_told = ""
     if ui.inline:
-        told = {"edge": ui.left + ui.canvas_cols, "notes": [{"text": text, "row": row, "by": "user" if "user" in flags else "agent"}
+        told = {"edge": ui.left + ui.canvas_cols, "notes": [{"text": text, "row": row, "by": "user" if "user" in flags else "agent",
+                                                         **({"draft": True} if "draft" in flags else {})}
                                                         for text, _, row, flags in inline_notes(s, ui)]}
         keys["notes"] = digest(told)
         if told["notes"] or s["shown"].get("notes"):
@@ -2323,6 +2342,8 @@ def parse_events(raw):
                     events.append(("key", ("shift-" if modifier == "2" else "") + name))
                 elif match[6] == "Z":
                     events.append(("key", "shift-tab"))
+                elif (match[6], match[5]) in (("u", "13;2"), ("~", "27;2;13")):  # shift+enter (kitty's keys, xterm's modifyOtherKeys)
+                    events.append(("key", "shift-enter"))
                 elif match[6] == "~" and match[5].split(";")[0] in _TILDE_KEYS:
                     events.append(("key", _TILDE_KEYS[match[5].split(";")[0]]))
             elif match[7] in _ARROWS:
@@ -2644,7 +2665,7 @@ def _unbracket(s):
             _set_extra(atom, "sru", None)
 
 
-_PROMPT_TEXT = {"note": ("Note", "Enter puts it on {where}, and an empty note takes it off."),
+_PROMPT_TEXT = {"note": ("Note", "Enter puts it on {where}, Shift+Enter starts a new line, and an empty note takes it off."),
                 "isotope": ("Mass number", "Such as 13 for carbon-13 or 2 for deuterium. Empty takes it off."),
                 "rgroup": ("R-group number", f"1 to {markush.MAX_RGROUP}: the atom becomes R1 and so on."),
                 "list": ("Atom list", "Elements with commas, such as C,N,O; !C,N or NOT C,N for any but those."),
@@ -3030,6 +3051,9 @@ def _prompt_key(s, name):
             _apply_prompt(s, kind, targets, prompt["text"])
     elif name == "backspace":
         prompt["text"] = prompt["text"][:-1]
+    elif name == "shift-enter" and prompt.get("kind", "note") == "note":  # a note can have a few lines
+        if len(prompt["text"]) < MAX_PROMPT and prompt["text"].count("\n") < annotate.MAX_NOTE_LINES - 1:
+            prompt["text"] += "\n"
     elif len(name) == 1 and len(prompt["text"]) < MAX_PROMPT and name.isprintable():
         prompt["text"] += name
 
