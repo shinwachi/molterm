@@ -15,8 +15,9 @@ annotations, into the input for the user's next message.
 Pointing things out: a molecule's annotations (from the editor, or the agent's tui.mark) are highlights in its picture, and notes in
 speech bubbles beside it, each with a leader to its atom. The picture comes from molterm (/api/v1/callouts) through
 `bridge.picture(request as JSON)`, answered by `picture_answer(request, text)` or `picture_failed(request, message)`. Text in the
-transcript can be highlighted too, by the agent (tui.mark with `text`) or by the user, dragging across it, which also puts what they
-marked into their message.
+transcript can be highlighted too, by the agent (tui.mark with `text`) or by the user. Any of the transcript can be selected, dragging
+across it; let go, and it has handles to change it, and a menu under it offers to copy it (`bridge.copy(text)` if the page has it,
+else OSC 52), to note it, or to highlight it, which also puts it above the input as a context (noting it highlights it first).
 
 The agent can use the interface as tools:
   tui.show {title, image, body,    puts a panel in the transcript: a picture (`image`: {png (base64), cols, rows}), drawn with the
@@ -219,6 +220,8 @@ class App:
         self.prompt = None  # a note being written: {"title", "text", "save"}
         self.handles = None  # a highlight's selection being changed: {"from", "to" (content line, col), "old", "drag"}
         self._pressed = (0.0, None)  # the last left press, (when, where), for a double click
+        self.notice = None  # a word on the line under the input for a moment, (text, until): what was copied
+        self._line_blocks = []  # the block each content line belongs to
         self._knobs, self._menu_at = {}, None
         self._option_rows, self._option_hits = {}, {}  # a question's options: footer line -> option, and screen row -> option
 
@@ -243,6 +246,9 @@ class App:
             self.flash -= 1
         if self.chevron:
             self.chevron -= 1
+            self.draw()
+        if self.notice and self.clock() >= self.notice[1]:
+            self.notice = None
             self.draw()
         if self.busy or self.question or self.flash or any(b.kind == "tool" and b.state == "running" for b in self.blocks):
             self.frame += 1
@@ -775,9 +781,16 @@ class App:
             return
         if self.menu:  # it has the mouse until one of its items is chosen, or a press elsewhere closes it
             if pressed and button == 0:
-                chosen, menu, self.menu = self._menu_item_at(row, col), self.menu, None
+                menu = self.menu
+                knob = next((name for name, (r, c) in self._knobs.items() if r == row and abs(c - col) <= 1), None)
+                if menu.get("handles") and knob:  # a selection's knob: the menu waits until it is let go
+                    self.menu, self.handles["drag"] = None, knob
+                    return
+                chosen, self.menu = self._menu_item_at(row, col), None
                 if chosen is not None:
                     menu["items"][chosen][1]()
+                elif menu.get("handles"):
+                    self.handles = None  # a press elsewhere: the selection goes with its menu
             return
         if self.question or self.prompt:  # they have the keys and the mouse until answered: a click on an option answers, any other pulses
             if pressed and button in (0, 2):
@@ -815,9 +828,61 @@ class App:
         if not selection:
             return
         selection["to"] = (self._start + row, col)
-        if selection["from"] == selection["to"] and not selection["words"]:  # a click: nothing to highlight
+        if selection["from"] == selection["to"] and not selection["words"]:  # a click: nothing selected
             return
-        self._mark_spans(self._selection_spans(selection))
+        self._selection_menu(selection)
+
+    def _selection_menu(self, selection):
+        """Let go of a selection: it gets handles at once, a knob above its first letter and one below its last, and under it a menu
+        asks what it is for: to copy it, note it (which highlights it first), or highlight it (which also puts it above the input as
+        a context). Dragging a knob puts the menu away until it is let go; esc, or a press elsewhere, lets the selection go."""
+        found = self._selection_spans(selection)
+        copied = self._selection_text(found)
+        letters = [(index, i) for _, spans in found for index, a, b in spans for i in range(a, b) if self._plain(index)[i] != " "]
+        if not copied.strip() or not letters:
+            self.handles = None
+            return
+        self.handles = {"from": letters[0], "to": letters[-1], "old": [], "drag": None, "selection": True}
+
+        def highlight():
+            return self._mark_spans(found, text=_normal(copied))
+
+        def note():
+            made = highlight()
+            if made:
+                self._note_text(made[0])
+
+        def done(action):
+            def run():
+                self.handles = None
+                action()
+            return run
+        line, last = letters[-1]
+        items = [("Copy", done(lambda: self._copy(copied))), ("Add a note…", done(note)), ("Highlight", done(highlight))]
+        self.menu = {"row": line - self._start + 1, "col": last, "items": items, "hover": 0, "handles": True}  # under the lower knob
+
+    def _selection_text(self, found):
+        """What a selection covers, as text to copy: a paragraph's wrapped lines joined again, other lines (a tool's, a panel's) kept
+        as lines, and pictures left out."""
+        parts = []
+        for block, spans in found:
+            rows = []
+            for index, a, b in spans:
+                row = "".join(t for _, t in cells(self._content_lines[index])[a:b] if not t.startswith(kitty.PLACEHOLDER))
+                rows.append(row.rstrip())
+            prose = getattr(block, "kind", "") in ("assistant", "user")
+            parts.append((" " if prose else "\n").join(r.strip() if prose else r for r in rows))
+        return "\n".join(parts).strip("\n")
+
+    def _copy(self, text):
+        """To the clipboard: through the page (`bridge.copy`), or else OSC 52, which a terminal that allows it takes for itself."""
+        copy = getattr(self.bridge, "copy", None)
+        if copy:
+            copy(text)
+        else:
+            self.bridge.write("\x1b]52;c;" + base64.b64encode(text.encode()).decode() + "\x07")
+        lines = text.count("\n") + 1
+        self.notice = (f"copied {len(text)} characters" + (f", {lines} lines" if lines > 1 else ""), self.clock() + 2.5)
 
     def _press_controls(self, row, col):
         """A press on a bubble (its –, its ×, or itself, to drag it), a folded bubble, or a context above the input."""
@@ -854,12 +919,14 @@ class App:
         (i1, c1), (i2, c2) = sorted([tuple(selection["from"]), tuple(selection["to"])])
         found = []
         for index in range(max(i1, 0), min(i2, len(self._owners) - 1) + 1):
-            owner = self._owners[index]
-            if owner is None:
-                continue
-            block, text_col = owner
+            owner = self._owners[index]  # text that can be highlighted starts after its "● " or "> "; any other line, from its edge
+            block, text_col = owner if owner else (self._line_blocks[index], 0)
             line = self._plain(index)
             used = len(line.rstrip())
+            if not owner and line.strip() and set(line.strip()) <= set("╭╮╰╯─"):  # a box's top or bottom: nothing to select
+                continue
+            if not owner and line.startswith("│ ") and line.rstrip().endswith(" │"):  # inside a box (the banner): not its sides
+                text_col, used = 2, len(line.rstrip()[:-1].rstrip())
             a = max(c1 if index == i1 else 0, text_col)
             b = min(c2 + 1 if index == i2 else used, used)
             if selection.get("words"):
@@ -884,25 +951,25 @@ class App:
                     found.append((block, [(index, a, b)]))
         return found
 
-    def _mark_spans(self, found, old=None):
-        """Highlight what a selection covered, a highlight in each block, one group, and put it above the input as a context. With
-        `old`, the highlights it changes: their colour, note and group are kept."""
+    def _mark_spans(self, found, old=None, text=None):
+        """Highlight what a selection covered, a highlight in each block whose text can be highlighted, one group, and put it above the
+        input as a context. With `old`, the highlights it changes: their colour, note and group are kept. With `text`, the context is
+        that (all the selection, a tool's lines too), and goes above the input even if nothing in it could be highlighted."""
         content, like = self._content_lines, old[0] if old else None
         gid = like.gid if like else next(_KEYS)
         made = []
         for block, spans in found:
-            if block.kind not in ("assistant", "user", "note"):
-                continue
-            text = _normal(" ".join("".join(t for _, t in cells(content[i])[a:b]) for i, a, b in spans))
-            if len(text) >= 2:
-                made.append(Highlight(block, text, like.colour if like else "blue", by=like.by if like else "user", group=gid))
-        if not made:
+            phrase = _normal(" ".join("".join(t for _, t in cells(content[i])[a:b] if not t.startswith(kitty.PLACEHOLDER))
+                                      for i, a, b in spans))
+            if len(phrase) >= 2:
+                made.append(Highlight(block, phrase, like.colour if like else "blue", by=like.by if like else "user", group=gid))
+        if not made and not text:
             return []
         noted = next((h for h in old or () if h.note), None)
-        if noted:
+        if noted and made:
             made[0].note, made[0].note_by, made[0].key = noted.note, noted.note_by, noted.key  # its bubble keeps its place
         self.highlights += made
-        text = " … ".join(h.phrase for h in made)
+        text = text or " … ".join(h.phrase for h in made)
         self._add_context(Context(quoted(text).strip(), quoted(text).strip(), f"“{truncate(text, 36)}”", ("text", gid)))
         return made
 
@@ -1005,6 +1072,8 @@ class App:
             menu["items"][menu["hover"]][1]()
         elif key.name in ("escape", "ctrl-c"):
             self.menu = None
+            if menu.get("handles"):
+                self.handles = None
 
     # -- writing a note --------------------------------------------------------------------------------------------------------------
 
@@ -1111,10 +1180,17 @@ class App:
                        for i in range(a, b) if self._plain(index)[i] != " "]
             if letters:  # spaces at either end aren't letters to snap to
                 handles["from"], handles["to"] = letters[0], letters[-1]
+            if handles.get("selection"):  # and a selection's menu is back, under it
+                self._selection_menu(handles)
+                return
         handles["drag"] = None
 
     def _end_handles(self, keep):
         handles, self.handles = self.handles, None
+        if handles.get("selection"):  # a selection, not yet a highlight: its menu again
+            if keep:
+                self._selection_menu(handles)
+            return
         old = handles["old"]
         if keep and self._mark_spans(self._selection_spans({"from": handles["from"], "to": handles["to"]}), old):
             return
@@ -1243,9 +1319,10 @@ class App:
                     style("  which runs as Python in your browser (Pyodide).", GREY), "",
                     style(f"  session: {self.session or 'connecting…'}", GREY)]
             border = style("╭" + "─" * (cols - 2) + "╮", ACCENT)
-            return [border, *(style("│ ", ACCENT) + pad(row, inner) + style(" │", ACCENT) for row in rows),
-                    style("╰" + "─" * (cols - 2) + "╯", ACCENT), "",
-                    style(truncate(" Tips: type a message for the agent and press enter. /help for help.", cols), GREY), ""], [], None
+            lines = [border, *(style("│ ", ACCENT) + pad(row, inner) + style(" │", ACCENT) for row in rows),
+                     style("╰" + "─" * (cols - 2) + "╯", ACCENT), "",
+                     style(truncate(" Tips: type a message for the agent and press enter. /help for help.", cols), GREY), ""]
+            return (*self._paint_shown(block, lines), None)
         if block.kind == "user":
             lines, painted = self._text_lines(block, wrap(block.text, cols - 4), 2, "> ", "  ",
                                               lambda line: style(pad(line, cols - 2), USER_BG, GREY))
@@ -1258,8 +1335,18 @@ class App:
             lines, painted = self._text_lines(block, block.text.split("\n"), 5, "  └  ", "     ", lambda line: style(line, tone))
             return lines + [""], painted, 5
         if block.kind == "tool":
-            return self._tool_lines(block, cols), [], None
+            return (*self._paint_shown(block, self._tool_lines(block, cols)), None)
         return [], [], None
+
+    def _paint_shown(self, block, lines):
+        """Highlights on lines drawn as they are (a tool's, the banner), found in what they show: the lines, and where each was painted."""
+        shown, painted = [strip(line) for line in lines], []
+        for highlight in (h for h in self.highlights if h.block is block):
+            for line, start, end in _find(shown, highlight.phrase):
+                shade = HIGHLIGHTS.get(highlight.colour, HIGHLIGHTS["yellow"]) + (USER_INK if highlight.by == "user" else "")
+                lines[line] = paint(lines[line], start, end, shade)
+                painted.append((highlight, line, start, end))
+        return lines, painted
 
     def _tool_lines(self, block, cols):
         mark = {"running": style("●", _rgb(_mix((80, 80, 80), (236, 236, 236), _fade(self.frame)))),
@@ -1332,9 +1419,12 @@ class App:
         box.append(style("╰" + "─" * (cols - 2) + "╯", GREY))
         hint = "  ? /help for shortcuts" if not self.scroll else f"  scrolled back {self.scroll} lines · pgdn to return"
         if self.selecting:
-            hint = "  whole words · let go to highlight" if self.selecting["words"] else "  let go to highlight · double-click and drag for whole words"
+            hint = "  whole words · let go for its menu" if self.selecting["words"] else "  let go for its menu · double-click and drag: whole words"
+        elif self.notice and self.clock() < self.notice[1]:
+            hint = "  " + self.notice[0]
         elif self.handles:
-            hint = "  drag ● to change it · enter or a click keeps it · esc undoes"
+            hint = ("  drag ● to change it · choose from its menu · esc lets it go" if self.handles.get("selection")
+                    else "  drag ● to change it · enter or a click keeps it · esc undoes")
         right = f"session {self.session[:8]}" if self.session else "connecting…"
         hint_line = style(pad(hint, cols - width(right) - 2) + right, GREY)
         return lines + box + [hint_line]
@@ -1567,13 +1657,14 @@ class App:
     def lines(self):
         """The screen's lines, top to bottom, and where the cursor goes (row, col), or None to hide it."""
         cols = self.cols - 1  # a margin, so nothing is written in the last column
-        content, self._content_at, self._owners, painted = [], {}, [], []
+        content, self._content_at, self._owners, self._line_blocks, painted = [], {}, [], [], []
         for block in self.blocks:
             lines, marks, text_col = self._block_lines(block, cols)
             if block.molecule and block.image_line >= 0:
                 self._content_at[block.molecule.number] = len(content) + block.image_line
             painted += [(h, len(content) + line, start, end) for h, line, start, end in marks]
             self._owners += [(block, text_col) if text_col is not None and i < len(lines) - 1 else None for i in range(len(lines))]
+            self._line_blocks += [block] * len(lines)
             content += lines
         self._painted = painted
         firsts = {}

@@ -125,6 +125,23 @@ const bridge = {
     edit: json => post(`/api/v1/sessions/${session}/edit`,
                        { ...JSON.parse(json), cell_width: Math.round(cell.width), cell_height: Math.round(cell.height) })
         .then(text => app.edit_answer(text), error => app.edit_failed(error.message)),
+    // text the user chose to copy. The Clipboard API needs a secure page (https or localhost), and this one may be served over plain
+    // http, so the older way is tried when it's missing: a hidden textarea selected and copied, which a click (the menu's Copy) allows.
+    copy: text => {
+        const fallback = () => {
+            const area = document.createElement("textarea");
+            area.value = text;
+            area.setAttribute("readonly", "");
+            area.style.cssText = "position: fixed; top: 0; left: 0; opacity: 0";
+            document.body.append(area);
+            area.select();
+            try { document.execCommand("copy"); } catch (error) { console.error(error); }
+            area.remove();
+            terminal.focus?.();  // the keys back to the terminal
+        };
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(fallback);
+        else fallback();
+    },
     // a molecule's picture with its annotations, the notes left for the TUI to put in bubbles: the TUI's request comes back with the answer
     picture: request => post(`/api/v1/sessions/${session}/picture`, JSON.parse(request))
         .then(text => app.picture_answer(request, text), error => app.picture_failed(request, error.message)),

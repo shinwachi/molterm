@@ -136,11 +136,21 @@ to a ◆ at the leader's end (a click opens it again), or hide it with its `×`.
 all, and `/notes reset` puts them back where they were.
 
 Text can be pointed at too. The agent's `tui.mark` with `text` highlights those words where they last appear (the user's own words
-or the agent's), with a note in a bubble hanging under them. The user drags across text: the selection shows as it is dragged, then
-turns blue, its tint and its letters both, as the user's notes are, and waits above the input as a context; the
-highlight's menu takes it away. A drag takes exactly the letters it crosses; a double click takes the word under it, and a double
+or the agent's), with a note in a bubble hanging under them. The user can select any of the transcript, dragging across it: the
+agent's and their own words, a tool's line and its result, a panel's text, the banner (not its box). The selection shows as it is
+dragged; let go, and it has handles at once, as a highlight's (see below), a knob above its first letter and one below its last,
+and a menu under it asks what it is for (dragging a knob puts the menu away until it is let go): **Copy** puts it on the clipboard (a reply's
+wrapped lines joined again, a tool's lines kept as lines, pictures left out), and the line under the input says how much went;
+**Add a note…**
+highlights it and asks for the note, which hangs in a bubble under it; **Highlight** highlights it in blue, its tint and its letters
+both, as the user's notes are, and puts it above the input as a context. Any of the transcript can be highlighted this way, a
+tool's lines and the banner too; the highlight's menu takes it away. Esc, or a press elsewhere, lets the selection go. Copying goes through the page (`bridge.copy`): the Clipboard API where the page is secure (https or localhost),
+and otherwise, as over plain http, a hidden text area copied by the menu's click; a TUI with no `copy` in its bridge sends OSC 52
+for the terminal instead. A drag takes exactly the letters it crosses; a double click takes the word under it, and a double
 click held and dragged takes whole words (the selection darkens, and the line under the input says so). A drag may run over
 several lines, paragraphs and replies: each reply gets its part of the highlight, and they go into the message, and away, as one.
+(Before, a drag highlighted at once and only the agent's and the user's words could be selected; the rest of the transcript, most of
+it, couldn't.)
 A highlight is found again by its words, whatever the line breaks, blank lines and indents between them.
 
 The right button (or Ctrl+click, a Mac's right click) opens a highlight's menu: change the selection, add (or edit) a note, which
@@ -187,7 +197,8 @@ into the same `use_tui` and `use_server_tool` calls: the events, the page and th
 Verified (2026-11-07): `make test`, 51 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; a molecule
 kept, placed, clicked, edited inline or in a box, and put into the input on Done, or left on Cancel; the inline editor's repaints and
 its tools put away and remembered; the agent's marks on a molecule, with their bubbles beside it, and on text, with a bubble under it;
-a drag that highlights text and leaves it as a context; contexts put into the text, taken out, dropped and sent in full;
+a drag across any text, the agent's words, a tool's lines or the banner,
+then copied (through the page or OSC 52) or added as a context; a drag that highlights text and leaves it as a context; contexts put into the text, taken out, dropped and sent in full;
 bubbles folded, opened, dragged, hidden and shown again, placed clear of text, their lines routed to any side, and text under
 them shown faintly, their lines routed through blank cells; notes made while editing inline, in bubbles at once; the inline drawing resized by keys and by its line, the transcript making
 room and closing up after; the server's sessions, stream, tool answers,
@@ -216,7 +227,13 @@ molecule's bubble dragged below and left of the picture, and up over its title, 
 and the text it covered showed faintly in its margins. Then: a note added to imatinib's carbonyl oxygen while editing inline
 (right button, Note..., typed, Enter) appeared at once in a bubble beside the drawing, at the end of a leader from the oxygen, beside
 the agent's note on the N-methylpiperazine; the agent's note on its own words hangs from a line that runs down the blank column
-beside the tool lines below, not over them; the cursor in the input is solid while it has the keyboard.
+beside the tool lines below, not over them; the cursor in the input is solid while it has the keyboard. Then (2026-11-09), in
+headless Chromium over plain http: a drag from the banner's session line to the tips under it showed the selection and, let go, the
+menu; Copy fired the page's copy with "session: …\n Tips: type a message …" (no box sides or bottom), the keys went back to the
+terminal, and the line under the input said how much was copied; Add it as context put the same text above the input as a chip.
+Then: words on the tips line selected had handles at once and the menu (Copy, Add a note…, Highlight) under the lower knob; dragging
+that knob on put the menu away and letting go brought it back under the new end; Add a note… highlighted them in blue, the note in a
+blue bubble under them, and Highlight did the same without the note, the chip above the input both times.
 
 ## Open issues
 
@@ -225,7 +242,9 @@ beside the tool lines below, not over them; the cursor in the input is solid whi
 - Sessions are in one process's memory: a restart ends them, and the service can't run more than one worker.
 - A session link is its only key on the user's side: anyone with `/?session=<id>` can read and type in it. An agent elsewhere that
   keeps polling keeps its session open past the 30 minutes.
-- While the mouse is reported to the TUI, the terminal doesn't select text with it; a drag highlights instead, and there is no copy.
+- While the mouse is reported to the TUI, the terminal doesn't select text with it: the TUI selects and copies itself. A highlight
+  on a tool's line is found by its words in what the line shows, so it moves with them if the line is redrawn differently. Only what is
+  in the transcript can be selected (not the input, a question or a bubble), and a selection can't run past the screen's edge.
 - Inline, the drawing gets at least 8 rows and 40 columns, so around a small molecule it hides some of the transcript until Done;
   the box editor covers more. The drawing matches the picture's place and scale closely, not exactly (the editor lays atoms out
   itself, and draws them its own way). Resizing the window while editing cancels the edit.
