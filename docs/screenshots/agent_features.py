@@ -1,11 +1,13 @@
 """Record the agent's pointing and editing features, from the running dev agent: `make agent-gif` (with agent_gif.py).
 
-    docs/images/molterm-agent-annotate.gif  a molecule edited where it is shown: a note typed in its bubble on two lines, the drawing
-                                            made larger, Done, and the edit clicked into a message for the agent
+    docs/images/molterm-agent-annotate.gif  a molecule edited where it is shown: a note typed in its bubble on two lines, the atom
+                                            highlighted and painted in the SMILES under the drawing, the SMILES hidden and shown again
+                                            with its checkbox, the drawing made larger, Done, and the edit clicked into a message
     docs/images/molterm-agent-point.gif     pointing things out: a bubble dragged aside, text dragged across and highlighted from
                                             its menu, its context clicked into a message, and the agent marking it as seen
     docs/images/molterm-agent-inline.png    the inline editor, with its notes in bubbles beside the drawing
-    docs/images/molterm-agent-bubbles.png   the agent's marks: a highlighted part of the molecule, notes in bubbles, and a context
+    docs/images/molterm-agent-bubbles.png   the agent's marks: a highlighted part of the molecule, painted in its SMILES too, notes in
+                                            bubbles, and a context
 
 Each run starts a session, asks for imatinib and declines its properties, then records. The pointer positions are those of a
 1000 by 900 window, as agent_gif.py uses.
@@ -75,11 +77,11 @@ def annotate(p):
         pause(1.5)
         click(150, 385)                          # the picture: the editor, in place
         pause(3)
-        page.mouse.move(*at(217, 459), steps=10)  # the carbonyl oxygen
+        page.mouse.move(*at(217, 432), steps=10)  # the carbonyl oxygen
         pause(1)
-        click(217, 459, "right")
+        click(217, 432, "right")
         pause(1.5)
-        click(247, 695)                          # Note...
+        click(247, 667)                          # Note...
         pause(1)
         page.keyboard.type("carbonyl O", delay=70)  # typed in its bubble, at the end of its leader
         pause(0.4)
@@ -89,6 +91,14 @@ def annotate(p):
         page.keyboard.press("Enter")             # kept
         pause(3)
         shot(page, "molterm-agent-inline.png")
+        click(217, 432, "right")
+        pause(1.5)
+        click(247, 653)                          # Highlight: its O painted in the SMILES under the drawing
+        pause(2.5)
+        click(505, 272)                          # ☑ SMILES: hidden
+        pause(2)
+        click(505, 272)                          # and shown again
+        pause(2)
         page.keyboard.press("Alt+ArrowDown")     # a larger drawing, the transcript making room
         pause(2.5)
         page.keyboard.press("Alt+ArrowDown")
@@ -113,9 +123,9 @@ def point(p):
 
     def script():
         pause(1.5)
-        drag(430, 378, 600, 440)                 # the agent's bubble, out of the way
+        drag(430, 342, 600, 400)                 # the agent's bubble, out of the way
         pause(1.5)
-        drag(290, 597, 412, 597)                 # "N-methylpiperazine": handles, and a menu under them
+        drag(290, 582, 412, 582)                 # "N-methylpiperazine": handles, and a menu under them
         pause(2)
         page.keyboard.press("ArrowUp")           # its last item: Highlight
         pause(0.6)
