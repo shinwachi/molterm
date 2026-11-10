@@ -1497,6 +1497,24 @@ def test_callouts_draw_highlights_and_leave_the_notes_to_the_host():
     assert result["notes"][0]["by"] == "agent" and result["notes"][0]["group"]  # an agent's, about all it highlighted
 
 
+def test_a_highlighted_atom_keeps_its_elements_colour():
+    # RDKit writes a highlighted atom's label in the default ink unless told otherwise, and on a dark theme that's pale and lost in
+    # the highlight: a highlighted piperazine had no Ns
+    import callouts
+    import graphics
+    nitrogen = tuple(round(c * 255) for c in graphics.palette("dark")[7])
+
+    def blue(mark):
+        png = base64.b64decode(callouts.picture("CN1CCN(C)CC1", 40, 16, "dark", mark=mark)["png"])
+        pixels = np.asarray(Image.open(BytesIO(png)).convert("RGBA")).reshape(-1, 4).astype(int)
+        return int((np.abs(pixels[:, :3] - nitrogen).max(axis=1) < 24).sum())
+
+    plain = blue(None)
+    assert plain > 0
+    for colour in ("yellow", "pink"):
+        assert blue({"smarts": "N1CCN(C)CC1", "highlight": colour}) > plain // 3
+
+
 def test_callouts_edit_one_note_as_the_person_rewrote_it():
     import callouts
     noted = "CC(=O)Nc1ccc(O)cc1 |atomProp:1.atomNote.amide:1.molterm_flags.group:1.molterm_highlight.yellow:2.molterm_highlight.yellow|"

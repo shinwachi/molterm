@@ -178,7 +178,8 @@ class EmulatedAgent(TuiAgent):
                  "edit or annotate it, and I'll look at your version.")
         feature = FEATURES.get(name)
         if feature and shown.get("mol"):  # point out a part of it, in a bubble, and the words that say so
-            self.mark(mol=shown["mol"], smarts=feature[0], highlight="yellow", note=feature[1])
+            # pink, the agent's own: the person highlights in yellow, and their edits come back with it
+            self.mark(mol=shown["mol"], smarts=feature[0], highlight="pink", note=feature[1])
             self.say(f"I've pointed out one part of it: the {feature[1].split(':')[0]}, painted in its SMILES under the picture as well "
                      "(☑ SMILES in the editor, or /smiles, hides that). Drag across any text to point at it yourself.")
             self.mark(text="drag across any text", highlight="green", note="like this: it goes into your message")

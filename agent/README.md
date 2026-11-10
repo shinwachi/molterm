@@ -296,6 +296,10 @@ host told). In headless Chromium against the dev services: imatinib's SMILES und
 (`CN3CCN(C)CC3`); a click on the picture showed the drawing's SMILES, painted, under the resizing line, and ☑ SMILES on the
 editor's line; clicking it hid the line (☐), Cancel left it hidden under the picture, the next edit began with it hidden, and
 `/smiles` brought it back.
+Then (2026-11-10): a highlighted atom's label had gone. RDKit writes it in the default ink, pale on this dark page and lost in the
+highlight, so imatinib's piperazine showed no Ns. Highlighted atoms now keep their elements' colours. The demo agent marks in pink,
+its own colour, apart from the yellow a person highlights with. molterm's tests check that a highlighted piperazine's Ns are drawn
+in nitrogen blue.
 
 ## Open issues
 

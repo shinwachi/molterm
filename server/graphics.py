@@ -77,6 +77,7 @@ def draw_image(mol: Mol, cols, rows, theme=DEFAULT_THEME, cell_pixels=CELL_PIXEL
     # Unlike the text modes, wedges survive at this resolution. Chiral hydrogens would still draw as unlabelled stubs.
     options.prepareMolsBeforeDrawing = False
     options.setHighlightColour((*(c / 255 for c in themes.get(theme).highlight), 0.45))
+    options.standardColoursForHighlightedAtoms = True  # its label in its element's colour, not the pale ink that the highlight hides
     bonds = [b.GetIdx() for b in mol.GetBonds() if b.GetBeginAtomIdx() in highlight and b.GetEndAtomIdx() in highlight]
     prepared = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=True, addChiralHs=False, wedgeBonds=True)
     drawer.DrawMolecule(prepared, highlightAtoms=sorted(highlight), highlightBonds=bonds)

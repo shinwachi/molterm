@@ -369,6 +369,9 @@ def set_options(options, notes):
     options.addAtomIndices = "numbers" in notes["show"]
     options.addStereoAnnotation = "cip" in notes["show"]
     options.annotationFontScale = 0.6
+    # a highlighted atom keeps its element's colour: RDKit otherwise writes its label in the default ink, which on a dark theme is
+    # pale, and disappears into the highlight (the Ns of a highlighted piperazine)
+    options.standardColoursForHighlightedAtoms = True
 
 
 def export(mol, notes, fmt, palette=None, size=EXPORT_SIZE):
