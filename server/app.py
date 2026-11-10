@@ -252,7 +252,9 @@ def edit():
     Or, to edit a picture where it is shown, `inline` (row,col,rows,cols: the drawing's place on the screen), with `at`, the picture's
     own place, which the drawing matches, and `strip=0` to begin with the tools put away (F2 shows them). Everything else on the screen
     stays the host's: the output asks the host to draw it again with `ESC ] 5523;repaint ST`, and tells it the tools were put away or
-    shown with `ESC ] 5523;tools=0` (or 1), for it to remember.
+    shown with `ESC ] 5523;tools=0` (or 1), for it to remember. `show_smiles=0` begins with the SMILES hidden; a hosted editor tells
+    its host whether it's shown, and an inline one the SMILES with its highlighted parts too, for the host to show under the drawing,
+    with `ESC ] 5523;smiles=<base64 of JSON>` (see editor.HOST_SMILES).
 
     The first line of the answer is "<0 to go on, 1 finished, 2 failed, 3 cancelled> <state>". After it comes what to print: on finishing,
     the SMILES.
@@ -267,7 +269,7 @@ def edit():
             status, state, output = editor.step(form.get("state", ""), form.get("smiles", ""), raw, cols, rows, cell_width, cell_height, pixels, theme,
                                                 editor_box(form.get("box", "")), form.get("title", "")[:200], compact=form.get("compact") == "1",
                                                 inline=editor_box(form.get("inline", ""), "inline"), at=editor_box(form.get("at", ""), "at"),
-                                                strip=form.get("strip") != "0")
+                                                strip=form.get("strip") != "0", show_smiles=form.get("show_smiles") != "0")
     except (molecule.ParseError, editor.StateError) as e:
         return (e.message if isinstance(e, molecule.ParseError) else str(e)) + "\n", 400, plain
     return f"{status} {state}\n{output}", 200, plain
@@ -407,7 +409,9 @@ def callouts_json():
     annotations, "cols", "rows", and optional "cell_width", "theme", "background", "foreground", "mark": {"atoms": [index, ...] or
     "smarts", "highlight": yellow|green|blue|pink, "note"}, "clear": true to drop the annotations first}. The answer: {"png" (base64),
     "cols", "rows", "smiles" (with the annotations, the mark's included), "notes": [{"atom", "bond", "text", "highlight", "row"}],
-    "marked": [atom indices]}, where a note's leader ends at the picture's right edge in the middle of its `row`."""
+    "marked": [atom indices], "paint": {"smiles": the SMILES without its extension, "marks": [[start, end, colour], ...]}}, where a
+    note's leader ends at the picture's right edge in the middle of its `row`, and `paint` says which parts of the SMILES are
+    highlighted, for showing it under the picture."""
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify(error={"code": "bad_request", "message": "Send a JSON object with an \"input\" field."}), 400

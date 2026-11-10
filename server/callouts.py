@@ -141,7 +141,8 @@ def _rows(wanted, rows):
 
 def picture(text, cols, rows, theme=graphics.DEFAULT_THEME, cell_pixels=graphics.CELL_PIXELS, mark=None, clear=False):
     """The picture and what a host needs to put bubbles beside it: {png (base64), cols, rows, smiles (the CXSMILES with the
-    annotations), notes: [{atom, bond, text, highlight, row, by, group}], marked}. `row` is the row of cells the note's leader ends
+    annotations), notes: [{atom, bond, text, highlight, row, by, group}], marked, paint (the SMILES without its extension, and the
+    parts of it to paint in their highlights' colours, see annotate.smiles_paint)}. `row` is the row of cells the note's leader ends
     on, at the right edge; `by` is "user" for a note the person wrote, drawn in their colour, or "agent"; a `group` note points at
     the middle of its highlighted group."""
     mol, kept, notes = _read(text)
@@ -211,7 +212,7 @@ def picture(text, cols, rows, theme=graphics.DEFAULT_THEME, cell_pixels=graphics
     buffer = BytesIO()
     out.save(buffer, "PNG")
     return {"png": base64.b64encode(buffer.getvalue()).decode("ascii"), "cols": used_cols, "rows": used_rows,
-            "smiles": annotate.write(kept, notes), "marked": marked,
+            "smiles": annotate.write(kept, notes), "marked": marked, "paint": annotate.smiles_paint(kept, notes),
             "notes": [{"atom": entry[1] if entry[0] == "a" else None, "bond": list(entry[1]) if entry[0] == "b" else None,
                        "text": entry[2], "highlight": entry[3], "row": row,
                        "by": "user" if "user" in annotate.flags(notes, ids(entry)) else "agent",

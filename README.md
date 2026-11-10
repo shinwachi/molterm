@@ -71,7 +71,8 @@ character; its Braille differs only by single dots where the browser's antialias
 `molterm-agent`). The interface is Python, run in the browser by Pyodide and drawn in restty; the server is Flask, with a session and an
 agent for each visitor. The agent uses the interface as tools, `tui.show` to put a panel in the transcript and `tui.ask` to ask the user
 something and wait for the answer, and `tui.mark` to point things out: atoms highlighted, notes in speech bubbles with leaders to
-them, words highlighted in the transcript. The user's own notes and highlights are blue, the agent's notes amber. A molecule it shows can be edited and annotated where it is, the drawing staying in place
+them, words highlighted in the transcript. The user's own notes and highlights are blue, the agent's notes amber. Each molecule's SMILES is
+under its picture, the highlighted atoms and bonds painted there in their colours; the editor's checkbox, or `/smiles`, hides it. A molecule it shows can be edited and annotated where it is, the drawing staying in place
 under a floating strip of tools (or in a box, if you prefer) and resizable, the transcript making room; the edit, like text the
 user highlights, waits above the input until they click it into a message. Bubbles can be dragged, folded, hidden, and right-clicked to edit
 their note or put it into a message. Any text in the transcript can be selected by dragging, across lines and replies too (a double click, a word; double-click and
@@ -284,7 +285,11 @@ place for bond properties: other programs keep them as atom properties without k
   other change, follow their atoms through Clean Up, and go when their atom or bond goes. A note can have a few lines: Shift+Enter
   starts a new one (kept in the CXSMILES as `&#10;`, which RDKit reads; RDKit draws such a note on one line).
 - **Copying:** **File** copies the drawing as SMILES, SVG or PNG, or all three at once; see [Copying](#copying) below.
-- The SMILES, formula, MW and cLogP update below the drawing. Atoms RDKit can't accept, such as an oxygen with three bonds, get a red
+- The SMILES, formula, MW and cLogP update below the drawing. The SMILES is painted where the molecule is highlighted, each atom's
+  and bond's part of it (a ring bond's two digits, a double bond's `=`, a branch's parentheses when all of it is) in its highlight's
+  colour, so it shows which atoms are which. **View > Show SMILES**, or the ☑ SMILES checkbox on a box's bottom edge or an inline
+  editor's line, hides it (the formula and the rest take its place) and shows it again; a host is told, with `ESC ] 5523;smiles=`,
+  to remember it. Atoms RDKit can't accept, such as an oxygen with three bonds, get a red
   box, so a drawing can be invalid on its way to being finished. Ctrl-Q then stays in the editor and says why. Ctrl-C leaves anyway, printing
   the problem and exiting with 1.
 
@@ -442,7 +447,7 @@ without bonds, such as `[Na+].[Cl-]`, stay as text. Images can't be copied as te
 | `POST /api/v1/render` | as above, plus optional `cols`, `rows`, `mode` (`braille`, `octant`), and `properties: true` | as above, plus `render` (`mode`, `text`, `ansi`, `colors`, `labels`, `rows`, `cols`, `bond_dots`, `cramped`), and if asked `properties` (`mw`, `logp`, `tpsa`, `hbd`, `hba`, `rotb`, `qed`, `ro5`, `pains`, `brenk`) |
 | `POST /api/v1/properties` | JSON `{"inputs": [...]}`, at most 1000 SMILES or molblocks | `{"results": [...]}` in the same order, each `formula` and `properties` as above, or `error` |
 | `GET /api/v1/render.png` | query `input`, `format`, `cols`, `rows`, `theme`, `background`, `foreground`, `cell_width` (pixels per column) | a transparent PNG within cols by rows cells (a cell taken as twice as tall as wide), cropped to its drawing; `X-Molterm-Cols` gives the columns it takes. For programs that place pictures themselves |
-| `POST /api/v1/callouts` | JSON `input` (SMILES or CXSMILES with molterm's annotations), `cols`, `rows`, optional `cell_width`, `theme`, `background`, `foreground`, `mark` (`atoms` or `smarts`, `highlight`, `note`; or `edit: true` with `atom` or `bond` and `note`, and `by: "user"`, to rewrite one note), `clear: true` | `png` (base64, whole cells), `cols`, `rows`, `smiles` (with the annotations and the mark), `notes` (`atom` or `bond`, `text`, `highlight`, `row`, `by`: `user` or `agent`, `group`), `marked`. Highlights are drawn; each note is left to the host, as a speech bubble, and a leader runs from its atom to the right edge, in the middle of its `row` |
+| `POST /api/v1/callouts` | JSON `input` (SMILES or CXSMILES with molterm's annotations), `cols`, `rows`, optional `cell_width`, `theme`, `background`, `foreground`, `mark` (`atoms` or `smarts`, `highlight`, `note`; or `edit: true` with `atom` or `bond` and `note`, and `by: "user"`, to rewrite one note), `clear: true` | `png` (base64, whole cells), `cols`, `rows`, `smiles` (with the annotations and the mark), `notes` (`atom` or `bond`, `text`, `highlight`, `row`, `by`: `user` or `agent`, `group`), `marked`, `paint` (`smiles`, without its extension, and `marks`: `[start, end, colour]` for the parts of it highlighted). Highlights are drawn; each note is left to the host, as a speech bubble, and a leader runs from its atom to the right edge, in the middle of its `row` |
 | `POST /api/v1/term` | JSON `line`, optional `selection` (the working set), `cols`, `display` (`text`, `kitty`, `iterm`, `sixel`), `cell_width` | `output` (text with ANSI colours, and images if asked), `selection`, `clear` |
 | `GET /api/v1/term.txt` | query `line`, optional `selection` (comma-separated), `cols`, `display`, `theme`, `background` and `foreground` (`RRGGBB`, the terminal's, to fit the theme to), and for Sixel `cell_width` | a first line of `<1 to clear, or 0> <selection>`, then the output |
 | `GET /api/v1/story.txt` | | the guided session, one step per line: title, command, before and after, separated by tabs |

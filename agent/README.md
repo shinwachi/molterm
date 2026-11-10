@@ -76,7 +76,8 @@ scrolls, crops and redraws with the transcript although the TUI repaints the who
 | `server/app.py` | Flask: the page, the TUI's files for Pyodide, sessions and their streams, and the way through to molterm's editor |
 | `server/sessions.py` | a session: event log, inbox, tool results, interrupts |
 | `server/agent.py` | the emulated agent and its molterm tools |
-| `server/static/page.js` | connects restty, Pyodide, the TUI and the server |
+| `server/static/bridge.js` | what any host of the TUI needs: the bridge, Shift+Enter, and the choices that travel (copying, focus), as options; see [If you are embedding this](#if-you-are-embedding-this) |
+| `server/static/page.js` | molterm's own page: connects restty, Pyodide, the TUI and the server, with this page's choices |
 | `sdk/tuiagent/` | `TuiAgent`, the base for agents, and `RemoteSession`, a session reached over HTTP |
 | `examples/` | `hello_agent.py` (no dependencies) and `claude_agent.py` (Claude chooses the TUI tools) |
 
@@ -119,6 +120,13 @@ terminal's input, keys and mouse reports alike, goes back into the TUI.
 ![The agent's marks: the N-methylpiperazine highlighted, its note in a bubble at the end of a leader, the agent's words highlighted with a note, and the user's highlight waiting above the input](../docs/images/molterm-agent-bubbles.png)
 
 ![A bubble dragged aside, its leader following; "N-methylpiperazine" dragged across, highlighted from its menu, clicked into a message, and marked as seen by the agent](../docs/images/molterm-agent-point.gif)
+
+Under each molecule's picture is its SMILES, the atoms and bonds highlighted on the molecule painted there in their colours, so
+the highlight in the picture can be read off in the text: molterm's answer says which parts (`paint`, from `annotate.smiles_paint`,
+which finds where the SMILES writes each atom and bond). While a molecule is edited inline, the line under the drawing's resizing
+line is the drawing's SMILES as it is edited, painted the same way, which the editor tells the TUI with each change
+(`ESC ] 5523;smiles=`). The ☑ SMILES checkbox on the editor's line hides it, there and under every picture, and is remembered for
+the next edit; `/smiles` (or `/smiles on`, `/smiles off`) does the same outside the editor.
 
 A molecule's annotations, the user's from the editor or the agent's from `tui.mark`, are drawn by molterm (`POST /api/v1/callouts`,
 through `POST /api/v1/sessions/<id>/picture`): the highlights in the picture, and, for each note, a leader from its atom to the
@@ -203,6 +211,34 @@ what they pointed at and marks it as seen.
 To plug in a real model, replace `EmulatedAgent` with one that sends the transcript and `TOOLS` to the model, and turns its tool calls
 into the same `use_tui` and `use_server_tool` calls: the events, the page and the TUI stay as they are.
 
+## If you are embedding this
+
+The TUI is `molterm_tui.App`, plain Python with no dependencies, and it can be hosted by any page that runs Pyodide and a terminal
+that speaks the Kitty graphics protocol and SGR mouse reports. What such a page does falls into three kinds, and molterm keeps them
+apart so that a host re-vendoring it can tell which is which:
+
+- **The contract**, what the TUI needs whoever hosts it. The bridge given to `App(bridge, cols, rows)`: its members are listed in
+  `BRIDGE` (required: `write`, `post_message`, `post_tool_result`, `interrupt`, `edit`, `picture`) and `BRIDGE_OPTIONAL` (`copy`)
+  beside `App` in `tui/molterm_tui/app.py`, each with what it's for, and `App` refuses a bridge without a required one, naming it.
+  The tests keep both lists to the members the app calls. The answers come back through the app's `edit_answer`/`edit_failed` and
+  `picture_answer`/`picture_failed`. And Shift+Enter has to reach the TUI as `\x1b[13;2u` (the kitty protocol's form, `SHIFT_ENTER`),
+  since a terminal sends it as a plain Enter. `server/static/bridge.js` makes both (`createBridge`, `sendShiftEnter`).
+- **Policy that travels**, choices made for molterm's page that another host may make differently, each an option in `bridge.js`
+  with molterm's choice as the default. Copying: `copyText` uses the Clipboard API on a secure page and otherwise a hidden text area,
+  because molterm may be served over plain http; pass `createBridge` your own `copy`, or `copy: null` to leave it out, and the TUI
+  writes OSC 52 for the terminal instead. Focus: `focusPolicy(policy, {box, focus})` decides which clicks give the terminal the
+  keyboard. Its default, `"terminal"`, takes clicks in the terminal's box (its margin too) and leaves the rest of the page alone;
+  `"none"` leaves it all to the host.
+- **This page's own**, what suits only a page that is nothing but the terminal: `page.js` asks for `focusPolicy("page", ...)`, so
+  that every click not on a control focuses the terminal, since anything else (a click on the top bar, or the frame's margin) would
+  leave a page that has quietly stopped listening, with no cue for it. Copied into a page with panels or text boxes, that rule
+  would take the keyboard from every one of them; don't carry it over.
+
+`bridge.js` imports nothing and can be vendored whole; `page.js` shows how it's used (restty as the terminal, `pty` as its
+transport, the grid fitted to the box, and the session's stream, `/api/v1/sessions/<id>/events`, handed to the app's `event`). The
+bridge calls the agent server's `/api/v1/sessions/<id>/messages`, `tool_results`, `interrupt`, `edit` and `picture`, under `base`
+(`createBridge({base})`), "" for the page's own origin.
+
 ## Status
 
 Verified (2026-11-07): `make test`, 51 tests (the TUI driven by keys and events, its input kept at the bottom of the screen; a molecule
@@ -247,7 +283,19 @@ that knob on put the menu away and letting go brought it back under the new end;
 blue bubble under them, and Highlight did the same without the note, the chip above the input both times. Then: in the inline
 editor, Note… on imatinib's carbonyl oxygen showed an empty blue bubble at the end of its leader, "carbonyl O", Shift+Enter and
 "H-bond acceptor" were typed into it on two lines with the cursor after them, and Enter and Done kept both lines in the picture's
-bubble; Add a note… on "N-methylpiperazine" wrote "solubility" and "basic N" the same way, in its bubble under the words.
+bubble; Add a note… on "N-methylpiperazine" wrote "solubility" and "basic N" the same way, in its bubble under the words. Then (2026-11-09,
+later), with the page's helpers moved to `bridge.js`: 74 tests (a bridge without `picture` refused, naming it; the bridge lists equal
+to the members the app calls, and each made by `bridge.js`); in headless Chromium, the page started a session on the new module, a
+click on the top bar gave the keys back, Shift+Enter made a second line in the input, imatinib was drawn and its picture clicked
+into the inline editor, Copy on "N-methylpiperazine" went through the fallback with that text; and `focusPolicy`'s default focused
+the terminal for a click in its box only, not for one on an input or the page, stopped when asked, and refused an unknown policy,
+and `createBridge` with `copy: null` had no `copy`. Then (2026-11-09, later still): 76 tests, and molterm's 1234 (where a SMILES
+writes each atom and bond, checked against RDKit's numbering; a highlighted group painted as one, its branch's parentheses too;
+callouts' `paint`; the editor's status line painted and hidden from View, its checkbox on an inline line and a box's edge, and the
+host told). In headless Chromium against the dev services: imatinib's SMILES under its picture with the agent's mark painted
+(`CN3CCN(C)CC3`); a click on the picture showed the drawing's SMILES, painted, under the resizing line, and ☑ SMILES on the
+editor's line; clicking it hid the line (☐), Cancel left it hidden under the picture, the next edit began with it hidden, and
+`/smiles` brought it back.
 
 ## Open issues
 

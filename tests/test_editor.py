@@ -1447,7 +1447,7 @@ def test_an_inline_editor_draws_over_the_picture_with_its_tools_floating_over_th
     assert ui.inline and ui.hosted and (ui.top, ui.left, ui.canvas_rows, ui.canvas_cols) == place
     assert (ui.palette_top, ui.bar_row, ui.palette_left) == (9, 11, 3) and ui.strip_rows() == [9, 10, 11]  # above, the line next to it
     assert editor.fits(ui) and ui.palette_at(3 + 1, 9) == editor._ICON_NAMES.index("select")
-    assert [name for name, _, _ in ui.buttons()] == ["tools", "cancel", "done"] and ui.button_at(ui.buttons()[2][2] + 1, 11) == "done"
+    assert [name for name, _, _ in ui.buttons()] == ["tools", "cancel", "done", "smiles"] and ui.button_at(ui.buttons()[2][2] + 1, 11) == "done"
     status, text, output = editor.step("", "CCO", "", 100, 40, CW, CH, title="mol 1 · Ethanol", inline=place, at=picture)
     assert status == editor.CONTINUE and editor.HOST_REPAINT in output and "Done ^Q" in output and "mol 1 · Ethanol" in output
     assert "\x1b[13;6H" not in output.split(editor.HOST_REPAINT)[0]  # nothing of its own before the host has drawn the screen
@@ -1483,6 +1483,7 @@ def test_callouts_draw_highlights_and_leave_the_notes_to_the_host():
     result = callouts.picture("CC(=O)Nc1ccc(O)cc1", 60, 16, mark={"smarts": "C(=O)N", "highlight": "yellow", "note": "amide"})
     assert result["marked"] == [1, 2, 3] and result["notes"][0]["atom"] == 1 and result["notes"][0]["text"] == "amide"
     assert "atomNote.amide" in result["smiles"] and "molterm_highlight.yellow" in result["smiles"]
+    assert result["paint"] == {"smiles": "CC(=O)Nc1ccc(O)cc1", "marks": [[1, 7, "yellow"]]}  # C(=O)N, for the SMILES under the picture
     image = Image.open(BytesIO(base64.b64decode(result["png"])))
     assert image.size == (result["cols"] * editor.graphics.CELL_PIXELS, result["rows"] * 2 * editor.graphics.CELL_PIXELS)  # whole cells
     row = result["notes"][0]["row"]
@@ -1585,3 +1586,44 @@ def test_a_note_is_written_in_its_bubble_inline_with_shift_enter_for_a_new_line(
     told = json.loads(b64.b64decode(re.findall(r"5523;notes=([A-Za-z0-9+/=]+)", output)[-1]))
     assert "draft" not in told["notes"][0] and told["notes"][0]["text"] == "the OH\nH-bond\n donor"
     assert editor.parse_events("\x1b[13;2u")[0] == [("key", "shift-enter")]
+
+
+def _smiles_told(output):
+    return [json.loads(base64.b64decode(found)) for found in re.findall(r"5523;smiles=([A-Za-z0-9+/=_-]+)", output)]
+
+
+def test_the_smiles_is_painted_where_it_is_highlighted_and_its_checkbox_hides_it():
+    yellow = ";".join(str(round(c * 255)) for c in editor.annotate.HIGHLIGHTS["yellow"])
+    session = Session("CCO |atomProp:2.molterm_highlight.yellow|")
+    assert f"CC\x1b[48;2;{yellow};38;2;0;0;0mO\x1b[0m" in session.output  # the status line's SMILES, its oxygen painted
+    s = session.state
+    editor._act(s, UI, ("smiles", None), None)  # View > Show SMILES, ticked until now
+    assert not s["smiles_shown"] and editor._item_label(s, ("Show SMILES", "", ("smiles", None))) == "  Show SMILES"
+    session.text = editor.encode(s)
+    session.send("\x1b[A")  # a frame: the facts instead of the SMILES
+    assert "C2H6O" in session.output and f"{yellow};38;2;0;0;0mO" not in session.output
+    status, text, output = editor.step("", "CCO", "", COLS, ROWS, CW, CH, show_smiles=False)
+    assert not editor.decode(text)["smiles_shown"]
+
+
+def test_an_inline_editor_tells_its_host_the_smiles_and_its_checkbox_hides_it():
+    place = (12, 5, 10, 44)
+    status, text, output = editor.step("", "CCO |atomProp:2.molterm_highlight.green|", "", 100, 40, CW, CH, inline=place, at=(12, 5, 6, 20))
+    assert _smiles_told(output)[-1] == {"shown": True, "smiles": "CCO", "marks": [[2, 3, "green"]]}
+    assert "☑ SMILES" in output  # the checkbox on its line, ticked
+    ui = editor.Layout(100, 40, CW, CH, inline=place)
+    col = next(start for name, _, start in ui.buttons() if name == "smiles")
+    status, text, output = editor.step(text, "", f"\x1b[<0;{col + 2};{ui.bar_row + 1}M\x1b[<0;{col + 2};{ui.bar_row + 1}m", 100, 40, CW, CH,
+                                       inline=place)
+    assert not editor.decode(text)["smiles_shown"] and _smiles_told(output)[-1]["shown"] is False and "☐ SMILES" in output
+    assert editor.HOST_REPAINT in output  # the host draws its screen again, without the SMILES under the drawing
+
+
+def test_a_box_editor_tells_its_host_when_the_smiles_is_hidden():
+    box = (2, 0, 30, 100)
+    status, text, output = editor.step("", "CCO", "", COLS, ROWS, CW, CH, box=box, compact=True)
+    ui = editor.Layout(COLS, ROWS, CW, CH, box=box, compact=True)
+    col = next(start for name, _, start in ui.buttons() if name == "smiles")
+    row, col = ui.origin[0] + ui.rows + 1, ui.origin[1] + col + 2
+    status, text, output = editor.step(text, "", f"\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m", COLS, ROWS, CW, CH, box=box, compact=True)
+    assert _smiles_told(output) == [{"shown": False}] and "☐ SMILES" in output

@@ -479,3 +479,28 @@ def test_a_long_menu_stays_above_the_status_lines():
     s["menu"], s["menu_target"] = ["context", "atom", 50, UI.rows - 3], ["a", 3]  # opened near the bottom
     _, row, _ = editor._menu_box(s, UI)
     assert row + len(editor.CONTEXT_MENUS["atom"]) <= UI.rows - editor.STATUS_ROWS
+
+
+def test_where_a_smiles_writes_each_atom_and_bond():
+    smiles = "C%12CC%12Cl.[NH3+]C(=O)c1ccccc1/C=C/Br"
+    atoms, bonds = annotate.smiles_parts(smiles)
+    mol = Chem.MolFromSmiles(smiles)
+    assert len(atoms) == mol.GetNumAtoms()
+    assert [smiles[a:b] for a, b in atoms][:6] == ["C", "C", "C", "Cl", "[NH3+]", "C"]
+    pairs = {tuple(sorted((b.GetBeginAtomIdx(), b.GetEndAtomIdx()))) for b in mol.GetBonds()}
+    assert set(bonds) == pairs  # every bond, and nothing else
+    assert [smiles[a:b] for a, b in bonds[(0, 2)]] == ["%12", "%12"] and [smiles[a:b] for a, b in bonds[(5, 6)]] == ["="]
+    assert [smiles[a:b] for a, b in bonds[(7, 12)]] == ["1", "1"] and bonds[(4, 5)] == []
+
+
+def test_a_highlighted_group_is_painted_in_the_smiles_as_one():
+    smiles = "CC(C)(C)OC(=O)N"  # Boc-NH2: the tert-butyl highlighted, with its bonds
+    notes = {"atoms": [[i, "blue", ""] for i in range(4)], "bonds": [[0, 1, "blue", ""], [1, 2, "blue", ""], [1, 3, "blue", ""]], "show": []}
+    painted = annotate.smiles_paint(smiles + " |atomProp:0.atomNote.tBu|", notes)
+    assert painted == {"smiles": smiles, "marks": [[0, 8, "blue"]]}  # CC(C)(C), its parentheses too
+    notes = {"atoms": [[4, "pink", ""], [5, "pink", ""], [6, "pink", ""]], "bonds": [[4, 5, "pink", ""], [5, 6, "pink", ""]], "show": []}
+    painted = annotate.smiles_paint(smiles, notes)
+    assert [smiles[a:b] for a, b, _ in painted["marks"]] == ["OC(=O)"]  # the ester: its double bond and its branch's parentheses
+    notes["bonds"] = [[4, 5, "pink", ""]]  # without the C=O bond, the = isn't painted, nor the branch
+    assert [smiles[a:b] for a, b, _ in annotate.smiles_paint(smiles, notes)["marks"]] == ["OC", "O"]
+    assert annotate.smiles_paint("CCO", annotate.empty()) == {"smiles": "CCO", "marks": []}

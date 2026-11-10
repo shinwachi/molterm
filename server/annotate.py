@@ -221,6 +221,84 @@ def write(smiles, notes):
     return markush.join(base, fields)
 
 
+# A SMILES's tokens: a bracket atom, an atom of the organic subset (Br and Cl before B and C), a ring number, a bond, a branch or a dot.
+# What's left over, in a SMARTS outside brackets, is taken a character at a time and belongs to nothing.
+_SMILES_TOKEN = re.compile(r"\[[^\]]*\]|Br|Cl|[BCNOPSFI]|[bcnops]|\*|%\d\d|\d|[-=#$:/\\~,;!@&]|[().]|.", re.S)
+_SMILES_ATOM = re.compile(r"\[[^\]]*\]|Br|Cl|[BCNOPSFI]|[bcnops]|\*")
+
+
+def smiles_parts(smiles):
+    """Where a SMILES (without its CXSMILES extension) writes each atom and bond: ([(start, end) of atom 0, 1, ...], {(lower atom,
+    higher atom): [(start, end), ...]}). Atoms count in the order they are written, which is how RDKit numbers them. A bond's parts
+    are its symbol and, for a ring closure, its two ring numbers; a bond written as nothing, as most single and aromatic ones are,
+    has none."""
+    atoms, bonds = [], {}
+    previous, branches, pending, rings = None, [], [], {}
+
+    def bond(first, second, parts):
+        if first is not None and second is not None and first != second:
+            bonds.setdefault((min(first, second), max(first, second)), []).extend(parts)
+
+    for match in _SMILES_TOKEN.finditer(smiles):
+        token, span = match.group(), match.span()
+        if _SMILES_ATOM.fullmatch(token):
+            atoms.append(span)
+            bond(previous, len(atoms) - 1, pending)
+            previous, pending = len(atoms) - 1, []
+        elif token == "(":
+            branches.append(previous)
+        elif token == ")":
+            previous, pending = (branches.pop() if branches else previous), []
+        elif token == ".":
+            previous, pending = None, []
+        elif token[0] == "%" or token.isdigit():
+            if token in rings:
+                opened, parts = rings.pop(token)
+                bond(opened, previous, parts + pending + [span])
+            else:
+                rings[token] = (previous, pending + [span])
+            pending = []
+        elif token in "-=#$:/\\~,;!@&":
+            pending.append(span)
+    return atoms, bonds
+
+
+def smiles_paint(smiles, notes):
+    """The parts of a SMILES to paint in their highlights' colours, for showing which atoms and bonds are highlighted where the SMILES
+    is written: {"smiles": the SMILES without its extension, "marks": [[start, end, colour], ...]}, in order and not overlapping.
+    `notes` count atoms by their index in this SMILES, as everywhere here. A group reads as one: a branch's parentheses are painted
+    too when all of it, and the atom it hangs from, are in one colour."""
+    core = markush.split(smiles)[0] if "|" in smiles else smiles.strip()
+    atoms, bonds = smiles_parts(core)
+    colours = [""] * len(core)
+    for index, highlight, _ in notes["atoms"]:
+        if highlight and index < len(atoms):
+            start, end = atoms[index]
+            colours[start:end] = [highlight] * (end - start)
+    for first, second, highlight, _ in notes["bonds"]:
+        for start, end in bonds.get((first, second), []) if highlight else ():
+            colours[start:end] = [highlight] * (end - start)
+    pairs, opened = [], []
+    for position, char in enumerate(core):
+        if char == "(":
+            opened.append(position)
+        elif char == ")" and opened:
+            pairs.append((opened.pop(), position))
+    for start, end in sorted(pairs, key=lambda pair: pair[1] - pair[0]):  # inner branches first, so that outer ones see them painted
+        inside = [colours[i] for i in range(start + 1, end) if core[i] not in "()" or colours[i]]
+        if start > 0 and colours[start - 1] and inside and all(inside) and len(set(inside + [colours[start - 1]])) == 1:
+            colours[start] = colours[end] = colours[start - 1]
+    marks = []
+    for position, colour in enumerate(colours):
+        if not colour:
+            continue
+        if marks and marks[-1][1] == position and marks[-1][2] == colour:
+            marks[-1][1] = position + 1
+        else:
+            marks.append([position, position + 1, colour])
+    return {"smiles": core, "marks": marks}
+
+
 def renumber(notes, order):
     """Notes with each atom index i replaced by order[i], for when a molecule is written out in another order. Atoms missing from
     `order` lose their notes."""

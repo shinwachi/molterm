@@ -88,6 +88,11 @@ HOST_TOOLS = "\x1b]5523;tools={}\x1b\\"  # to an inline editor's host: the tools
 # {"edge": the column the leaders end at, "notes": [{"text", "row", "by", and "draft": true for the note being written, its text as
 # typed so far, which the host shows with a cursor where it is typed}]}; each leader, drawn in the picture, ends in the middle of its row
 HOST_NOTES = "\x1b]5523;notes={}\x1b\\"
+# to a hosted editor's host: whether the SMILES is shown, as base64 of JSON {"shown"}, and for an inline one, which shows it under the
+# drawing, also {"smiles": the drawing's SMILES without its extension ("" if it has none), "marks": [[start, end, colour], ...]}, the
+# parts of it highlighted (annotate.smiles_paint), for the host to paint
+HOST_SMILES = "\x1b]5523;smiles={}\x1b\\"
+SMILES_BUTTON = " ☐ SMILES "  # a checkbox, ticked (☑) while the SMILES is shown
 WINDOW_BUTTONS = (("minimize", " _ "), ("maximize", " □ "))  # on the top edge of a box its host can move: the host acts on them
 RESIZE_GRIP = "◢"
 
@@ -149,7 +154,7 @@ def new_state():
             "view": [0.0, 0.0, DEFAULT_ZOOM], "focus": None, "hover": None, "last": None, "selected": [], "pointer": None,
             "press": None, "drag": None, "undo": [], "redo": [], "entry": None, "label": None, "help": False, "message": "",
             "menu": None, "menu_target": None, "menu_hover": None, "tip": None, "button": None, "cover": False, "shown": {}, "flips": {}, "size": None,
-            "partial": "", "notes": annotate.empty(), "prompt": None, "rlogic": {}, "strip": True}
+            "partial": "", "notes": annotate.empty(), "prompt": None, "rlogic": {}, "strip": True, "smiles_shown": True}
 
 
 def encode(state):
@@ -399,12 +404,13 @@ def check_state(s):
         if s[name] is not None:
             _integer(s[name], 1000)
     _check_flag(s.setdefault("strip", True))
+    _check_flag(s.setdefault("smiles_shown", True))
     canvas = s.setdefault("canvas", None)
     if canvas is not None and (not isinstance(canvas, list) or len(canvas) != 4):
         raise StateError("A choice in the drawing is not valid.")
     for number in canvas or ():
         _integer(number, 10_000)
-    if s["button"] not in (None, "done", "cancel", "copy", "tools", *dict(WINDOW_BUTTONS)):
+    if s["button"] not in (None, "done", "cancel", "copy", "tools", "smiles", *dict(WINDOW_BUTTONS)):
         raise StateError("A choice in the drawing is not valid.")
     if not isinstance(s["shown"], dict) or not all(k in LAYERS and isinstance(v, str) and len(v) <= 64 for k, v in s["shown"].items()):
         raise StateError("A choice in the drawing is not valid.")
@@ -1492,7 +1498,8 @@ MENUS = [("File", [("Load SMILES...", "/", ("command", "entry")), *_COPY, ("Copy
                    ("Quit and print SMILES", "Ctrl-Q", ("command", "quit"))]),
          ("Edit", [("Undo", "Ctrl-Z", ("command", "undo")), ("Redo", "Ctrl-Y", ("command", "redo")), None,
                    ("Select All", "Ctrl-A", ("command", "select_all")), ("Delete", "Del", ("command", "delete"))]),
-         ("View", [("Actual Size", "F5", ("command", "actual")), ("Fit to Window", "F6", ("command", "fit")), ("Magnify", "F7", ("command", "zoom_in")), ("Reduce", "F8", ("command", "zoom_out"))]),
+         ("View", [("Actual Size", "F5", ("command", "actual")), ("Fit to Window", "F6", ("command", "fit")), ("Magnify", "F7", ("command", "zoom_in")), ("Reduce", "F8", ("command", "zoom_out")),
+                   None, ("Show SMILES", "", ("smiles", None))]),
          ("Structure", [("Clean Up", "Ctrl-K", ("command", "tidy")), ("Aromatize", "", ("command", "aromatize")),
                         ("Dearomatize", "", ("command", "dearomatize")), ("Add Explicit Hydrogens", "", ("command", "add_h")),
                         ("Remove Explicit Hydrogens", "", ("command", "remove_h")), None, ("Flip Horizontal", "", ("command", "flip_h")),
@@ -1630,13 +1637,16 @@ class Layout:
         """On the bottom edge of the box, or at the right of an inline editor's line: (name, label, column)."""
         if self.inline:
             col, found = self.palette_left + self.strip_width, []
-            for name, label in (("tools", " ▾ F2 " if self.strip else " ▴ tools F2 "), ("cancel", " Cancel ^C "), ("done", " Done ^Q ")):
+            for name, label in (("tools", " ▾ F2 " if self.strip else " ▴ tools F2 "), ("cancel", " Cancel ^C "), ("done", " Done ^Q "),
+                                ("smiles", SMILES_BUTTON)):
                 col -= len(label)
                 found.append((name, label, col))
             return found
         col, found = self.cols, []
-        for name, label in (("done", " Done Ctrl-Q "), ("cancel", " Cancel Ctrl-C "), ("copy", " Copy SMILES ")):
+        for name, label in (("done", " Done Ctrl-Q "), ("cancel", " Cancel Ctrl-C "), ("copy", " Copy SMILES "), ("smiles", SMILES_BUTTON)):
             col -= len(label) + 1
+            if col < 1:  # no room left on the edge
+                break
             found.append((name, label, col))
         return found
 
@@ -2019,7 +2029,14 @@ def _item_label(s, item):
     label, _, (kind, value) = item
     if kind == "show":
         return ("✓ " if value in s["notes"]["show"] else "  ") + label
+    if kind == "smiles":
+        return ("✓ " if s["smiles_shown"] else "  ") + label
     return label
+
+
+def _button_label(s, name, label):
+    """A button's text as it is now: the SMILES's checkbox ticked while it's shown."""
+    return label.replace("☐", "☑") if name == "smiles" and s["smiles_shown"] else label
 
 
 def _menu_box(s, ui):
@@ -2083,7 +2100,31 @@ def _popups(s, ui, colours):
     return "".join(out) + ("\x1b[0m" if out else "")
 
 
-def _status(s, ui, smiles, problem, colours, cols=None):
+def _painted(text, marks, width):
+    """The SMILES fitted to `width`, with its highlighted parts painted in their colours (dark letters on them, in either theme)."""
+    shown = _fit_text(text, width)
+    limit = len(shown) - (1 if shown.endswith("…") and len(shown) < len(text) else 0)
+    out, at = [], 0
+    for start, end, colour in marks:
+        start, end = min(start, limit), min(end, limit)
+        if start >= end:
+            continue
+        red, green, blue = (round(c * 255) for c in annotate.HIGHLIGHTS.get(colour, annotate.HIGHLIGHTS["yellow"]))
+        out.append(shown[at:start] + f"\x1b[48;2;{red};{green};{blue};38;2;0;0;0m" + shown[start:end] + "\x1b[0m")
+        at = end
+    return "".join(out) + shown[at:]
+
+
+def _paint(s, smiles):
+    """The SMILES shown under the drawing, without its extension, and its highlighted parts: annotate.smiles_paint's answer."""
+    if not smiles:
+        return {"smiles": "", "marks": []}
+    highlighted = any(entry[1] for entry in s["notes"]["atoms"]) or any(entry[2] for entry in s["notes"]["bonds"])
+    found = written(s) if highlighted else None
+    return annotate.smiles_paint(smiles, found[2] if found else annotate.empty())
+
+
+def _status(s, ui, smiles, problem, colours, cols=None, paint=None):
     cols = cols or ui.cols
     dim, err, warn = (f"\x1b[{colours[name]}m" for name in ("dim", "err", "warn"))
     if s["prompt"] is not None:
@@ -2102,8 +2143,10 @@ def _status(s, ui, smiles, problem, colours, cols=None):
         shown = _fit_text(s["entry"][-width:], width)
         second = _fit_text(s["message"], cols) if s["message"] else "Type or paste, then Enter to load it. Esc cancels."
         return f"\x1b[1mSMILES:\x1b[0m {shown}\x1b[7m \x1b[0m", f"{dim}{second}\x1b[0m"
-    if smiles:
-        first, details = _fit_text(smiles, cols), facts(smiles)
+    if smiles and not s["smiles_shown"]:  # its checkbox, or View > Show SMILES, hides it: the facts instead
+        first, details = facts(smiles), ""
+    elif smiles:
+        first, details = _painted(smiles, (paint or {}).get("marks", []), cols), facts(smiles)
     elif smiles is None:
         first = err + _fit_text(problem or "RDKit can't read this structure.", cols) + "\x1b[0m"
         details = f"{err}Atoms in red boxes need attention.\x1b[0m"
@@ -2135,7 +2178,8 @@ def _bar(s, ui, smiles, problem, colours):
     out = [ui.at(ui.bar_row, ui.palette_left, bar + " " * ui.strip_width), ui.at(ui.bar_row, ui.palette_left + 1, bar + text)]
     for name, label, col in buttons:
         chosen = s["button"] == name
-        out.append(ui.at(ui.bar_row, col, (f"\x1b[{colours['pick']};{colours['on_pick']}m" if chosen else bar + "\x1b[1m") + label))
+        out.append(ui.at(ui.bar_row, col, (f"\x1b[{colours['pick']};{colours['on_pick']}m" if chosen else bar + "\x1b[1m")
+                         + _button_label(s, name, label)))
     return "".join(out) + "\x1b[0m"
 
 
@@ -2198,7 +2242,7 @@ def _border(s, ui, colours):
     for name, label, col in [*ui.buttons(), *controls]:
         chosen = s["button"] == name
         style = f"\x1b[{colours['pick']};{colours['on_pick']}m" if chosen else f"\x1b[{colours['bar']};{colours['ink']}m"
-        out.append(ui.at(-1 if name in dict(WINDOW_BUTTONS) else ui.rows, col, style + label))
+        out.append(ui.at(-1 if name in dict(WINDOW_BUTTONS) else ui.rows, col, style + _button_label(s, name, label)))
     out.append("\x1b[0m")
     return "".join(out)
 
@@ -2229,7 +2273,8 @@ def frame(s, ui, theme):
     marks = _marks(s, ui, wrong)
     popups = _popups(s, ui, colours)
     menu_bar = "" if ui.compact else _menu_bar(s, ui, colours)
-    status = _bar(s, ui, smiles, problem, colours) if ui.inline else _status(s, ui, smiles, problem, colours)
+    paint = _paint(s, smiles) if s["smiles_shown"] else {"smiles": "", "marks": []}
+    status = _bar(s, ui, smiles, problem, colours) if ui.inline else _status(s, ui, smiles, problem, colours, paint=paint)
     keys = {"palette": digest(active, s["tip"]), "structure": digest(s["atoms"], s["bonds"], s["view"], s["notes"], ui.inline and _draft(s)),
             "overlay": digest(marks, s["view"]), "text": digest(popups, menu_bar, status, ui.title, s["button"])}
     if ui.boxed:
@@ -2239,9 +2284,11 @@ def frame(s, ui, theme):
         told = {"edge": ui.left + ui.canvas_cols, "notes": [{"text": text, "row": row, "by": "user" if "user" in flags else "agent",
                                                          **({"draft": True} if "draft" in flags else {})}
                                                         for text, _, row, flags in inline_notes(s, ui)]}
-        keys["notes"] = digest(told)
+        smiles_told = {"shown": s["smiles_shown"], **paint}  # for the host to show under the drawing
+        keys["notes"] = digest(told, smiles_told)
         if told["notes"] or s["shown"].get("notes"):
             notes_told = HOST_NOTES.format(base64.b64encode(json.dumps(told).encode()).decode())
+        notes_told += HOST_SMILES.format(base64.b64encode(json.dumps(smiles_told).encode()).decode())
     tmux = placeholders.active.get()
     if tmux:
         # one picture a cell: the marks go into the drawing, and the box's backing isn't needed, as its cells cover what's below
@@ -3132,6 +3179,8 @@ def _act(s, ui, action, target):
         _copy(s, *value)
     elif kind in ("highlight", "clear", "note"):
         _annotation(s, kind, value, target)
+    elif kind == "smiles":
+        _toggle_smiles(s, ui)
     elif kind == "show":
         _save(s)
         shown = s["notes"]["show"]
@@ -3597,6 +3646,14 @@ def _key(s, ui, name):
     return False
 
 
+def _toggle_smiles(s, ui):
+    """Show the SMILES, painted where it's highlighted, or hide it. A host is told, to remember it for the next edit and for what it
+    shows itself; an inline editor's host is told with each frame anyway."""
+    s["smiles_shown"] = not s["smiles_shown"]
+    if ui.hosted and not ui.inline:
+        s["notices"] = s.get("notices", "") + HOST_SMILES.format(base64.b64encode(json.dumps({"shown": s["smiles_shown"]}).encode()).decode())
+
+
 def _toggle_tools(s):
     """Put an inline editor's tools away, or show them again; its host is told, to remember it for the next edit."""
     s["strip"] = not s["strip"]
@@ -3732,6 +3789,9 @@ def _mouse(s, ui, code, x_cell, y_cell, release, pixels):
     if pressed == "tools":
         _toggle_tools(s)
         return False
+    if pressed == "smiles":
+        _toggle_smiles(s, ui)
+        return False
     if pressed in dict(WINDOW_BUTTONS):  # the host's, which takes them before they come here
         return False
     if pressed:  # a stray click outside the box does nothing, but these end it
@@ -3816,11 +3876,11 @@ def finish(s, ended):
 
 
 def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None, pixels=False, theme=graphics.DEFAULT_THEME, box=None, title="",
-         compact=False, inline=None, at=None, strip=True):
+         compact=False, inline=None, at=None, strip=True, show_smiles=True):
     """Run one request: return (status, new state as text, what to print). With a `box`, see Layout, the editor stays inside it, and a
     `compact` one has a strip of tools and no menu bar. An `inline` one draws in that place on the screen, with its tools floating
     beside it (`strip` false puts them away to begin with), and `at`, the place of the picture it edits, which the drawing then
-    matches as closely as it can."""
+    matches as closely as it can. `show_smiles` false begins with the SMILES hidden (its checkbox shows it)."""
     for place in (box, inline, at):
         if place and (place[0] + place[2] > rows or place[1] + place[3] > cols):
             return FAILED, "", "The box doesn't fit in the window."
@@ -3830,6 +3890,7 @@ def step(state_text, smiles, raw, cols, rows, cell_width=None, cell_height=None,
     else:
         s = new_state()
         s["strip"] = bool(strip)
+        s["smiles_shown"] = bool(show_smiles)
         first = True
     pixels = pixels and bool(cell_width) and bool(cell_height)
 

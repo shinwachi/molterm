@@ -162,10 +162,13 @@ def test_the_tui_files_are_served_for_pyodide(client):
 def test_the_page_gives_the_keyboard_back_from_a_click_anywhere(client):
     """A click on the top bar, on the note, or in the frame's margin takes the keys off the terminal, and the TUI cannot say so: the
     terminal's own cue, a hollow cursor, is hidden exactly then, because a TUI waiting for an answer hides the cursor. So the page
-    listens for a click anywhere, not only on the terminal."""
-    script = client.get("/static/page.js").get_data(as_text=True)
-    assert 'document.addEventListener("click"' in script and "terminal.focus?.()" in script
-    assert 'box.addEventListener("click"' not in script  # the box alone was the bug
+    listens for a click anywhere, not only on the terminal. That's this page's choice, made by name, since it would take the keyboard
+    from a host's own text boxes: bridge.js's focusPolicy keeps to the terminal's box unless asked for the page."""
+    page = client.get("/static/page.js").get_data(as_text=True)
+    assert 'focusPolicy("page", { box, focus: () => terminal.focus?.() })' in page
+    module = client.get("/static/bridge.js").get_data(as_text=True)
+    assert 'export function focusPolicy(policy = "terminal"' in module
+    assert 'const target = policy === "page" ? document : box;' in module
 
 
 def test_smiles_detection():

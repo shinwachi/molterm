@@ -80,8 +80,8 @@ class Molterm:
         except ValueError:
             return response.status_code, {"error": {"message": response.text.strip()[:200]}}
 
-    EDIT_FIELDS = ("state", "smiles", "events", "cols", "rows", "box", "inline", "at", "strip", "title", "cell_width", "cell_height",
-                   "close")
+    EDIT_FIELDS = ("state", "smiles", "events", "cols", "rows", "box", "inline", "at", "strip", "show_smiles", "title", "cell_width",
+                   "cell_height", "close")
 
     def edit(self, fields):
         """One step of molterm's editor, in place: compact in a box, or inline (see molterm's /api/v1/edit), with this page's colours:
@@ -179,7 +179,8 @@ class EmulatedAgent(TuiAgent):
         feature = FEATURES.get(name)
         if feature and shown.get("mol"):  # point out a part of it, in a bubble, and the words that say so
             self.mark(mol=shown["mol"], smarts=feature[0], highlight="yellow", note=feature[1])
-            self.say(f"I've pointed out one part of it: the {feature[1].split(':')[0]}. Drag across any text to point at it yourself.")
+            self.say(f"I've pointed out one part of it: the {feature[1].split(':')[0]}, painted in its SMILES under the picture as well "
+                     "(☑ SMILES in the editor, or /smiles, hides that). Drag across any text to point at it yourself.")
             self.mark(text="drag across any text", highlight="green", note="like this: it goes into your message")
         answer = self.use_tui("tui.ask", {"question": f"Do you want the properties of {name or 'this molecule'} too?",
                                           "options": ["Yes", "No"]}, "Waiting for you")

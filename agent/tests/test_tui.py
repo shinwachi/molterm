@@ -973,3 +973,73 @@ def test_shift_enter_is_read_as_terminals_send_it():
 def test_shift_enter_starts_a_new_line_in_the_message_too(app):
     app.key("one\x1b[13;2utwo\r")
     assert app.bridge.messages[-1][0] == "one\ntwo"
+
+
+def test_the_bridge_is_refused_without_a_member_the_app_needs():
+    from types import SimpleNamespace
+    whole = Bridge()
+    no_picture = SimpleNamespace(**{name: getattr(whole, name) for name in ("write", "post_message", "post_tool_result", "interrupt",
+                                                                             "edit")})
+    with pytest.raises(TypeError, match="no picture"):
+        App(no_picture, 80, 30)
+    App(Bridge(), 80, 30)  # copy is optional
+
+
+def test_the_bridge_lists_are_the_members_the_app_calls():
+    # BRIDGE and BRIDGE_OPTIONAL are what a host reads to make a bridge: every member the app calls is in one of them, and nothing else
+    from pathlib import Path
+    from molterm_tui import BRIDGE, BRIDGE_OPTIONAL
+    import molterm_tui.app as module
+    source = Path(module.__file__).read_text()
+    called = set(re.findall(r"self\.bridge\.(\w+)\(", source)) | set(re.findall(r"getattr\(self\.bridge, \"(\w+)\"", source))
+    assert called == set(BRIDGE) | set(BRIDGE_OPTIONAL)
+    assert not set(BRIDGE) & set(BRIDGE_OPTIONAL)
+    assert set(BRIDGE_OPTIONAL) == set(re.findall(r"getattr\(self\.bridge, \"(\w+)\"", source))
+    # and molterm's own page makes each of them
+    page = (Path(__file__).parents[1] / "server" / "static" / "bridge.js").read_text()
+    for name in BRIDGE:
+        assert re.search(rf"\n\s+{name}[,:]", page), name
+    assert "bridge.copy = copy" in page
+
+
+def test_a_molecules_smiles_is_under_its_picture_painted_where_it_is_highlighted(app):
+    from molterm_tui.app import HIGHLIGHTS
+    from molterm_tui.screen import cells
+    show_molecule(app, "CC(=O)Nc1ccc(O)cc1", "Paracetamol")
+    lines = app.lines()[0]
+    top, left, rows, _ = app.placed[1]
+    assert strip(lines[top + rows]).strip() == "CC(=O)Nc1ccc(O)cc1" and "/edit 1" in strip(lines[top + rows + 1])
+    app.event({"type": "tool_use", "id": "k1", "name": "tui.mark", "input": {"mol": 1, "smarts": "C(=O)N", "highlight": "green"}})
+    request = app.bridge.pictures[-1]
+    answer = {"png": "C" * 10, "cols": 20, "rows": 6, "smiles": "CC(=O)Nc1ccc(O)cc1 |atomProp:1.molterm_highlight.green|", "marked": [1, 2, 3],
+              "notes": [], "paint": {"smiles": "CC(=O)Nc1ccc(O)cc1", "marks": [[1, 7, "green"]]}}
+    app.picture_answer(json.dumps(request), json.dumps(answer))
+    line = cells(app.lines()[0][top + rows])
+    painted = "".join(text for code, text in line if HIGHLIGHTS["green"] in code)
+    assert painted == "C(=O)N"  # the highlighted amide, and nothing else
+    app.key("/smiles\r")
+    assert "CC(=O)N" not in screen(app) and "/edit 1" in strip(app.lines()[0][top + rows])  # hidden; /smiles shows it again
+    app.key("/smiles on\r")
+    assert "CC(=O)Nc1ccc(O)cc1" in screen(app)
+
+
+def test_while_editing_inline_the_smiles_under_the_drawing_is_the_editors_and_its_checkbox_is_remembered(app):
+    import base64 as b64
+    show_molecule(app)
+    app.key("/edit 1\r")
+    assert app.bridge.edits[-1]["show_smiles"] == "1"
+    top, left, rows, cols = app.editing["inline"]
+    told = {"shown": True, "smiles": "CCN", "marks": [[2, 3, "yellow"]]}
+    app.edit_answer("0 S1\n\x1b]5523;smiles=" + b64.b64encode(json.dumps(told).encode()).decode() + "\x1b\\\x1b]5523;repaint\x1b\\")
+    lines = [strip(line) for line in app.lines()[0]]
+    assert lines[top + rows + 1].strip() == "CCN"  # under the line that resizes the drawing: the drawing's SMILES, as edited
+    assert "5523" not in app.bridge.written[-1] and "CCN" in strip(app.bridge.written[-1])
+    told = {"shown": False, "smiles": "CCN", "marks": []}  # its checkbox, unticked
+    app.edit_answer("0 S2\n\x1b]5523;smiles=" + b64.b64encode(json.dumps(told).encode()).decode() + "\x1b\\\x1b]5523;repaint\x1b\\")
+    assert "CCN" not in screen(app) and app.smiles_shown is False
+    app.key("\x11")
+    app.edit_answer("3 \n")
+    app.edit_answer("3 \n")
+    assert "CCO" not in screen(app)  # hidden under the picture too, as left
+    app.key("/edit 1\r")
+    assert app.bridge.edits[-1]["show_smiles"] == "0"

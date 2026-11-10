@@ -1,8 +1,11 @@
 // The agent page. restty is the terminal; the TUI drawn in it is Python (agent/tui/molterm_tui), run in the browser by Pyodide. This
 // script only connects the pieces: the terminal's keys go to the TUI, the TUI's output goes to the terminal, and the session's
 // events, streamed from the server, go to the TUI. Everything the user sees inside the terminal is decided in Python.
+// What any host of the TUI needs (the bridge, Shift+Enter) and the choices that travel (copying, focus) are in bridge.js; what's
+// here is this page's own.
 import { Restty, parseGhosttyTheme } from "/vendor/restty.esm.js";
 import { loadPyodide } from "/vendor/pyodide/pyodide.mjs";
+import { api, copyText, createBridge, focusPolicy, sendShiftEnter } from "/static/bridge.js";
 
 const box = document.getElementById("terminal"), state = document.getElementById("state");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -12,14 +15,6 @@ let cell = null, grid = null;  // a cell's size in device pixels, at cell.ratio,
 function show(text, tone = "") {
     state.lastChild.textContent = text;
     state.className = `chip ${tone}`;
-}
-
-async function api(path, data) {
-    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
-                                         body: data === undefined ? undefined : JSON.stringify(data) });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error?.message || `${path} answered ${response.status}`);
-    return result;
 }
 
 // restty sizes its canvas in whole cells, some time after it's asked to
@@ -113,50 +108,6 @@ async function startPython() {
     return pyodide;
 }
 
-// what the Python TUI calls to reach the terminal and the server
-const bridge = {
-    write: text => pty.write(text),
-    post_message: (text, cols) => api(`/api/v1/sessions/${session}/messages`, { text, cols })
-        .catch(error => app?.event(JSON.stringify({ type: "error", message: error.message }))),
-    post_tool_result: (id, json) => api(`/api/v1/sessions/${session}/tool_results`, { id, result: JSON.parse(json) })
-        .catch(error => app?.event(JSON.stringify({ type: "error", message: error.message }))),
-    interrupt: () => api(`/api/v1/sessions/${session}/interrupt`).catch(() => {}),
-    // molterm's editor, for a molecule edited where it's shown: the TUI sends the fields, and gets the editor's answer as text
-    edit: json => post(`/api/v1/sessions/${session}/edit`,
-                       { ...JSON.parse(json), cell_width: Math.round(cell.width), cell_height: Math.round(cell.height) })
-        .then(text => app.edit_answer(text), error => app.edit_failed(error.message)),
-    // text the user chose to copy. The Clipboard API needs a secure page (https or localhost), and this one may be served over plain
-    // http, so the older way is tried when it's missing: a hidden textarea selected and copied, which a click (the menu's Copy) allows.
-    copy: text => {
-        const fallback = () => {
-            const area = document.createElement("textarea");
-            area.value = text;
-            area.setAttribute("readonly", "");
-            area.style.cssText = "position: fixed; top: 0; left: 0; opacity: 0";
-            document.body.append(area);
-            area.select();
-            try { document.execCommand("copy"); } catch (error) { console.error(error); }
-            area.remove();
-            terminal.focus?.();  // the keys back to the terminal
-        };
-        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(fallback);
-        else fallback();
-    },
-    // a molecule's picture with its annotations, the notes left for the TUI to put in bubbles: the TUI's request comes back with the answer
-    picture: request => post(`/api/v1/sessions/${session}/picture`, JSON.parse(request))
-        .then(text => app.picture_answer(request, text), error => app.picture_failed(request, error.message)),
-};
-
-// a POST whose answer is wanted as text, with the server's error message if it failed
-async function post(path, data) {
-    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
-    const text = await response.text();
-    if (response.ok) return text;
-    let message = text.trim();
-    try { message = JSON.parse(text).error?.message || message; } catch {}
-    throw new Error(message || `the server answered ${response.status}`);
-}
-
 function listen() {
     const source = new EventSource(`/api/v1/sessions/${session}/events`);
     source.onmessage = message => app.event(message.data);
@@ -178,6 +129,10 @@ try {
         session = (await api("/api/v1/sessions")).id;
     }
     const { App } = pyodide.pyimport("molterm_tui");
+    const bridge = createBridge({
+        session, app: () => app, cell: () => cell, write: text => pty.write(text),
+        copy: text => copyText(text, { refocus: () => terminal.focus?.() }),
+    });
     app = App(bridge, size.cols, size.rows);
     app.start();
     listen();
@@ -185,25 +140,10 @@ try {
     new ResizeObserver(refit).observe(box);
     window.addEventListener("resize", refit);  // a zoom changes the ratio, and not always the box
     terminal.focus?.();
-    // The keys are the terminal's only while it has the focus, and a click on the top bar, on the note under it, or in the frame's
-    // margin takes them away. The TUI can't say so -- it's drawing its own screen, and the terminal's own cue, a hollow cursor, is
-    // hidden exactly then, because a TUI waiting for an answer hides the cursor -- so what's left is a page that has quietly stopped
-    // listening, and the way back isn't one anybody would guess. This page is nothing but the terminal and nothing else on it wants
-    // the keyboard, so every click is a click on it. A click that ends a selection is the user taking a copy, not asking to type.
-    // Shift+Enter starts a new line in a note. A terminal sends it as a plain Enter unless asked for more (the kitty keyboard
-    // protocol, xterm's modifyOtherKeys), and asking would change how every other key comes, so the page sends it itself, as the kitty
-    // protocol writes it, before the terminal sees the key.
-    window.addEventListener("keydown", event => {
-        if (event.key !== "Enter" || !event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
-        if (!box.contains(document.activeElement)) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        app?.key("\x1b[13;2u");
-    }, true);
-    document.addEventListener("click", event => {
-        if (window.getSelection?.()?.isCollapsed === false) return;
-        if (!event.target.closest?.("a, button, input, textarea, select, [contenteditable]")) terminal.focus?.();
-    });
+    sendShiftEnter({ box, key: data => app.key(data) });
+    // This page is nothing but the terminal, and nothing else on it wants the keyboard, so every click is a click on it: one on the
+    // top bar, on the note under it, or in the frame's margin would otherwise leave a page that has quietly stopped listening.
+    focusPolicy("page", { box, focus: () => terminal.focus?.() });
 } catch (error) {
     show("not running", "err");
     document.getElementById("note").textContent = `The page could not start: ${error.message}`;

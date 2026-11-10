@@ -1,9 +1,8 @@
 """A Claude Code-like terminal interface for a server-side agent, written to run in Pyodide in the browser (or any Python).
 
 The page hands this app the terminal's keys (`key`), the agent's events from the server (`event`), and the wheel (`wheel`) when the
-terminal keeps it rather than reporting it as a mouse event, and gives it a `bridge` to talk back through: `write(text)` prints to the
-terminal, `post_message(text, cols)` sends what the user typed, `post_tool_result(id, json)` answers one of the agent's TUI tools, and
-`interrupt()` stops the agent's turn. The app redraws the whole screen after each change.
+terminal keeps it rather than reporting it as a mouse event, and gives it a `bridge` to talk back through, whose members are listed in
+BRIDGE (and BRIDGE_OPTIONAL) beside App. The app redraws the whole screen after each change.
 
 Molecules: a picture shown with a `smiles` is a molecule the app keeps (`molecules`), numbered from 1, and it knows where each is on the
 screen (`placed`). Clicking one, or /edit N, edits it where it is, with molterm's editor running on the molterm server through
@@ -11,6 +10,10 @@ screen (`placed`). Clicking one, or /edit N, edits it where it is, with molterm'
 drawing stays where the picture was, and the editor's tools float over the text beside it, put away and back with F2; in a box
 (/edit N box, or /editor box), a compact editor opens in a box over the picture. Done puts the edited molecule, as CXSMILES with its
 annotations, into the input for the user's next message.
+
+Under each molecule's picture is its SMILES, the atoms and bonds highlighted on it painted there in their colours (molterm says
+which parts, `paint` in its answer); while it's edited inline, the editor tells the SMILES of the drawing as it changes, and its
+checkbox, or /smiles, hides it or shows it again.
 
 Pointing things out: a molecule's annotations (from the editor, or the agent's tui.mark) are highlights in its picture, and notes in
 speech bubbles beside it, each with a leader to its atom. The picture comes from molterm (/api/v1/callouts) through
@@ -53,6 +56,7 @@ INPUT_LINES_MAX = 6
 EDIT_ROWS_MIN = 14  # a box editor: its border, the strip of tools, the drawing and two lines of status
 EDIT_ROWS = 22  # what it gets when there is room: enough for an atom's menu to open inside it
 EDIT_COLS_MIN = 60
+SMILES_LINES = 4  # a molecule's SMILES under its picture, at the most
 INLINE_ROWS_MIN, INLINE_COLS_MIN = 8, 40  # an inline editor's drawing, at the least, around the picture
 STRIP_COLS = 56  # its floating strip of tools, at the least (molterm's editor.STRIP_COLS)
 EDIT_INPUT = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])|\x1b\[1;3([ABCD])")  # what the TUI keeps for itself while editing inline
@@ -83,6 +87,8 @@ Molecules
                  F2 puts the tools away or brings them back · Done (ctrl+q) puts it in your message · Cancel (ctrl+c)
   /edit [N]      the same for molecule N, or the last one; /edit N box opens the editor in a box instead
   /editor box    clicks open the box from now on (/editor inline goes back)
+  /smiles        hide each molecule's SMILES under its picture, or show it again (the editor's ☑ SMILES does too); what
+                 is highlighted on the molecule is painted in it
   the line under it  drag it (or alt+arrows while editing) to make the drawing larger or smaller
 Pointing things out
   drag across text   highlight it, letter by letter, across several lines and replies too; it waits above the input,
@@ -155,6 +161,7 @@ class Molecule:
     rows: int
     edits: int = 0
     notes: list = field(default_factory=list)  # its notes, as bubbles: {text, row (of its leader in the picture)}
+    paint: dict = field(default_factory=dict)  # its SMILES, shown under it, and the parts highlighted: {"smiles", "marks"}
 
 
 _KEYS = itertools.count(1)
@@ -185,8 +192,28 @@ class Question:
     answered: object = None  # for the app's own question, such as a confirmation: called with the option's index, or None
 
 
+# What the page gives App to talk back through: the bridge's members, and what each is for. A host of the TUI provides these (molterm's
+# page makes them in agent/server/static/bridge.js); App refuses a bridge without one of BRIDGE's, and the tests keep both lists to
+# the members the app calls.
+BRIDGE = {
+    "write": "write(text): to the terminal, as a program's output",
+    "post_message": "post_message(text, cols): what the user typed, for the agent",
+    "post_tool_result": "post_tool_result(id, json): the answer to one of the agent's TUI tools",
+    "interrupt": "interrupt(): stop the agent's turn",
+    "edit": "edit(json): molterm's editor, for a molecule edited where it is; answered by edit_answer(text) or edit_failed(message)",
+    "picture": "picture(request): a molecule's picture with its annotations; answered by picture_answer(request, text) or "
+               "picture_failed(request, message)",
+}
+BRIDGE_OPTIONAL = {
+    "copy": "copy(text): to the clipboard, for the selection menu's Copy; without it, the app writes OSC 52 for the terminal",
+}
+
+
 class App:
     def __init__(self, bridge, cols=80, rows=24):
+        missing = [name for name in BRIDGE if not hasattr(bridge, name)]
+        if missing:
+            raise TypeError("the bridge has no " + ", ".join(missing) + "; App needs: " + "; ".join(BRIDGE.values()))
         self.bridge = bridge
         self.cols, self.rows = cols, rows
         self.session = ""
@@ -204,6 +231,7 @@ class App:
         self.editing = None  # the molecule being edited, see edit()
         self.edit_mode = "inline"  # what a click opens: "inline" or "box"
         self.tools_shown = True  # the inline editor's tools, as the user last left them
+        self.smiles_shown = True  # each molecule's SMILES under its picture, painted where it's highlighted; the editor's checkbox, or /smiles
         self.highlights = []  # text marked in the transcript
         self.selecting = None  # a drag across the transcript: [row, col, row, col] on the screen
         self.expansions = {}  # a context's tag in the input -> what the message carries instead, see tag()
@@ -363,6 +391,7 @@ class App:
             if smiles:
                 molecule = Molecule(len(self.molecules) + 1, str(block.input.get("title") or smiles)[:60], str(smiles), block,
                                     self.images, cols, rows)
+                molecule.paint = {"smiles": (str(smiles).split() or [""])[0], "marks": []}  # molterm paints its highlights
                 self.molecules.append(molecule)
                 block.molecule = molecule
                 block.panel.append(style(f"✎ click to edit or annotate it, or /edit {molecule.number}", GREY))
@@ -471,6 +500,8 @@ class App:
         molecule.image = self.images
         molecule.smiles = str(answer.get("smiles") or molecule.smiles)
         molecule.notes = [n for n in answer.get("notes") or [] if isinstance(n, dict)]
+        if isinstance(answer.get("paint"), dict):
+            molecule.paint = answer["paint"]
         block = molecule.block
         block.panel = kitty.lines(molecule.image, molecule.cols, molecule.rows) + block.panel[old_rows:]
         tool = self._tool(request.get("tool"))
@@ -505,7 +536,8 @@ class App:
         screen, _ = self.lines()
         room = self._room
         top = self.placed.get(number, (None,))[0]
-        rows_wanted = max(molecule.rows, INLINE_ROWS_MIN) if mode == "inline" else molecule.rows + 3
+        rows_wanted = (max(molecule.rows, INLINE_ROWS_MIN) + 1 + len(self._smiles_lines(molecule.paint, self.cols - 5)) if mode == "inline"
+                       else molecule.rows + 3)
         if top is None or top < above or top + rows_wanted > room:  # bring it into view, with room for the tools above
             self.scroll = max(self._content - (self._content_at[number] - above + room), 0)
             screen, _ = self.lines()
@@ -538,9 +570,10 @@ class App:
         the tools and below for the line that resizes it; keeps the drawing's place in `inline`."""
         e, number = self.editing, self.editing["molecule"].number
         above = 3 if self.tools_shown else 1
+        below = 1 + len(self._smiles_lines(e.get("paint") or e["molecule"].paint, self.cols - 5))  # the line that resizes it, and the SMILES
         room = self.rows - len(self._footer(self.cols - 1))
-        top = min(max(top if top is not None else above, above), max(room - 5, 0))
-        e["rows"] = max(min(e["rows"], room - top - 1), 4)
+        top = min(max(top if top is not None else above, above), max(room - 4 - below, 0))
+        e["rows"] = max(min(e["rows"], room - top - below), 4)
         e["cols"] = max(min(e["cols"], self.cols - 1 - EDIT_LEFT), 24)
         self.lines()
         self.scroll = max(self._content - (self._content_at[number] - top) - self._room, 0)
@@ -603,7 +636,7 @@ class App:
             fields = {"close": "1"}
         else:
             fields = {"cols": self.cols, "rows": self.rows, "title": f"mol {molecule.number} · {molecule.name}",
-                      "events": e["pending"].encode().hex()}
+                      "events": e["pending"].encode().hex(), "show_smiles": "1" if self.smiles_shown else "0"}
             if e["mode"] == "box":
                 fields["box"] = ",".join(str(n) for n in e["box"])
             else:
@@ -644,6 +677,15 @@ class App:
                 return ""
             if match.group(1) == "tools":
                 self.tools_shown = match.group(2) == "1"
+                return ""
+            if match.group(1) == "smiles":  # shown or not, which is remembered; inline, the drawing's SMILES as it's edited too
+                try:
+                    told = json.loads(base64.b64decode(match.group(2) or ""))
+                    self.smiles_shown = bool(told["shown"])
+                    if "smiles" in told:
+                        self.editing["paint"] = {"smiles": str(told["smiles"]), "marks": list(told.get("marks") or [])}
+                except (ValueError, KeyError, TypeError):
+                    pass
                 return ""
             if match.group(1) == "repaint":  # the transcript as it is now, around the drawing, and the footer
                 screen = self.editing.get("frozen") or self.lines()[0]
@@ -1290,6 +1332,10 @@ class App:
             self.edit_mode = editor.group(1) or self.edit_mode
             self.blocks.append(Block("note", f"Clicking a molecule edits it {'in a box' if self.edit_mode == 'box' else 'inline'}."))
             return
+        shown = re.fullmatch(r"/smiles(?:\s+(on|off))?", text)
+        if shown:
+            self.smiles_shown = {"on": True, "off": False}.get(shown.group(1), not self.smiles_shown)
+            return
         notes = re.fullmatch(r"/notes(?:\s+(hide|reset))?", text)
         if notes:
             for state in self.bubbles.values():
@@ -1388,8 +1434,12 @@ class App:
             block.image_line = 2 if title else 1  # after the tool's line and the title
             panel = block.panel
             e = self.editing
-            if molecule and e and e["mode"] == "inline" and e["molecule"] is molecule:  # room for its drawing, and the line under it
-                panel = [""] * e["rows"] + [_grip(e["cols"], "drag this line, or alt+arrows, to resize")] + panel[molecule.rows:]
+            if molecule and e and e["mode"] == "inline" and e["molecule"] is molecule:  # room for its drawing, the line under it, and
+                # the SMILES of the drawing as it's edited
+                panel = ([""] * e["rows"] + [_grip(e["cols"], "drag this line, or alt+arrows, to resize")]
+                         + self._smiles_lines(e.get("paint") or molecule.paint, cols - 5) + panel[molecule.rows:])
+            elif molecule:
+                panel = panel[:molecule.rows] + self._smiles_lines(molecule.paint, cols - 5) + panel[molecule.rows:]
             body += ([title] if title else []) + [truncate(line, cols - 5) for line in panel]
         if block.result:
             tone = (RED,) if block.state == "error" else (GREY,)
@@ -1401,6 +1451,27 @@ class App:
             _, paper = self._flash_colours()
             lines = [paint(line, 0, cols, paper) for line in lines]
         return lines + [""]
+
+    def _smiles_lines(self, painted, cols):
+        """A molecule's SMILES, for under its picture: on as many lines as it takes (four at most), the parts highlighted on the
+        molecule painted in their colours. None if it's hidden."""
+        smiles = str((painted or {}).get("smiles") or "")
+        if not self.smiles_shown or not smiles:
+            return []
+        cols = max(cols, 10)
+        chunks = [smiles[at:at + cols] for at in range(0, len(smiles), cols)]
+        if len(chunks) > SMILES_LINES:
+            chunks = chunks[:SMILES_LINES]
+            chunks[-1] = chunks[-1][:-1] + "…"
+        lines = []
+        for index, chunk in enumerate(chunks):
+            line, offset = style(chunk, GREY), index * cols
+            for start, end, colour in (painted.get("marks") or []):
+                start, end = max(int(start) - offset, 0), min(int(end) - offset, len(chunk))
+                if start < end:
+                    line = paint(line, start, end, HIGHLIGHTS.get(colour, HIGHLIGHTS["yellow"]) + WHITE)
+            lines.append(line)
+        return lines
 
     def _footer(self, cols):
         self._chip_regions = []
