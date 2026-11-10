@@ -112,7 +112,7 @@ Pointing things out
   above the input    what you edited or highlighted: click to put it in your message (or take it out), × to drop it
 Commands
   /help          this help       /clear         clear the transcript
-  tab            take the suggestion faint in the input (✦: the tutor's) · /tutor  start a tutor, or hide it or show it"""
+  tab            take the suggestion faint in the input (✦: the tutor's) · /tutor [name]  start a tutor, or hide/show it"""
 
 
 def context(molecule):
@@ -218,7 +218,8 @@ BRIDGE = {
 }
 BRIDGE_OPTIONAL = {
     "copy": "copy(text): to the clipboard, for the selection menu's Copy; without it, the app writes OSC 52 for the terminal",
-    "tutor": "tutor(): tutorial mode for this session, which has no tutor yet (/tutor); without it, /tutor says how to have one",
+    "tutor": "tutor(name): tutorial mode for this session, which has no tutor yet (/tutor [name]; name \"\" for the server's own); "
+             "without it, /tutor says how to have one",
 }
 
 
@@ -1360,7 +1361,8 @@ class App:
         self.input, self.cursor, self.history_at, self.scroll = "", 0, None, 0
         if not text:
             return
-        if text == "/tutor":
+        asked = re.fullmatch(r"/tutor(?:\s+([A-Za-z0-9_-]{1,40}))?", text)
+        if asked:
             start = getattr(self.bridge, "tutor", None)
             if self.tutorial:
                 self.tutor_shown = not self.tutor_shown
@@ -1368,7 +1370,7 @@ class App:
                                          else "The tutor's tips are hidden; /tutor shows them again."))
             elif start:  # tutorial mode from here on, whatever the agent: the server starts its tutor, and says so (_on_session)
                 self.tutor_shown = True
-                start()
+                start(asked.group(1) or "")
                 self.blocks.append(Block("note", "Starting the tutor: it watches from here on. /tutor hides it."))
             else:
                 self.blocks.append(Block("note", "There's no tutor in this session: open the page as /?tutorial for one."))

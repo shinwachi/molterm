@@ -135,6 +135,10 @@ def test_interrupting_ends_a_turn_waiting_on_the_user(client):
     ends = sum(e["type"] == "turn_end" for e in session.events)
     client.post(f"/api/v1/sessions/{session_id}/interrupt")
     wait_for(session, lambda e: sum(x["type"] == "turn_end" for x in session.events) > ends)
+    types = [e["type"] for e in session.events]
+    assert "interrupt" in types[types.index("tool_use"):]  # when: in the log, for a tutor
+    assert session.events[-1] == {"seq": len(types) - 1, "type": "turn_end", "interrupted": True}  # and what it did to the turn
+    assert all("interrupted" not in e for e in session.events[:-1] if e["type"] == "turn_end")  # a finished turn says nothing
 
 
 def test_bad_requests_and_unknown_sessions(client):
@@ -326,3 +330,100 @@ def test_a_tutor_started_later_watches_from_then_on():
     session.emit("tool_use", id="tool_3", name="tui.ask", input={"question": "Which?", "options": ["A"]})
     events = wait_for(session, lambda e: e["type"] == "tutor" and "tui.ask" in e["text"])  # from now on, it is
     assert sum(1 for e in events if e["type"] == "session") == 2
+
+
+def test_a_session_can_name_its_tutor_and_an_unknown_name_is_refused(monkeypatch):
+    made = []
+
+    def lesson(name):
+        return lambda session: lambda: made.append((name, session.id))
+
+    sessions = Sessions(lambda session: lambda: None, lesson("own"), {"lesson-1": lesson("lesson-1"), "lesson-2": lesson("lesson-2")})
+    monkeypatch.setattr(server, "sessions", sessions)
+    client = server.app.test_client()
+    assert client.get("/api/v1/tutors").json == {"default": True, "named": ["lesson-1", "lesson-2"]}
+    named = client.post("/api/v1/sessions", json={"tutor": "lesson-2"}).json["id"]
+    own = client.post("/api/v1/sessions", json={"tutor": True}).json["id"]
+    assert sessions.get(named).events[0]["tutor"] == "lesson-2" and sessions.get(own).events[0]["tutor"] is True
+    refused = client.post("/api/v1/sessions", json={"tutor": "lesson-9"})
+    assert refused.status_code == 400 and "lesson-1, lesson-2" in refused.json["error"]["message"]
+    assert sessions.count() == 2  # refused where the session is made: nothing was
+    assert client.post("/api/v1/sessions", json={"tutor": 3}).status_code == 400
+    assert client.post("/api/v1/agents/sessions", json={"tutor": "nope"}).status_code == 400
+    later = client.post("/api/v1/sessions").json["id"]
+    assert client.post(f"/api/v1/sessions/{later}/tutor", json={"tutor": "lesson-9"}).status_code == 400
+    assert client.post(f"/api/v1/sessions/{later}/tutor", json={"tutor": "lesson-1"}).json == {"tutor": "lesson-1"}
+    deadline = time.time() + 2
+    while len(made) < 3 and time.time() < deadline:
+        time.sleep(0.01)
+    assert sorted(made) == sorted([("lesson-2", named), ("own", own), ("lesson-1", later)])
+    assert set(server.named_tutors("a=tutor:EmulatedTutor, b-2=tutor:EmulatedTutor")) == {"a", "b-2"}
+    with pytest.raises(ValueError):
+        server.named_tutors("no colon here")
+
+
+def test_a_session_carries_its_context_for_its_agent_and_tutor(monkeypatch):
+    from tuiagent import Tutor
+    sessions = Sessions(lambda session: lambda: None, lambda session: lambda: None, {"lesson-1": lambda session: lambda: None})
+    monkeypatch.setattr(server, "sessions", sessions)
+    client = server.app.test_client()
+    context = {"program": "malksketch", "library": ["a.sdf"]}
+    made = client.post("/api/v1/sessions", json={"tutor": "lesson-1", "context": context}).json["id"]
+    session = sessions.get(made)
+    assert session.context == context and "context" not in session.events[0]  # not in the page's stream
+    tutor = Tutor(session)
+    assert tutor.context == context and tutor.name == "lesson-1"
+    remote = client.post("/api/v1/agents/sessions", json={"context": context}).json
+    assert remote["context"] == context and remote["tutor"] is False
+    later = client.post("/api/v1/sessions").json["id"]
+    client.post(f"/api/v1/sessions/{later}/tutor", json={"context": {"lesson": 10}})
+    assert sessions.get(later).context == {"lesson": 10} and sessions.get(later).tutor is True
+    assert client.post("/api/v1/sessions", json={"context": [1]}).status_code == 400
+    assert client.post("/api/v1/sessions", json={"context": {"x": "y" * 70_000}}).status_code == 400
+
+
+def test_a_tip_about_a_tool_comes_after_its_answer():
+    session = Session("s1", tutor=True)
+    session.emit("tool_use", id="tool_1", name="molterm.render", input={})
+    session.emit("tool_use", id="tool_2", name="tui.ask", input={})
+    about_server, about_tui = session.events[0], session.events[1]
+    done = []
+    for about in (about_server, about_tui):
+        threading.Thread(target=lambda a=about: (session.interject("tutor", about=a, text=a["id"], by="tutor"), done.append(a["id"])),
+                         daemon=True).start()
+    time.sleep(0.1)
+    assert done == []  # streaming is over (tool_use), but neither has its answer
+    session.emit("tool_result", id="tool_1", output="drawn")
+    deadline = time.time() + 2
+    while not done and time.time() < deadline:
+        time.sleep(0.01)
+    assert done == ["tool_1"] and [e["type"] for e in session.events] == ["tool_use", "tool_use", "tool_result", "tutor"]
+    session.put_result("tool_2", {"index": 0})  # a TUI tool's answer, from the page
+    while len(done) < 2 and time.time() < deadline:
+        time.sleep(0.01)
+    assert [e["type"] for e in session.events][-2:] == ["tool_answer", "tutor"]
+    session.emit("tool_use", id="tool_3", name="tui.ask", input={})
+    third = session.events[-1]
+    session.emit("turn_end", interrupted=True)  # its turn ended with no answer: the tip needn't wait for one
+    session.interject("tutor", about=third, timeout=1, text="after all", by="tutor")
+    assert session.events[-1]["text"] == "after all"
+
+
+def test_every_event_a_tutor_can_see_is_listed_beside_tutor():
+    import inspect
+    import re as regex
+
+    import sessions as sessions_module
+    import tuiagent
+    from molterm_tui import app as tui_app
+    from tuiagent import base, tutor as tutor_sdk
+    listed = set(tuiagent.EVENTS)
+    assert server.AGENT_EVENTS | {"session", "interrupt", "tutor", "user_message", "tool_answer"} == listed
+    emitted = set()
+    for module in (sessions_module, base, tutor_sdk, agent_module):
+        source = inspect.getsource(module)
+        emitted |= set(regex.findall(r"(?:emit|_append|interject)\(\"(\w+)\"", source))
+    assert emitted <= listed and emitted >= {"session", "interrupt", "tutor", "suggest", "user_message", "tool_answer", "turn_end"}
+    handled = {name[4:] for name in dir(tui_app.App) if name.startswith("_on_")}
+    assert handled <= listed - tuiagent.TUTORIAL_ONLY  # what the page draws is among what a tutor sees
+    assert tuiagent.TUTORIAL_ONLY <= listed and tuiagent.NOT_OBSERVED <= listed and tuiagent.NOT_IN_HISTORY <= listed

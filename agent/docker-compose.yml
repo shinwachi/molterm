@@ -19,6 +19,8 @@ services:
             - MOLTERM_URL=${MOLTERM_URL:-http://molterm-prod-molterm-1:8910}
             - APP_ENV=${APP_TAG:-prod}
             - AGENT=${AGENT:-}  # the agent class the server runs, as module:Class; empty for the emulated one
+            - TUTOR=${TUTOR:-}  # the tutor class for tutorial mode, as module:Class; empty for the emulated one
+            - TUTORS=${TUTORS:-}  # tutors a session can name: "name=module:Class", several separated by spaces
         labels:
             - traefik.enable=true
             - traefik.docker.network=traefik

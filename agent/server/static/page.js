@@ -121,7 +121,8 @@ try {
     // ?session=<id> joins a session an agent of its own made (see TUTORIAL.md); otherwise the server starts one with its agent,
     // and with ?tutorial, a tutor that watches it and chimes in
     const params = new URLSearchParams(location.search);
-    const joining = params.get("session"), tutorial = params.has("tutorial");
+    // ?tutorial=<name> asks for one of the server's named tutors (a lesson), ?tutorial alone for its own
+    const joining = params.get("session"), tutorial = params.has("tutorial") ? (params.get("tutorial") || true) : false;
     const mode = document.getElementById("mode");
     show(joining ? "joining the session…" : "starting a session…");
     if (joining) {
@@ -130,11 +131,11 @@ try {
         if (!response.ok) throw new Error(info.error?.message || "no such session");
         session = joining;
         // a session another program made, its agent its own: &tutorial gives it the server's tutor, which the agent needn't know of
-        if (tutorial && !info.tutor) await api(`/api/v1/sessions/${encodeURIComponent(session)}/tutor`);
+        if (tutorial && !info.tutor) await api(`/api/v1/sessions/${encodeURIComponent(session)}/tutor`, { tutor: tutorial });
         if (mode && (tutorial || info.tutor)) mode.hidden = true;  // there's no leaving it; /tutor hides it
         else if (mode) mode.href = `/?session=${encodeURIComponent(session)}&tutorial`;
     } else {
-        session = (await api("/api/v1/sessions", tutorial ? { tutor: true } : undefined)).id;
+        session = (await api("/api/v1/sessions", tutorial ? { tutor: tutorial } : undefined)).id;
         if (mode && tutorial) { mode.textContent = "Leave the tutorial"; mode.href = "/"; }
     }
     const { App } = pyodide.pyimport("molterm_tui");

@@ -43,7 +43,7 @@ export async function post(path, data) {
 //   base     where the agent server is, "" for this origin
 //   copy     text => the clipboard, for the selection menu's Copy (copyText by default); null leaves it out, and the TUI then writes
 //            OSC 52 for the terminal to copy, if it allows that
-//   tutor    false leaves out tutor(), with which /tutor starts tutorial mode on a session that has no tutor yet
+//   tutor    false leaves out tutor(name), with which /tutor [name] starts tutorial mode on a session that has no tutor yet
 export function createBridge({ session, app, cell, write, base = "", copy = copyText, tutor = true }) {
     const at = `${base}/api/v1/sessions/${session}`;
     const failed = error => app()?.event(JSON.stringify({ type: "error", message: error.message }));
@@ -64,7 +64,7 @@ export function createBridge({ session, app, cell, write, base = "", copy = copy
     };
     if (copy) bridge.copy = copy;
     // tutorial mode from now on, whatever the session's agent: the server starts its tutor, and tells the TUI in the event stream
-    if (tutor) bridge.tutor = () => api(`${at}/tutor`).catch(failed);
+    if (tutor) bridge.tutor = name => api(`${at}/tutor`, { tutor: name || true }).catch(failed);
     return bridge;
 }
 

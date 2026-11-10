@@ -197,7 +197,14 @@ Your agent needs nothing for tutorial mode, so it can be started from outside it
 can start one later on any session, with `/tutor` or by opening its page with `&tutorial` (`POST /api/v1/sessions/<id>/tutor`
 underneath). A tutor started later gets `joined(history)` first and watches from then on.
 
-Run a tutor of your own on the server with `TUTOR=mytutor:MyTutor` (as `AGENT`). A tip waits for the agent's reply to finish streaming, so it never
+Run a tutor of your own on the server with `TUTOR=mytutor:MyTutor` (as `AGENT`), or several, by name, with
+`TUTORS="lesson-1=mytutor:One lesson-2=mytutor:Two"`; a session asks for one with `"tutor": "lesson-1"` (`run(..., tutor="lesson-1")`,
+`--tutor lesson-1`, `?tutorial=lesson-1`, `/tutor lesson-1`), and an unknown name is refused when the session is made. Give the
+session a `context` (`run(..., context={"program": "..."})`), and the tutor has it as `self.context`; the server never reads it.
+
+What a tutor can see is listed in `tuiagent.EVENTS`, with `TUTORIAL_ONLY`, `NOT_OBSERVED` and `NOT_IN_HISTORY` beside it. An
+interrupted turn is visible: `interrupt` when Esc came, and its `turn_end` with `interrupted: true`. A tip about what a tool
+returned takes the call's event, `self.tip(text, about=event)`, and comes after the result. A tip waits for the agent's reply to finish streaming, so it never
 lands inside one. The demo's tutor is `server/tutor.py`.
 
 ## Where the code is

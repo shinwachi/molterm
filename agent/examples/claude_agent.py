@@ -95,6 +95,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run a Claude-backed agent against a molterm agent server.")
     parser.add_argument("server", help="the server, as this machine reaches it, e.g. http://molterm-agent.localhost")
     parser.add_argument("--public", help="the server as your browser reaches it, if different")
-    parser.add_argument("--tutor", action="store_true", help="tutorial mode: the server's tutor watches the session too")
+    parser.add_argument("--tutor", nargs="?", const=True, default=False, metavar="NAME",
+                        help="tutorial mode: the server's tutor watches the session too, or the one of its TUTORS called NAME")
     arguments = parser.parse_args()
     run(ClaudeAgent, arguments.server, arguments.public, tutor=arguments.tutor)

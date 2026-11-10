@@ -25,11 +25,16 @@ class EmulatedTutor(Tutor):
         kind = event["type"]
         if kind == "tool_use":
             self.tools[event.get("id")] = event.get("name", "")
-            self.tool(event.get("name", ""), event.get("input") or {})
+            self.tool(event.get("name", ""), event.get("input") or {}, event)
         elif kind == "tool_answer":
             self.answer(self.tools.get(event.get("id"), ""), event.get("result") or {})
         elif kind == "user_message":
             self.message(event.get("text", ""))
+        elif kind == "turn_end" and event.get("interrupted"):
+            self.turns += 1
+            if self.once("interrupted"):
+                self.tip("Esc stopped the agent's turn: what it was doing ended there, and it waits for your next message. Esc "
+                         "interrupts it whenever the spinner shows.")
         elif kind == "turn_end":
             self.turn_end()
         elif kind == "error" and not str(event.get("message", "")).startswith("The tutor") and self.once("error"):
@@ -56,17 +61,18 @@ class EmulatedTutor(Tutor):
                      "it). Right-click an atom for a highlight or a note; Done puts your version in the message, for the agent.")
             self.suggest(f"/edit {self.shown}")
 
-    def tool(self, name, input_):
+    def tool(self, name, input_, event):
         if name == "tui.ask" and self.once("ask"):
             self.tip("The agent is asking you with tui.ask, one of this interface's tools. The question waits under the transcript: "
                      "↑ ↓ and Enter answer it, Esc skips it. Your answer goes back to the agent as the tool's result.", wait=0.3)
         elif name.startswith("molterm.") and self.once("server tool"):
-            self.tip(f"{name} is a server-side tool: the agent asked the molterm server for it. The tui.* tools (Show, Ask, Mark) "
-                     "run here instead, in your browser, and the agent waits for their answers.")
+            self.tip(f"{name} is a server-side tool: the agent asked the molterm server for it, and the line under it is what came "
+                     "back. The tui.* tools (Show, Ask, Mark) run here instead, in your browser, and the agent waits for their "
+                     "answers.", about=event)
         elif name == "tui.mark" and input_.get("mol") and self.once("mark mol"):
             self.tip("tui.mark: the agent highlighted part of the molecule, in pink, its colour, and the same atoms are painted in "
                      "the SMILES under the picture. Its note is in the amber bubble: drag it aside, – folds it, × hides it. "
-                     "/smiles hides the SMILES.")
+                     "/smiles hides the SMILES.", about=event)
         elif name == "tui.mark" and input_.get("text") and self.once("mark text"):
             self.tip("It can point at text too. Drag across any words yourself: they're highlighted, wait above the input, and a "
                      "click there puts them in your message, so the agent knows what you mean.")

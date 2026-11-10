@@ -242,6 +242,26 @@ Tutorial mode doesn't need the agent's program, so it can be started from outsid
 A tutor started later watches from then on: it opens with a welcome, and counts what was shown before (for `/edit N`) without
 explaining the past.
 
+For lessons, several tutors on the same events:
+- **A session names its tutor.** `TUTORS="lesson-1=pkg.lessons:One lesson-2=pkg.lessons:Two"` gives the server tutors by name
+  (each class made with the session alone, as `TUTOR`'s); `"tutor": "lesson-2"` asks for one wherever `true` is taken (making a
+  session, `/api/v1/agents/sessions`, `POST .../tutor`, `RemoteSession.open`, `?tutorial=lesson-2`, `/tutor lesson-2`), and `true`
+  keeps its meaning, the server's own. An unknown name is refused where the session is made (400, naming the ones there are);
+  `GET /api/v1/tutors` lists them. The tutor knows which it is (`self.name`).
+- **A session carries a context.** `"context": {...}` when the session is made (or when its tutor is started) is kept on it as
+  given and never read by the server: the tutor has it as `self.context`, an agent on the server as `session.context`, a remote
+  one as `RemoteSession.context`. A name picks the lesson; the context says what the lesson is about (its program, its library). It
+  isn't in the page's stream, nor in `GET /api/v1/sessions/<id>`.
+- **An interrupt is an event.** Esc puts `interrupt` in the log, when it happened, and the turn it cut short ends with
+  `turn_end` `{"interrupted": true}`; a finished turn's `turn_end` has no such field. The demo tutor says what Esc did, once.
+- **What a tutor sees is listed** beside `Tutor`, in `sdk/tuiagent/tutor.py`: `EVENTS`, each with its fields; `TUTORIAL_ONLY`
+  (`user_message`, `tool_answer`: logged only while there's a tutor, not sent to the page); `NOT_OBSERVED` (the tutor's own `tutor`
+  and `suggest`, never passed to `observe`); `NOT_IN_HISTORY` (what a late tutor's `joined(history)` lacks). A test keeps the list
+  equal to what the server, the SDK and the agent emit, and the TUI's handlers within it.
+- **A tip can be about a tool call.** `tip(text, about=event)`, with the call's `tool_use`, waits for its `tool_result` (or the
+  user's `tool_answer`, for a TUI tool), or for its turn to end without one, so it comes after what it describes; the demo tutor's
+  tips on a server tool and on the agent's marks do.
+
 The demo's tutor is a script, as the demo agent is: the first time something happens it says what it is, the agent's question
 (tui.ask) and how to answer it, a server-side tool, a molecule shown and what clicking it does, the agent's marks and their colours,
 pointing at text, a skipped question, what the user's highlight or edit sent; and once a molecule has been shown, it suggests
@@ -350,6 +370,13 @@ welcoming, counting the molecule shown before for `/edit 1`, not explaining the 
 starting one through the bridge, keeping the agent's suggestion). In headless Chromium: `examples/hello_agent.py` run as a
 separate program, its page joined with `&tutorial`, got the tutor's welcome and its tip on the agent's question; `/tutor` on a plain
 session started one; no page errors.
+Then (2026-11-10, for a downstream lesson set): named tutors, a session's context, interrupts as events, the list of what a tutor
+sees, tips about a tool call: 91 tests (tutors by name, from TUTORS, an unknown name refused before a session is made, a later tutor
+by name; the context kept, not streamed, given to the tutor, returned to a remote agent, refused when not an object or too large;
+Esc's `interrupt` and `turn_end` `interrupted: true`, a finished turn without it; a tip about a server tool after its `tool_result`,
+about a TUI tool after its `tool_answer`, and after its turn's end when it had none; `EVENTS` equal to what's emitted). Against the
+dev agent: an unknown tutor refused (400); a tutored session interrupted while its question waited logged `interrupt`, then
+`turn_end` with `interrupted: true`, then the tutor's tip on Esc.
 
 ## Open issues
 

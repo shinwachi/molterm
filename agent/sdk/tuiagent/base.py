@@ -72,16 +72,17 @@ class TuiAgent:
 
     def turn(self, work):
         self.session.emit("turn_start", label="Thinking")
+        interrupted = False
         try:
             self.pause(0.6)
             work()
         except Interrupted:
-            pass
+            interrupted = True  # said on its turn_end, for whoever watches (a tutor): a turn cut short, not finished
         except Exception as error:  # noqa: BLE001 - the user sees what went wrong, and the session goes on
             self.session.emit("error", message=f"The agent stumbled: {error}")
         finally:
             self.session.emit("text_end")
-            self.session.emit("turn_end")
+            self.session.emit("turn_end", **({"interrupted": True} if interrupted else {}))
 
     def pause(self, seconds):
         """Wait, as a model takes time to think, and end the turn if the user interrupts."""

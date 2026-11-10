@@ -1095,7 +1095,7 @@ def test_tutor_without_a_tutor_says_how_to_have_one(app):
 
 def test_tutor_starts_a_tutor_through_the_bridge_when_there_is_none(app):
     started = []
-    app.bridge.tutor = lambda: started.append(True)
+    app.bridge.tutor = lambda name: started.append(name or True)
     app.event({"type": "session", "id": "abc123"})
     app.event({"type": "suggest", "text": "show me a drug"})
     app.key("/tutor\r")
@@ -1105,3 +1105,12 @@ def test_tutor_starts_a_tutor_through_the_bridge_when_there_is_none(app):
     assert app.tutorial and "Tutorial mode" in screen(app)
     app.key("/tutor\r")
     assert started == [True] and "tips are hidden" in screen(app)  # now /tutor hides it, as in any tutorial
+
+
+def test_tutor_can_name_the_tutor_it_starts(app):
+    started = []
+    app.bridge.tutor = lambda name: started.append(name)
+    app.key("/tutor lesson-3\r")
+    assert started == ["lesson-3"]
+    app.event({"type": "session", "id": "abc123", "tutor": "lesson-3"})
+    assert app.tutorial and "Tutorial mode" in screen(app)

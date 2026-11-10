@@ -21,20 +21,23 @@ class SessionEnded(Exception):
 
 
 class RemoteSession:
-    def __init__(self, server, session_id, token, url=None):
+    def __init__(self, server, session_id, token, url=None, context=None):
         self.server, self.id, self.token = server.rstrip("/"), session_id, token
+        self.context = dict(context or {})
         self.url = url or f"{self.server}/?session={session_id}"
         self.closed = False
         self._interrupted, self._checked = False, 0.0
 
     @classmethod
-    def open(cls, server, public=None, tutor=False):
+    def open(cls, server, public=None, tutor=False, context=None):
         """A new session for an agent of your own. `public` is the server's address as the user's browser reaches it, when this
-        process reaches it by another (a container name, say). With `tutor`, in tutorial mode: the server's tutor watches it beside
-        your agent, which needs nothing for it (the user can also start one later, with /tutor)."""
-        data = _request("POST", f"{server.rstrip('/')}/api/v1/agents/sessions", {"tutor": True} if tutor else {})
+        process reaches it by another (a container name, say). With `tutor`, in tutorial mode: the server's tutor (True) or one it
+        knows by name watches it beside your agent, which needs nothing for it (the user can also start one later, with /tutor).
+        `context`, a JSON object, travels with the session, for its tutor (and as `session.context` here)."""
+        request = {**({"tutor": tutor} if tutor else {}), **({"context": context} if context is not None else {})}
+        data = _request("POST", f"{server.rstrip('/')}/api/v1/agents/sessions", request)
         url = f"{public.rstrip('/')}/?session={data['id']}" if public else data["url"]
-        return cls(server, data["id"], data["token"], url)
+        return cls(server, data["id"], data["token"], url, data.get("context"))
 
     def _call(self, method, path, data=None, timeout=POLL + 10):
         try:
@@ -95,10 +98,10 @@ def _request(method, url, data=None, token=None, timeout=30):
         return json.loads(response.read() or b"{}")
 
 
-def run(agent_class, server, public=None, tutor=False, **options):
-    """Open a session on `server` (in tutorial mode with `tutor`), print its page's address, and run `agent_class(session,
-    **options)` until it ends."""
-    session = RemoteSession.open(server, public, tutor)
+def run(agent_class, server, public=None, tutor=False, context=None, **options):
+    """Open a session on `server` (in tutorial mode with `tutor`, True or a tutor's name; with `context`, see open), print its page's
+    address, and run `agent_class(session, **options)` until it ends."""
+    session = RemoteSession.open(server, public, tutor, context)
     print(f"Open {session.url} to talk to the agent. Ctrl+C here ends it.", flush=True)
     try:
         agent_class(session, **options)()
