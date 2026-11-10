@@ -22,6 +22,13 @@ transcript can be highlighted too, by the agent (tui.mark with `text`) or by the
 across it; let go, and it has handles to change it, and a menu under it offers to copy it (`bridge.copy(text)` if the page has it,
 else OSC 52), to note it, or to highlight it, which also puts it above the input as a context (noting it highlights it first).
 
+Suggestions: the agent may suggest what to type next (a `suggest` event); it shows faintly in the input while that's empty, or
+finishes what's typed if it begins the same way, and Tab takes it. It goes when a message is sent.
+
+Tutorial mode: a session started with a tutor (the page's /?tutorial), or given one later (/tutor, through `bridge.tutor()`, or
+?session=<id>&tutorial), has a tutor watching it beside the agent, whatever the agent is, which the agent doesn't see. Its tips (`tutor` events) are bubbles of their own in the transcript, marked ✦ tutor, in teal, and it suggests
+things to try as the agent does, its suggestions marked ✦. /tutor hides its tips and suggestions, or shows them again.
+
 The agent can use the interface as tools:
   tui.show {title, image, body,    puts a panel in the transcript: a picture (`image`: {png (base64), cols, rows}), drawn with the
             smiles}                Kitty graphics protocol, and/or text (`body`, which may carry ANSI colours, such as a Braille drawing);
@@ -66,6 +73,10 @@ SELECTING = "\x1b[48;2;70;70;84m"
 NOTE_INK, NOTE_BG = "\x1b[38;2;229;192;123m", "\x1b[48;2;44;39;30m"  # an agent's bubbles, in the colour of molterm's leaders (callouts.LEADER)
 USER_INK, USER_NOTE_BG = "\x1b[38;2;140;180;245m", "\x1b[48;2;34;74;140m"  # the user's own, and their text highlights (callouts.USER_LEADER)
 WHITE = "\x1b[38;2;255;255;255m"
+# the tutor's bubbles, in tutorial mode: teal, apart from the agent's amber and the user's blue
+TUTOR_INK, TUTOR_BG, TUTOR_TEXT = "\x1b[38;2;118;204;186m", "\x1b[48;2;22;50;47m", "\x1b[38;2;226;240;236m"
+TUTOR_MARK = "✦"
+TUTOR_TEXT_MAX = 72  # a tip's text at its widest
 # a bubble's colours: (its border and line, its paper, what it covers shown faintly, its text, its – and ×)
 AGENT = (NOTE_INK, NOTE_BG, "\x1b[38;2;92;84;66m", "", NOTE_INK)
 USER = (USER_INK, USER_NOTE_BG, "\x1b[38;2;96;132;192m", WHITE, WHITE)  # white letters in a blue bubble
@@ -100,7 +111,8 @@ Pointing things out
                      in your message; /notes shows them all again, /notes hide folds them all, /notes reset puts them back
   above the input    what you edited or highlighted: click to put it in your message (or take it out), × to drop it
 Commands
-  /help          this help       /clear         clear the transcript"""
+  /help          this help       /clear         clear the transcript
+  tab            take the suggestion faint in the input (✦: the tutor's) · /tutor  start a tutor, or hide it or show it"""
 
 
 def context(molecule):
@@ -206,6 +218,7 @@ BRIDGE = {
 }
 BRIDGE_OPTIONAL = {
     "copy": "copy(text): to the clipboard, for the selection menu's Copy; without it, the app writes OSC 52 for the terminal",
+    "tutor": "tutor(): tutorial mode for this session, which has no tutor yet (/tutor); without it, /tutor says how to have one",
 }
 
 
@@ -232,6 +245,9 @@ class App:
         self.edit_mode = "inline"  # what a click opens: "inline" or "box"
         self.tools_shown = True  # the inline editor's tools, as the user last left them
         self.smiles_shown = True  # each molecule's SMILES under its picture, painted where it's highlighted; the editor's checkbox, or /smiles
+        self.tutorial = False  # the session has a tutor, whose tips are shown unless /tutor hid them
+        self.tutor_shown = True
+        self.suggestion = None  # what the agent or the tutor suggests typing next: {"text", "by"}; Tab takes it
         self.highlights = []  # text marked in the transcript
         self.selecting = None  # a drag across the transcript: [row, col, row, col] on the screen
         self.expansions = {}  # a context's tag in the input -> what the message carries instead, see tag()
@@ -331,6 +347,28 @@ class App:
 
     def _on_session(self, event):
         self.session = event.get("id", "")
+        self.tutorial = bool(event.get("tutor"))
+
+    def _on_tutor(self, event):
+        text = str(event.get("text") or "").strip()
+        if text:
+            self._close_text()
+            self.blocks.append(Block("tutor", text))
+            self.scroll = 0
+
+    def _on_suggest(self, event):
+        text = " ".join(str(event.get("text") or "").split())[:500]
+        self.suggestion = {"text": text, "by": "tutor" if event.get("by") == "tutor" else "agent"} if text else None
+
+    def _suggested(self):
+        """The suggestion, if there is one to show: the tutor's only while its tips are, and only while the input is empty or is
+        how the suggestion begins."""
+        s = self.suggestion
+        if not s or (s["by"] == "tutor" and not self.tutor_shown) or "\n" in self.input:
+            return None
+        if self.input and (not s["text"].startswith(self.input) or s["text"] == self.input):
+            return None
+        return s
 
     def _on_turn_start(self, event):
         self.busy, self.busy_since, self.label = True, time.monotonic(), event.get("label", "Thinking")
@@ -1296,6 +1334,9 @@ class App:
             self.cursor += 1
         elif key.name == "enter":
             self._submit()
+        elif key.name == "tab" and self._suggested():
+            self.input = self._suggested()["text"]
+            self.cursor, self.history_at = len(self.input), None
         elif key.name in ("up", "down"):
             self._recall(-1 if key.name == "up" else 1)
         elif key.name in ("escape", "ctrl-c"):
@@ -1318,6 +1359,19 @@ class App:
         text = self.input.strip()
         self.input, self.cursor, self.history_at, self.scroll = "", 0, None, 0
         if not text:
+            return
+        if text == "/tutor":
+            start = getattr(self.bridge, "tutor", None)
+            if self.tutorial:
+                self.tutor_shown = not self.tutor_shown
+                self.blocks.append(Block("note", "The tutor's tips are shown again." if self.tutor_shown
+                                         else "The tutor's tips are hidden; /tutor shows them again."))
+            elif start:  # tutorial mode from here on, whatever the agent: the server starts its tutor, and says so (_on_session)
+                self.tutor_shown = True
+                start()
+                self.blocks.append(Block("note", "Starting the tutor: it watches from here on. /tutor hides it."))
+            else:
+                self.blocks.append(Block("note", "There's no tutor in this session: open the page as /?tutorial for one."))
             return
         if text == "/help":
             self.blocks.append(Block("note", HELP))
@@ -1350,6 +1404,7 @@ class App:
             self.blocks, self.molecules, self.placed, self.highlights = [Block("banner")], [], {}, []
             self.bridge.write("".join(kitty.delete(n) for n in range(1, self.images + 1)))  # the pictures go with their placeholders
             return
+        self.suggestion = None  # a message sent: the suggestion was taken, or passed over (a command of the app's own keeps it)
         self.history.append(text)
         self.blocks.append(Block("user", text))
         self.chips = [c for c in self.chips if c.tag not in text]  # sent, so no longer waiting
@@ -1379,6 +1434,8 @@ class App:
                     style("  An agent, talking to you through this interface,", GREY),
                     style("  which runs as Python in your browser (Pyodide).", GREY), "",
                     style(f"  session: {self.session or 'connecting…'}", GREY)]
+            if self.tutorial:
+                rows[4:4] = ["", style("  Tutorial mode: a tutor watches and chimes in, ", GREY) + style(f"{TUTOR_MARK} tutor", TUTOR_INK)]
             border = style("╭" + "─" * (cols - 2) + "╮", ACCENT)
             lines = [border, *(style("│ ", ACCENT) + pad(row, inner) + style(" │", ACCENT) for row in rows),
                      style("╰" + "─" * (cols - 2) + "╯", ACCENT), "",
@@ -1397,6 +1454,8 @@ class App:
             return lines + [""], painted, 5
         if block.kind == "tool":
             return (*self._paint_shown(block, self._tool_lines(block, cols)), None)
+        if block.kind == "tutor":
+            return (*self._paint_shown(block, _tutor_lines(block.text, cols) if self.tutor_shown else []), None)
         return [], [], None
 
     def _paint_shown(self, block, lines):
@@ -1491,9 +1550,15 @@ class App:
         self._chip_regions = [(len(lines) + 1 + line, 2 + start, 2 + end, ctx, part) for line, start, end, ctx, part in hits]
         box += [style("│ ", GREY) + pad(chip, inner) + style(" │", GREY) for chip in chips]
         tags = [c.tag for c in self.chips if c.tag in self.input]
+        suggested = self._suggested()
         for i, line in enumerate(shown):
             prefix = "> " if i == 0 and len(shown) == len(text_lines) else "  "
             content = line if self.input else style("Message the agent", GREY, ITALIC)
+            if suggested and i == len(shown) - 1:  # faint, after what's typed: the rest of it, which Tab takes
+                rest = suggested["text"][len(self.input):]
+                content = (line if self.input else "") + style(rest, GREY)
+                if suggested["by"] == "tutor":
+                    content += style(f"  {TUTOR_MARK} tutor", TUTOR_INK)
             row = style("│ ", GREY) + pad(prefix + content, inner) + style(" │", GREY)
             for tag_text in tags:  # a context's tag stands out from the typing
                 for found, start, end in _find(shown, tag_text):
@@ -1511,6 +1576,8 @@ class App:
         elif self.handles:
             hint = ("  drag ● to change it · choose from its menu · esc lets it go" if self.handles.get("selection")
                     else "  drag ● to change it · enter or a click keeps it · esc undoes")
+        elif suggested and not self.scroll:
+            hint = "  tab takes the tutor's suggestion" if suggested["by"] == "tutor" else "  tab takes the suggestion"
         right = f"session {self.session[:8]}" if self.session else "connecting…"
         hint_line = style(pad(hint, cols - width(right) - 2) + right, GREY)
         return lines + box + [hint_line]
@@ -1941,6 +2008,21 @@ def _bubble(text, room, colours=AGENT, cursor=False):
     return ([style("╭" + "─" * (inner - 3) + " ", paper, ink) + style("– ×", paper, controls) + style(" ╮", paper, ink)]  # fold, hide
             + [row(i, line) for i, line in enumerate(lines)]
             + [style("╰" + "─" * (inner + 2) + "╯", paper, ink)])
+
+
+def _tutor_lines(text, cols):
+    """A tutor's tip, in a teal bubble of its own across the transcript, ✦ tutor on its top edge, and a blank line after it."""
+    room = max(min(cols - 8, TUTOR_TEXT_MAX), 20)
+    lines = wrap(text, room) or [""]
+    head = f"─ {TUTOR_MARK} tutor "
+    inner = max(max(width(line) for line in lines), width(head))
+
+    def edge(left, middle, right):
+        return "  " + style(left + middle + right, TUTOR_BG, TUTOR_INK)
+    return ([edge("╭", head + "─" * (inner + 2 - width(head)), "╮")]
+            + ["  " + style("│ ", TUTOR_BG, TUTOR_INK) + style(pad(line, inner), TUTOR_BG, TUTOR_TEXT) + style(" │", TUTOR_BG, TUTOR_INK)
+               for line in lines]
+            + [edge("╰", "─" * (inner + 2), "╯"), ""])
 
 
 def _clean_note(text):

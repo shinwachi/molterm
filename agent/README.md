@@ -76,9 +76,10 @@ scrolls, crops and redraws with the transcript although the TUI repaints the who
 | `server/app.py` | Flask: the page, the TUI's files for Pyodide, sessions and their streams, and the way through to molterm's editor |
 | `server/sessions.py` | a session: event log, inbox, tool results, interrupts |
 | `server/agent.py` | the emulated agent and its molterm tools |
+| `server/tutor.py` | the demo's tutor, for tutorial mode: what it says, and when |
 | `server/static/bridge.js` | what any host of the TUI needs: the bridge, Shift+Enter, and the choices that travel (copying, focus), as options; see [If you are embedding this](#if-you-are-embedding-this) |
 | `server/static/page.js` | molterm's own page: connects restty, Pyodide, the TUI and the server, with this page's choices |
-| `sdk/tuiagent/` | `TuiAgent`, the base for agents, and `RemoteSession`, a session reached over HTTP |
+| `sdk/tuiagent/` | `TuiAgent`, the base for agents, `Tutor`, the base for tutors, and `RemoteSession`, a session reached over HTTP |
 | `examples/` | `hello_agent.py` (no dependencies) and `claude_agent.py` (Claude chooses the TUI tools) |
 
 ### Molecules, edited where they are shown
@@ -211,6 +212,42 @@ what they pointed at and marks it as seen.
 To plug in a real model, replace `EmulatedAgent` with one that sends the transcript and `TOOLS` to the model, and turns its tool calls
 into the same `use_tui` and `use_server_tool` calls: the events, the page and the TUI stay as they are.
 
+### Suggestions, for Tab
+
+The agent can suggest what the user might type next (`self.suggest(text)`, a `suggest` event; a remote agent sends it like any
+other). The TUI shows it faintly in the empty input, or finishes what's typed if it begins the same way, and Tab takes it; it goes
+once a message is sent, and an empty suggestion takes it back. The demo agent suggests "show me a drug" after its greeting, and
+"show me another drug" after a drawing.
+
+### Tutorial mode
+
+![Tutorial mode: the tutor's tips in teal bubbles between the agent's steps, saying what each tool did, and its suggestion, /edit 1, in the input](../docs/images/molterm-agent-tutor.png)
+
+http://molterm-agent-dev.localhost/?tutorial (or Tutorial, in the page's top bar) starts a session with a tutor as well as the
+agent: a second thread on the server (`server/tutor.py`, on `Tutor` in `sdk/tuiagent/tutor.py`) that watches the session and chimes
+in. It reads the session's event log, the events the page gets, with the user's messages (`user_message`) and their answers to the
+TUI's tools (`tool_answer`) added for it, which the page ignores. Its tips are `tutor` events, shown as bubbles of their own across
+the transcript, teal, marked `✦ tutor`, and it can suggest as the agent does, its suggestions marked `✦ tutor` in the input. The
+agent sees none of it, so any agent can be tutored, a remote one too (`POST /api/v1/agents/sessions` with `{"tutor": true}`).
+A tip waits while the agent's reply is still streaming (`Session.interject`), so it lands between replies, never inside one.
+`/tutor` hides the tips and the tutor's suggestions, or shows them again.
+
+Tutorial mode doesn't need the agent's program, so it can be started from outside it, on any session, whatever its agent:
+- in the page: `/tutor` in a session without a tutor starts one (through the bridge's optional `tutor()`, `POST
+  /api/v1/sessions/<id>/tutor`), and `/?session=<id>&tutorial` joins a session another program made with its tutor on;
+- from whatever launches an agent elsewhere: `RemoteSession.open(server, tutor=True)`, `run(..., tutor=True)`, or `--tutor` on the
+  examples (`python examples/hello_agent.py <server> --tutor`), the agent's own code unchanged;
+- over HTTP: `{"tutor": true}` when making the session (`/api/v1/sessions`, `/api/v1/agents/sessions`), or the route above later.
+
+A tutor started later watches from then on: it opens with a welcome, and counts what was shown before (for `/edit N`) without
+explaining the past.
+
+The demo's tutor is a script, as the demo agent is: the first time something happens it says what it is, the agent's question
+(tui.ask) and how to answer it, a server-side tool, a molecule shown and what clicking it does, the agent's marks and their colours,
+pointing at text, a skipped question, what the user's highlight or edit sent; and once a molecule has been shown, it suggests
+`/edit N`. Another tutor is named by `TUTOR` ("module:Class", made with the session), and a model could be one, with the events as
+its context.
+
 ## If you are embedding this
 
 The TUI is `molterm_tui.App`, plain Python with no dependencies, and it can be hosted by any page that runs Pyodide and a terminal
@@ -301,8 +338,24 @@ highlight, so imatinib's piperazine showed no Ns. Highlighted atoms now keep the
 its own colour, apart from the yellow a person highlights with. molterm's tests check that a highlighted piperazine's Ns are drawn
 in nitrogen blue.
 
+Then (2026-11-10, later): suggestions and tutorial mode, 83 tests (a suggestion shown faintly, finished from what's typed, taken by
+Tab and gone once sent; the tutor's tips as bubbles, hidden and shown with /tutor, its suggestion with them; a tip waiting while a
+reply streams; user messages and tool answers in the log only with a tutor; the demo's tutor saying each of its tips over a whole
+session and suggesting `/edit 1`, none inside a reply; a remote agent's suggestion). In headless Chromium against the dev agent,
+/?tutorial: the banner says so, the tutor's welcome came after the greeting, Tab took "show me a drug", the tips followed the
+question, the drawing, the marks and the skipped question, and the input offered `/edit 1  ✦ tutor`; no page errors.
+Then (later still): tutorial mode started from outside the agent's program, 86 tests (a remote agent's session opened with
+`tutor=True`; a tutor given to a running remote session over HTTP, once, and refused by a server without one; a tutor started later
+welcoming, counting the molecule shown before for `/edit 1`, not explaining the past, and explaining what came after; `/tutor`
+starting one through the bridge, keeping the agent's suggestion). In headless Chromium: `examples/hello_agent.py` run as a
+separate program, its page joined with `&tutorial`, got the tutor's welcome and its tip on the agent's question; `/tutor` on a plain
+session started one; no page errors.
+
 ## Open issues
 
+- The tutor runs only in the agent server's process, beside any agent (one elsewhere included): a tutor of your own runs there
+  (`TUTOR`), not over HTTP as an agent can. Its tips can come a moment after
+  what they're about, when the agent's reply is still streaming.
 - The demo agent is a script, not a model. `examples/claude_agent.py` is tested only with a stand-in for the API client: it has not
   run against the API here (there is no key in this environment).
 - Sessions are in one process's memory: a restart ends them, and the service can't run more than one worker.

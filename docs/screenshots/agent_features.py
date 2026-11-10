@@ -8,6 +8,7 @@
     docs/images/molterm-agent-inline.png    the inline editor, with its notes in bubbles beside the drawing
     docs/images/molterm-agent-bubbles.png   the agent's marks: a highlighted part of the molecule, painted in its SMILES too, notes in
                                             bubbles, and a context
+    docs/images/molterm-agent-tutor.png     tutorial mode: the tutor's tips in bubbles of their own, and its suggestion in the input
 
 Each run starts a session, asks for imatinib and declines its properties, then records. The pointer positions are those of a
 1000 by 900 window, as agent_gif.py uses.
@@ -23,10 +24,10 @@ from agent_gif import AGENT, VIEW, record, save  # noqa: E402
 IMAGES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images")
 
 
-def session(p):
+def session(p, path=""):
     browser = p.chromium.launch(args=["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"])
     page = browser.new_page(viewport=VIEW, device_scale_factor=1, color_scheme="dark")
-    page.goto(AGENT)
+    page.goto(AGENT + path)
     page.wait_for_function("document.getElementById('state').textContent.startsWith('session')", timeout=120_000, polling=100)
     page.locator("#terminal").click()
     page.wait_for_timeout(6000)
@@ -143,7 +144,28 @@ def point(p):
     browser.close()
 
 
+def tutor(p):
+    """Tutorial mode: the same steps, with the tutor's tips between them; the agent's suggestion taken with Tab."""
+    browser = p.chromium.launch(args=["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"])
+    page = browser.new_page(viewport=VIEW, device_scale_factor=1, color_scheme="dark")
+    page.goto(AGENT + "/?tutorial")
+    page.wait_for_function("document.getElementById('state').textContent.startsWith('session')", timeout=120_000, polling=100)
+    page.locator("#terminal").click()
+    page.wait_for_timeout(9000)
+    page.keyboard.press("Tab")  # the agent's suggestion: show me a drug
+    page.wait_for_timeout(500)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(4000)
+    for key in ("ArrowDown", "ArrowDown", "Enter"):  # imatinib
+        page.keyboard.press(key)
+    page.wait_for_timeout(16000)
+    page.keyboard.press("Escape")  # no properties: the tutor says what that did, and suggests /edit 1
+    page.wait_for_timeout(6000)
+    shot(page, "molterm-agent-tutor.png")
+    browser.close()
+
+
 if __name__ == "__main__":
     with sync_playwright() as p:
-        for name in sys.argv[1:] or ("annotate", "point"):
-            {"annotate": annotate, "point": point}[name](p)
+        for name in sys.argv[1:] or ("annotate", "point", "tutor"):
+            {"annotate": annotate, "point": point, "tutor": tutor}[name](p)

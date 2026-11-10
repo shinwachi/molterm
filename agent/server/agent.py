@@ -133,6 +133,7 @@ class EmulatedAgent(TuiAgent):
     def greet(self):
         self.say("Hello! I'm an emulated agent running on the server, in a session of my own. I can draw molecules with molterm "
                  "and show them to you here, and ask you things through this interface. Type a SMILES, or ask me to show you a drug.")
+        self.suggest("show me a drug")
 
     def respond(self, text, cols):
         words = text.lower()
@@ -187,8 +188,10 @@ class EmulatedAgent(TuiAgent):
                                           "options": ["Yes", "No"]}, "Waiting for you")
         if answer.get("index") != 0:
             self.say("Fine. Type another SMILES, or ask me for a drug.")
+            self.suggest("show me another drug")
             return
         self.properties(smiles, name)
+        self.suggest("show me another drug")
 
     def review(self, name, smiles, cols):
         """The user edited a molecule shown earlier: say what they marked, and compute their version's properties."""

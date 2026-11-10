@@ -70,7 +70,7 @@ def test_the_agent_routes_want_the_sessions_token(live, monkeypatch):
     assert client.get(path, headers=auth).json == {"interrupted": False, "closed": False}
     assert client.post(f"{path}/events", json={"type": "session"}, headers=auth).status_code == 400  # only the agent's own events
     assert client.post(f"{path}/events", json={"type": "text", "delta": "hi"}, headers=auth).status_code == 200
-    assert client.get(f"/api/v1/sessions/{made['id']}").json == {"id": made["id"], "agent": "remote"}
+    assert client.get(f"/api/v1/sessions/{made['id']}").json == {"id": made["id"], "agent": "remote", "tutor": False}
     own = client.post("/api/v1/sessions").json["id"]  # a session whose agent runs on the server has no token to guess
     assert client.get(f"/api/v1/sessions/{own}/agent", headers={"Authorization": "Bearer "}).status_code == 403
     assert client.get(f"/api/v1/sessions/{own}").json["agent"] == "server"
@@ -163,3 +163,23 @@ def test_claude_closes_tool_calls_an_interrupt_left_open():
     opened = client.sent[1]["messages"][-1]["content"]
     assert opened[0] == {"type": "tool_result", "tool_use_id": "c1", "content": "The user interrupted this.", "is_error": True}
     assert opened[1] == {"type": "text", "text": "Never mind"}
+
+
+def test_an_agent_elsewhere_can_open_its_session_in_tutorial_mode_or_be_given_a_tutor_later(live, monkeypatch):
+    started = []
+    monkeypatch.setattr(server.sessions, "tutor_factory", lambda session: lambda: started.append(session.id))
+    tutored = RemoteSession.open(live, tutor=True)  # the agent needs nothing for it: the server's tutor watches beside it
+    session = server.sessions.get(tutored.id)
+    assert session.tutor and session.events[0]["tutor"] is True
+    plain = RemoteSession.open(live)
+    assert not server.sessions.get(plain.id).tutor
+    client = server.app.test_client()
+    assert client.post(f"/api/v1/sessions/{plain.id}/tutor").json == {"tutor": True}  # the user asks later, from the page
+    assert server.sessions.get(plain.id).tutor
+    deadline = time.time() + 2
+    while len(started) < 2 and time.time() < deadline:
+        time.sleep(0.01)
+    assert started == [tutored.id, plain.id]
+    monkeypatch.setattr(server.sessions, "tutor_factory", None)
+    other = RemoteSession.open(live)
+    assert client.post(f"/api/v1/sessions/{other.id}/tutor").status_code == 404  # a server with no tutor says so

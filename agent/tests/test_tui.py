@@ -1043,3 +1043,65 @@ def test_while_editing_inline_the_smiles_under_the_drawing_is_the_editors_and_it
     assert "CCO" not in screen(app)  # hidden under the picture too, as left
     app.key("/edit 1\r")
     assert app.bridge.edits[-1]["show_smiles"] == "0"
+
+
+def test_a_suggestion_shows_faintly_and_tab_takes_it(app):
+    app.event({"type": "session", "id": "abc123"})
+    app.event({"type": "suggest", "text": "show me a drug"})
+    assert "> show me a drug" in screen(app) and "tab takes the suggestion" in screen(app)
+    assert app.input == ""  # only shown, until Tab
+    app.key("show me")
+    assert "> show me a drug" in screen(app)  # typed the way it begins: the rest, faintly
+    app.key("\t")
+    assert app.input == "show me a drug" and app.cursor == len("show me a drug")
+    app.key("\r")
+    assert app.bridge.messages[-1][0] == "show me a drug" and app.suggestion is None  # sent, so gone
+    app.event({"type": "suggest", "text": "draw CCO"})
+    app.key("CCN")
+    assert "draw CCO" not in screen(app)  # typed otherwise: not shown, and Tab does nothing
+    app.key("\t")
+    assert app.input == "CCN"
+    app.event({"type": "suggest", "text": ""})  # taken back
+    assert app.suggestion is None
+
+
+def test_in_tutorial_mode_the_tutors_tips_are_bubbles_of_their_own_and_tutor_hides_them(app):
+    app.event({"type": "session", "id": "abc123", "tutor": True})
+    assert "Tutorial mode: a tutor watches and chimes in, ✦ tutor" in screen(app)
+    app.event({"type": "text", "delta": "Hello"})
+    app.event({"type": "text_end"})
+    app.event({"type": "tutor", "text": "The faint text in the input is a suggestion: Tab takes it.", "by": "tutor"})
+    app.event({"type": "suggest", "text": "/edit 1", "by": "tutor"})
+    lines = screen(app).split("\n")
+    top = next(i for i, line in enumerate(lines) if "╭─ ✦ tutor" in line)
+    assert "The faint text in the input is a suggestion" in lines[top + 1] and lines[top + 1].lstrip().startswith("│")
+    assert lines[top + 2].lstrip().startswith("╰")
+    assert any("> /edit 1  ✦ tutor" in line for line in lines) and "tab takes the tutor's suggestion" in screen(app)
+    app.event({"type": "text", "delta": "Next"})  # the agent's next words are a reply of their own, after the tip
+    assert screen(app).index("✦ tutor ") < screen(app).index("● Next")
+    app.key("/tutor\r")
+    assert "Tab takes it" not in screen(app) and "/edit 1" not in screen(app) and "tips are hidden" in screen(app)
+    app.key("\t")
+    assert app.input == ""  # its suggestion is hidden with it
+    app.key("/tutor\r")
+    assert "Tab takes it" in screen(app)
+
+
+def test_tutor_without_a_tutor_says_how_to_have_one(app):
+    app.event({"type": "session", "id": "abc123"})
+    app.key("/tutor\r")
+    assert "/?tutorial" in screen(app) and not app.bridge.messages
+
+
+def test_tutor_starts_a_tutor_through_the_bridge_when_there_is_none(app):
+    started = []
+    app.bridge.tutor = lambda: started.append(True)
+    app.event({"type": "session", "id": "abc123"})
+    app.event({"type": "suggest", "text": "show me a drug"})
+    app.key("/tutor\r")
+    assert started == [True] and "Starting the tutor" in screen(app) and not app.bridge.messages
+    assert app.suggestion["text"] == "show me a drug"  # a command of the app's own leaves the agent's suggestion
+    app.event({"type": "session", "id": "abc123", "tutor": True})  # the server says it has one now
+    assert app.tutorial and "Tutorial mode" in screen(app)
+    app.key("/tutor\r")
+    assert started == [True] and "tips are hidden" in screen(app)  # now /tutor hides it, as in any tutorial

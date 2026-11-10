@@ -232,3 +232,97 @@ def test_the_editor_asks_molterm_for_a_compact_box_in_the_pages_colours(monkeypa
     agent_module.Molterm("http://molterm").edit({"state": "S", "events": "1b", "cols": 100, "evil": "x"})
     assert posted["url"] == "http://molterm/api/v1/edit"
     assert posted["data"] == {"state": "S", "events": "1b", "cols": "100", **agent_module.TERMINAL, "compact": "1"}
+
+
+def test_a_tutors_tip_waits_for_the_agents_reply_to_finish():
+    session = Session("s1", tutor=True)
+    session.emit("text", delta="Hello ")
+    done = threading.Event()
+    threading.Thread(target=lambda: (session.interject("tutor", text="a tip", by="tutor"), done.set()), daemon=True).start()
+    time.sleep(0.1)
+    assert not done.is_set() and [e["type"] for e in session.events] == ["text"]  # not inside the reply
+    session.emit("text", delta="there")
+    session.emit("text_end")
+    assert done.wait(2)
+    assert [e["type"] for e in session.events] == ["text", "text", "text_end", "tutor"]
+
+
+def test_the_tutor_sees_the_users_messages_and_answers_only_in_tutorial_mode():
+    plain, tutored = Session("a"), Session("b", tutor=True)
+    for session in (plain, tutored):
+        session.post({"text": "hi", "cols": 72})
+        session.put_result("tool_1", {"index": 0})
+    assert [e["type"] for e in plain.events] == []
+    assert tutored.events == [{"seq": 0, "type": "user_message", "text": "hi"},
+                              {"seq": 1, "type": "tool_answer", "id": "tool_1", "result": {"index": 0}}]
+
+
+def test_a_tutorial_session_has_a_tutor_who_explains_and_suggests(monkeypatch):
+    import tutor as tutor_module
+    sessions = Sessions(lambda session: agent_module.EmulatedAgent(session, FakeMolterm(), pace=0),
+                        lambda session: tutor_module.EmulatedTutor(session, pace=0))
+    monkeypatch.setattr(server, "sessions", sessions)
+    client = server.app.test_client()
+    assert client.post("/api/v1/sessions").status_code == 201
+    plain = list(sessions.sessions.values())[-1]
+    assert plain.tutor is False and "tutor" not in plain.events[0]
+    created = client.post("/api/v1/sessions", json={"tutor": True})
+    session = sessions.sessions[created.get_json()["id"]]
+    assert session.events[0] == {"seq": 0, "type": "session", "id": session.id, "tutor": True}
+    assert client.get(f"/api/v1/sessions/{session.id}").get_json()["tutor"] is True
+    events = wait_for(session, lambda e: e["type"] == "tutor")
+    assert {"type": "suggest", "text": "show me a drug"}.items() <= next(e for e in events if e["type"] == "suggest").items()
+    assert "Tutorial mode" in next(e for e in events if e["type"] == "tutor")["text"]
+
+    def play():  # the page: Aspirin, shown as mol 1, marked, and no properties
+        answered, deadline = set(), time.time() + 5
+        while time.time() < deadline and not session.closed:
+            for event in list(session.events):
+                if event["type"] == "tool_use" and event["name"].startswith("tui.") and event["id"] not in answered:
+                    answered.add(event["id"])
+                    name, input_ = event["name"], event["input"]
+                    result = ({"shown": True, "mol": 1} if name == "tui.show" else {"marked": [1]} if name == "tui.mark"
+                              else {"choice": "Aspirin", "index": 0} if "drug" in input_["question"] else {"choice": None, "skipped": True})
+                    client.post(f"/api/v1/sessions/{session.id}/tool_results", json={"id": event["id"], "result": result})
+            time.sleep(0.01)
+
+    threading.Thread(target=play, daemon=True).start()
+    client.post(f"/api/v1/sessions/{session.id}/messages", json={"text": "show me a drug"})
+    events = wait_for(session, lambda e: e["type"] == "suggest" and e.get("text") == "/edit 1")
+    tips = [e["text"] for e in events if e["type"] == "tutor"]
+    for words in ("tui.ask", "server-side tool", "mol 1", "in pink", "point at text", "Esc skipped", "/edit 1 opens"):
+        assert any(words in tip for tip in tips), words
+    assert all(e.get("by") == "tutor" for e in events if e["type"] == "tutor")
+    texts = [i for i, e in enumerate(events) if e["type"] in ("text", "text_end")]
+    for i, e in enumerate(events):  # never inside one of the agent's replies
+        if e["type"] == "tutor":
+            before = [events[j]["type"] for j in texts if j < i]
+            assert not before or before[-1] == "text_end"
+
+
+def test_a_remote_agent_can_suggest(client):
+    created = client.post("/api/v1/agents/sessions").get_json()
+    sent = client.post(f"/api/v1/sessions/{created['id']}/agent/events", json={"type": "suggest", "text": "show me a drug"},
+                       headers={"Authorization": f"Bearer {created['token']}"})
+    assert sent.status_code == 200
+
+
+def test_a_tutor_started_later_watches_from_then_on():
+    import tutor as tutor_module
+    sessions = Sessions(lambda session: lambda: None, lambda session: tutor_module.EmulatedTutor(session, pace=0))
+    session = sessions.create()
+    session.emit("turn_start")
+    session.emit("tool_use", id="tool_1", name="tui.ask", input={"question": "Which?", "options": ["A"]})
+    session.emit("tool_use", id="tool_2", name="tui.show", input={"title": "Aspirin", "smiles": "CC(=O)Oc1ccccc1C(=O)O"})
+    session.emit("turn_end")
+    begun = len(session.events)
+    assert sessions.start_tutor(session) and sessions.start_tutor(session)  # once: asked again, it has one
+    events = wait_for(session, lambda e: e["type"] == "suggest")
+    assert events[begun] == {"seq": begun, "type": "session", "id": session.id, "tutor": True}
+    tips = [e["text"] for e in events if e["type"] == "tutor"]
+    assert tips[0].startswith("Tutorial mode, from here on") and "/edit 1" in tips[1]  # what was shown before counts
+    assert not any("tui.ask" in tip for tip in tips)  # the past isn't explained
+    assert [e for e in events if e["type"] == "suggest"][0]["text"] == "/edit 1"
+    session.emit("tool_use", id="tool_3", name="tui.ask", input={"question": "Which?", "options": ["A"]})
+    events = wait_for(session, lambda e: e["type"] == "tutor" and "tui.ask" in e["text"])  # from now on, it is
+    assert sum(1 for e in events if e["type"] == "session") == 2

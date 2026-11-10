@@ -70,6 +70,8 @@ the transcript, yours or the user's. `clear=True` removes what you marked first.
 and when they click it into a message, the message carries `⟦highlighted: "the words"⟧` (`molterm_tui.app.QUOTED`). Their notes and highlights on a molecule come
 with its edit, in the CXSMILES.
 
+`self.suggest("show me a drug")` suggests what the user might type next: it shows faintly in their empty input, and Tab takes it.
+
 When the user presses Esc, the turn ends: whatever the agent was waiting on returns, and the agent's next `say`, `show` or `ask`
 raises `Interrupted`, which `TuiAgent.turn` catches. Clean up in a `finally` if you hold something open. An error you don't catch is
 shown to the user, and the session carries on.
@@ -172,12 +174,39 @@ AGENT=examples.claude_agent:ClaudeAgent make dev
 From here, add your own tools alongside the TUI's: give the model a `draw_molecule` tool that calls molterm, as `server/agent.py`
 does, and show its picture with `self.show(..., image=...)`.
 
+## A tutor, for tutorial mode
+
+A session opened as `/?tutorial` (or made with `{"tutor": true}`) has a tutor beside its agent, whatever the agent is: it watches
+and chimes in, and the agent doesn't see it. Subclass `Tutor` (`sdk/tuiagent/tutor.py`) and write `observe(event)`; it gets every
+event the page does, and what the user said (`user_message`) and how they answered a TUI tool (`tool_answer`):
+
+```python
+from tuiagent import Tutor
+
+
+class MyTutor(Tutor):
+    def observe(self, event):
+        if event["type"] == "tool_use" and event["name"] == "tui.ask" and self.once("ask"):
+            self.tip("Pick one with the arrows and Enter, or Esc to skip.")  # a teal bubble, ✦ tutor
+        if event["type"] == "turn_end" and self.once("first turn"):
+            self.suggest("show me a drug")  # in the input, for Tab
+```
+
+Your agent needs nothing for tutorial mode, so it can be started from outside it: `run(MyAgent, server, tutor=True)` (or
+`RemoteSession.open(server, tutor=True)`, or `--tutor` on the examples) opens the session with the server's tutor, and the user
+can start one later on any session, with `/tutor` or by opening its page with `&tutorial` (`POST /api/v1/sessions/<id>/tutor`
+underneath). A tutor started later gets `joined(history)` first and watches from then on.
+
+Run a tutor of your own on the server with `TUTOR=mytutor:MyTutor` (as `AGENT`). A tip waits for the agent's reply to finish streaming, so it never
+lands inside one. The demo's tutor is `server/tutor.py`.
+
 ## Where the code is
 
 | path | |
 |---|---|
 | `sdk/tuiagent/base.py` | `TuiAgent`: the turn loop, `say`, `show`, `ask`, `mark`, `use_server_tool`, interrupts |
 | `sdk/tuiagent/remote.py` | `RemoteSession` and `run`: a session over HTTP |
+| `sdk/tuiagent/tutor.py` | `Tutor`: watching a session, `tip`, `suggest`, `once` |
 | `examples/hello_agent.py` | the example agent, without dependencies |
 | `examples/claude_agent.py` | the same shape, with Claude choosing the tools |
 | `server/sessions.py`, `server/app.py` | sessions, and the routes above |

@@ -118,15 +118,24 @@ function listen() {
 try {
     show("loading Python and the terminal…");
     const [size, pyodide] = await Promise.all([startTerminal(), startPython()]);
-    // ?session=<id> joins a session an agent of its own made (see TUTORIAL.md); otherwise the server starts one with its agent
-    const joining = new URLSearchParams(location.search).get("session");
+    // ?session=<id> joins a session an agent of its own made (see TUTORIAL.md); otherwise the server starts one with its agent,
+    // and with ?tutorial, a tutor that watches it and chimes in
+    const params = new URLSearchParams(location.search);
+    const joining = params.get("session"), tutorial = params.has("tutorial");
+    const mode = document.getElementById("mode");
     show(joining ? "joining the session…" : "starting a session…");
     if (joining) {
         const response = await fetch(`/api/v1/sessions/${encodeURIComponent(joining)}`);
-        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error?.message || "no such session");
+        const info = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(info.error?.message || "no such session");
         session = joining;
+        // a session another program made, its agent its own: &tutorial gives it the server's tutor, which the agent needn't know of
+        if (tutorial && !info.tutor) await api(`/api/v1/sessions/${encodeURIComponent(session)}/tutor`);
+        if (mode && (tutorial || info.tutor)) mode.hidden = true;  // there's no leaving it; /tutor hides it
+        else if (mode) mode.href = `/?session=${encodeURIComponent(session)}&tutorial`;
     } else {
-        session = (await api("/api/v1/sessions")).id;
+        session = (await api("/api/v1/sessions", tutorial ? { tutor: true } : undefined)).id;
+        if (mode && tutorial) { mode.textContent = "Leave the tutorial"; mode.href = "/"; }
     }
     const { App } = pyodide.pyimport("molterm_tui");
     const bridge = createBridge({

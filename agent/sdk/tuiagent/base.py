@@ -17,6 +17,7 @@ Subclass `TuiAgent` and write `greet()` and `respond(text, cols)`. Inside them:
     self.ask(question, options)            ask the user to pick one; returns {"choice", "index"}, or {"choice": None, "skipped": True}
     self.mark(mol=, text=, ...)            point something out: highlight atoms of a shown molecule, or text in the transcript, with a
                                            note in a speech bubble if you like
+    self.suggest(text)                     suggest what the user might type next: shown faintly in the empty input, Tab takes it
     self.use_server_tool(name, input, run) show a tool of your own running, and its result
     self.use_tui(name, input)              call a TUI tool by name, for tools beyond show and ask
 """
@@ -100,6 +101,11 @@ class TuiAgent:
             self.session.emit("text", delta=word)
             self.pause(0.03 if stream else 0)
         self.session.emit("text_end")
+
+    def suggest(self, text):
+        """Suggest the user's next message: the TUI shows it faintly in the input while it's empty (or begins it), and Tab takes it.
+        It stays until the user sends a message or another suggestion comes; an empty `text` takes it back."""
+        self.session.emit("suggest", text=str(text).strip()[:500])
 
     def use_server_tool(self, name, input_, run, label="Working", summary=str, errors=(Exception,)):
         """Show the user a tool of the agent's own running: `run()` does the work, and `summary(output)` is the line shown under it.

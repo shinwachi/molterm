@@ -1,23 +1,28 @@
 """The agent server: a page with the TUI (Python in Pyodide, shown in restty), and sessions, each with its own agent.
 
-  POST /api/v1/sessions                       a new session, whose agent starts at once     -> {"id"}
+  POST /api/v1/sessions                       a new session, whose agent starts at once     -> {"id"}; with {"tutor": true}, in
+                                               tutorial mode: a tutor watches it and chimes in (tutor.py)
   GET  /api/v1/sessions/<id>/events?after=N   the agent's events, as Server-Sent Events, from the N-th on
   POST /api/v1/sessions/<id>/messages         {"text", "cols"}: what the user typed
   POST /api/v1/sessions/<id>/tool_results     {"id", "result"}: the TUI's answer to one of its tools
   POST /api/v1/sessions/<id>/interrupt        stop the agent's turn
-  GET  /api/v1/sessions/<id>                  whether the session is open, and where its agent runs
+  GET  /api/v1/sessions/<id>                  whether the session is open, where its agent runs, and whether it has a tutor
+  POST /api/v1/sessions/<id>/tutor            tutorial mode for a session going already, whatever its agent: its tutor
+                                               starts from now on                             -> {"tutor": true}
   POST /api/v1/sessions/<id>/edit             one step of molterm's editor, for a molecule edited where it's shown (see the TUI)
   POST /api/v1/sessions/<id>/picture          {"smiles", "cols", "mark", "clear"}: a molecule's picture with its annotations, the
                                                notes left for the page's bubbles  -> molterm's /api/v1/callouts answer
 
 For an agent that runs elsewhere (sdk/tuiagent/remote.py; see TUTORIAL.md), with the session's token as "Authorization: Bearer":
-  POST /api/v1/agents/sessions                       a session with no agent of the server's   -> {"id", "token", "url"}
+  POST /api/v1/agents/sessions                       a session with no agent of the server's   -> {"id", "token", "url"}; with
+                                                     {"tutor": true}, the server's tutor watches it
   POST /api/v1/sessions/<id>/agent/events            {"type", ...}: an event for the transcript
   GET  /api/v1/sessions/<id>/agent/messages?timeout  the user's next message, waiting up to `timeout` s -> {"message", "interrupted", "closed"}
   GET  /api/v1/sessions/<id>/agent/tool_results/<tool id>?timeout   a TUI tool's answer             -> {"result", "interrupted", "closed"}
   GET  /api/v1/sessions/<id>/agent                   -> {"interrupted", "closed"}
 
-The agent the server runs itself is EmulatedAgent, or the class named by AGENT ("module:Class", made with the session alone).
+The agent the server runs itself is EmulatedAgent, or the class named by AGENT ("module:Class", made with the session alone); the
+tutor, EmulatedTutor, or the class named by TUTOR, the same way.
 """
 import hmac
 import importlib
@@ -31,6 +36,7 @@ from flask import Flask, Response, jsonify, render_template, request, send_from_
 
 from agent import TOOLS, EmulatedAgent, Molterm
 from sessions import SessionError, Sessions
+from tutor import EmulatedTutor
 
 ROOT = Path(__file__).resolve().parent.parent
 TUI_DIR = ROOT / "tui"
@@ -42,7 +48,8 @@ MAX_TEXT = 10_000
 app = Flask(__name__)
 molterm = Molterm(MOLTERM_URL)
 AGENT = os.environ.get("AGENT", "")
-AGENT_EVENTS = {"turn_start", "status", "text", "text_end", "tool_use", "tool_result", "error", "turn_end"}
+TUTOR = os.environ.get("TUTOR", "")
+AGENT_EVENTS = {"turn_start", "status", "text", "text_end", "tool_use", "tool_result", "error", "turn_end", "suggest"}
 MAX_EVENT = 4 * 1024 * 1024  # a picture's PNG travels in its tui.show event
 MAX_POLL = 25
 
@@ -57,12 +64,28 @@ def agent_factory():
     return lambda session: agent_class(session)
 
 
-sessions = Sessions(agent_factory())
+def tutor_factory():
+    """What makes a session's tutor, in tutorial mode: EmulatedTutor, or the class TUTOR names."""
+    pace = float(os.environ.get("AGENT_PACE", "1"))
+    if not TUTOR:
+        return lambda session: EmulatedTutor(session, pace=pace)
+    module, _, name = TUTOR.partition(":")
+    tutor_class = getattr(importlib.import_module(module), name)
+    return lambda session: tutor_class(session)
+
+
+sessions = Sessions(agent_factory(), tutor_factory())
 
 
 @app.errorhandler(SessionError)
 def session_error(error):
     return jsonify(error={"code": error.code, "message": error.message}), error.status
+
+
+def wants_tutor():
+    """Whether a new session is asked for in tutorial mode: {"tutor": true}, the body being optional."""
+    data = request.get_json(silent=True)
+    return isinstance(data, dict) and data.get("tutor") is True
 
 
 def body():
@@ -111,14 +134,21 @@ def tools():
 
 @app.route("/api/v1/sessions", methods=["POST"])
 def create_session():
-    session = sessions.create()
+    session = sessions.create(tutor=wants_tutor())
     return jsonify(id=session.id), 201
 
 
 @app.route("/api/v1/sessions/<session_id>")
 def session_info(session_id):
     session = sessions.get(session_id)
-    return jsonify(id=session.id, agent="remote" if session.token else "server")
+    return jsonify(id=session.id, agent="remote" if session.token else "server", tutor=session.tutor)
+
+
+@app.route("/api/v1/sessions/<session_id>/tutor", methods=["POST"])
+def start_tutor(session_id):
+    if not sessions.start_tutor(sessions.get(session_id)):
+        raise SessionError("no_tutor", "This server has no tutor to give.", 404)
+    return jsonify(tutor=True)
 
 
 @app.route("/api/v1/sessions/<session_id>/events")
@@ -230,7 +260,7 @@ def state(session, **data):
 
 @app.route("/api/v1/agents/sessions", methods=["POST"])
 def create_agent_session():
-    session = sessions.create(external=True)
+    session = sessions.create(external=True, tutor=wants_tutor())
     return jsonify(id=session.id, token=session.token, url=f"{request.host_url.rstrip('/')}/?session={session.id}"), 201
 
 

@@ -32,6 +32,8 @@ TUI renderer for chemical structures using RDKit and advanced text graphics
 
 ![Pointing things out: a bubble dragged aside, text dragged across, highlighted from its menu and clicked into a message, and the agent marking it as seen](docs/images/molterm-agent-point.gif)
 
+![Tutorial mode: the tutor's tips in teal bubbles between the agent's steps, and its suggestion in the input for Tab](docs/images/molterm-agent-tutor.png)
+
 The shots come from the dev services' own demos: `make screenshots` takes them again, in headless Chromium, and `make agent-gif` records the
 agent's GIFs and shots.
 
@@ -77,7 +79,9 @@ under a floating strip of tools (or in a box, if you prefer) and resizable, the 
 user highlights, waits above the input until they click it into a message. Bubbles can be dragged, folded, hidden, and right-clicked to edit
 their note or put it into a message. Any text in the transcript can be selected by dragging, across lines and replies too (a double click, a word; double-click and
 drag, whole words), and let go, it has handles to change it and a menu to copy it, note it, or highlight it, which also puts it above the input; a right click opens a highlight's menu, for a note, handles to change it, or to remove it. The demo agent is an emulation that draws molecules with this server; your own agent, run by the
-server or anywhere else over HTTP, and with a model behind it if you like, is in [its tutorial](agent/TUTORIAL.md).
+server or anywhere else over HTTP, and with a model behind it if you like, is in [its tutorial](agent/TUTORIAL.md). The agent can
+suggest what to type next, faint in the input, which Tab takes. In tutorial mode (`/?tutorial`) a tutor watches the session beside
+the agent and chimes in, its tips in teal bubbles marked ✦ tutor and its own suggestions in the input; `/tutor` hides it.
 
 Add an environment by creating `env/<name>.env` (and optionally `docker-compose.<name>.yml` for overrides).
 
