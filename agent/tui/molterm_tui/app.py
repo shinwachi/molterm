@@ -367,9 +367,17 @@ class App:
         s = self.suggestion
         if not s or (s["by"] == "tutor" and not self.tutor_shown) or "\n" in self.input:
             return None
-        if self.input and (not s["text"].startswith(self.input) or s["text"] == self.input):
+        typed = self._typed()
+        if typed and (not s["text"].startswith(typed) or s["text"] == typed):
             return None
         return s
+
+    def _typed(self):
+        """What the user typed, without the tags of the contexts put into the message."""
+        text = self.input
+        for short in self.expansions:
+            text = text.replace(short, "")
+        return text.strip()
 
     def _on_turn_start(self, event):
         self.busy, self.busy_since, self.label = True, time.monotonic(), event.get("label", "Thinking")
@@ -813,7 +821,7 @@ class App:
             hits.append((len(lines), start + width(label), start + size, ctx, "dismiss"))
             used = start + size
         if self.chips:
-            hint = "  click: into your message · ×: drop"
+            hint = "  click: in or out of your message · ×: drop"
             if used + width(hint) <= inner:
                 line += style(hint, GREY)
             lines.append(line)
@@ -1337,9 +1345,12 @@ class App:
             self.cursor += 1
         elif key.name == "enter":
             self._submit()
-        elif key.name == "tab" and self._suggested():
+        elif key.name == "tab" and self._suggested():  # the contexts in the message stay in it
+            kept = [c for c in self.chips if c.tag in self.input]
             self.input = self._suggested()["text"]
             self.cursor, self.history_at = len(self.input), None
+            for ctx in kept:
+                self._toggle_context(ctx)
         elif key.name in ("up", "down"):
             self._recall(-1 if key.name == "up" else 1)
         elif key.name in ("escape", "ctrl-c"):
@@ -1559,7 +1570,9 @@ class App:
             prefix = "> " if i == 0 and len(shown) == len(text_lines) else "  "
             content = line if self.input else style("Message the agent", GREY, ITALIC)
             if suggested and i == len(shown) - 1:  # faint, after what's typed: the rest of it, which Tab takes
-                rest = suggested["text"][len(self.input):]
+                rest = suggested["text"][len(self._typed()):]
+                if line and not self._typed():
+                    rest = " " + rest
                 content = (line if self.input else "") + style(rest, GREY)
                 if suggested["by"] == "tutor":
                     content += style(f"  {TUTOR_MARK} tutor", TUTOR_INK)

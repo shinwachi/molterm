@@ -215,8 +215,8 @@ into the same `use_tui` and `use_server_tool` calls: the events, the page and th
 ### Suggestions, for Tab
 
 The agent can suggest what the user might type next (`self.suggest(text)`, a `suggest` event; a remote agent sends it like any
-other). The TUI shows it faintly in the empty input, or finishes what's typed if it begins the same way, and Tab takes it; it goes
-once a message is sent, and an empty suggestion takes it back. The demo agent suggests "show me a drug" after its greeting, and
+other). The TUI shows it faintly in the empty input, or finishes what's typed if it begins the same way, and Tab takes it; the contexts in the
+message (an edit put in on Done, say) don't count as typing, and stay in it when Tab takes the suggestion. It goes once a message is sent, and an empty suggestion takes it back. The demo agent suggests "show me a drug" after its greeting, and
 "show me another drug" after a drawing.
 
 ### Tutorial mode

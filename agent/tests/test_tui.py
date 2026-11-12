@@ -1067,6 +1067,25 @@ def test_a_suggestion_shows_faintly_and_tab_takes_it(app):
     assert app.suggestion is None
 
 
+
+def test_a_suggestion_survives_the_edit_that_goes_into_the_message(app):
+    show_molecule(app)
+    app.event({"type": "suggest", "text": "is this better?"})
+    app.key("/edit 1\r")
+    app.key("\x11")
+    app.edit_answer("1 \nOCC")
+    app.edit_answer("3 \n")
+    tag = "⟦mol 1 Ethanol, edited #1⟧"
+    assert app.input == tag + " " and app._typed() == ""  # the edit is in the message, but nothing is typed yet
+    assert app._suggested() and f"{tag} is this better?" in screen(app)  # so the suggestion still shows, after the tag
+    assert "click: in or out of your message" in screen(app)
+    app.key("is")
+    assert "is this better?" in screen(app)  # typed the way it begins: the rest, faintly
+    app.key("\t")  # Tab takes it, and the edit stays in the message
+    assert app.input == "is this better? " + tag + " " and app.cursor == len(app.input)
+    app.key("\r")
+    assert app.bridge.messages[-1][0].startswith("is this better? ⟦mol 1 Ethanol, edited: OCC⟧") and app.suggestion is None
+
 def test_in_tutorial_mode_the_tutors_tips_are_bubbles_of_their_own_and_tutor_hides_them(app):
     app.event({"type": "session", "id": "abc123", "tutor": True})
     assert "Tutorial mode: a tutor watches and chimes in, ✦ tutor" in screen(app)
