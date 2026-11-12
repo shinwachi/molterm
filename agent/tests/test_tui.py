@@ -271,15 +271,17 @@ def test_clicking_a_molecule_edits_it_in_a_box_over_its_picture(app):
     assert app.bridge.edits[-1] == {"close": "1"}  # first the editor's pictures go
     app.edit_answer("3 \n\x1b_Ga=d\x1b\\")
     assert app.editing is None and "\x1b[?1003l" in "".join(app.bridge.written)
-    assert app.input == "draft" and [c.label for c in app.chips] == ["mol 1 Ethanol · edited #1"]  # waiting above the input
+    assert app.input == "draft ⟦mol 1 Ethanol, edited #1⟧ " and [c.label for c in app.chips] == ["mol 1 Ethanol · edited #1"]  # in the message
     request = app.bridge.pictures[0]
     assert request["smiles"] == "CCO |atomProp:2.atomNote.OH|" and request["number"] == 1 and request["cols"] == 80 - 6 - 37
     app.picture_answer(json.dumps(request), json.dumps({"png": "B" * 10, "cols": 22, "rows": 7, "smiles": request["smiles"],
                                                         "notes": [{"atom": 2, "text": "OH", "row": 1}]}))
     assert app.molecules[0].image == 2 and "mol 1 · edited" in screen(app)
     from molterm_tui.app import CONTEXT
-    assert "◇ mol 1 Ethanol · edited #1" in screen(app)
-    click(app, chip(app))  # into the message, short in the box, in full in what is sent
+    assert "◆ mol 1 Ethanol · edited #1" in screen(app)  # short in the box, in full in what is sent
+    click(app, chip(app))  # a click puts it away, another puts it back
+    assert app.input == "draft " and "◇ mol 1 Ethanol" in screen(app)
+    click(app, chip(app))
     assert app.input == "draft ⟦mol 1 Ethanol, edited #1⟧ " and "◆ mol 1 Ethanol" in screen(app)
     app.key("ok?\r")
     assert CONTEXT.search(app.bridge.messages[-1][0]).groups() == ("1", "Ethanol", "CCO |atomProp:2.atomNote.OH|")

@@ -756,8 +756,10 @@ class App:
         molecule = e["molecule"]
         if status == 1 and text and text != molecule.smiles:
             molecule.smiles, molecule.edits = text, molecule.edits + 1
-            self._add_context(Context(tag(molecule), context(molecule), f"mol {molecule.number} {molecule.name} · edited #{molecule.edits}",
-                                      ("mol", molecule.number)))
+            # straight into the message: nobody opens the editor on a molecule except to talk about it (a highlight, a quotation,
+            # waits put away instead)
+            self._put_in_message(Context(tag(molecule), context(molecule), f"mol {molecule.number} {molecule.name} · edited #{molecule.edits}",
+                                         ("mol", molecule.number)))
             self._repicture(molecule)
         elif status == 2:
             self.blocks.append(Block("note", text or "The editor stopped.", tone="error"))

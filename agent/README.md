@@ -101,8 +101,8 @@ highlighted group, the menu asks which the note is about: Note This Atom (or Bon
 points at the middle of the group. `/edit N box`, or `/editor box` for every click, opens the
 compact editor in a box over the picture instead.
 
-**Done** (Ctrl-Q) redraws the molecule as edited (`mol 1 · edited`), in the place of the drawing, and the edit waits above the
-input as a context (see below); put into a message, it carries `⟦mol 1 Imatinib, edited: <CXSMILES>⟧`, where the CXSMILES has the
+**Done** (Ctrl-Q) redraws the molecule as edited (`mol 1 · edited`), in the place of the drawing, and the edit goes straight into the
+message as a context (see below), since nobody edits a molecule except to talk about it; it carries `⟦mol 1 Imatinib, edited: <CXSMILES>⟧`, where the CXSMILES has the
 annotations. The demo agent finds it (`server/agent.py`, `_EDITED`), says what was noted, and computes the edited molecule's
 properties. **Cancel** (Ctrl-C) leaves everything as it was.
 
@@ -201,9 +201,9 @@ out and in rather than blinking.
 
 ### Contexts, above the input
 
-What the user edited or highlighted waits as a chip at the top of the input box, put away (◇): it isn't sent until the user
-clicks it, which puts its tag into the text at the cursor (◆, and the tag tinted in the text). Another click takes it out again,
-and `×` drops it. Backspace removes a tag whole. In the text an edit's tag is short, `⟦mol 1 Imatinib, edited #1⟧`, and the message
+What the user highlighted waits as a chip at the top of the input box, put away (◇): it isn't sent until the user
+clicks it, which puts its tag into the text at the cursor (◆, and the tag tinted in the text). An edit's chip, and anything put
+into the message from a menu, starts in the text (◆). Another click takes it out again, and `×` drops it. Backspace removes a tag whole. In the text an edit's tag is short, `⟦mol 1 Imatinib, edited #1⟧`, and the message
 carries it in full; a highlight's is `⟦highlighted: "the words"⟧`. Once sent, a context leaves the chips; a newer edit of the same
 molecule replaces the older one. The demo agent shows
 both: it marks a part of the drug it draws, and highlights its own words about dragging, and when the user sends a highlight it says

@@ -2,7 +2,7 @@
 
     docs/images/molterm-agent-annotate.gif  a molecule edited where it is shown: a note typed in its bubble on two lines, the atom
                                             highlighted and painted in the SMILES under the drawing, the SMILES hidden and shown again
-                                            with its checkbox, the drawing made larger, Done, and the edit clicked into a message
+                                            with its checkbox, the drawing made larger, and Done, which puts the edit into the message
     docs/images/molterm-agent-point.gif     pointing things out: a bubble dragged aside, text dragged across and highlighted from
                                             its menu, its context clicked into a message, and the agent marking it as seen
     docs/images/molterm-agent-inline.png    the inline editor, with its notes in bubbles beside the drawing
@@ -105,10 +105,8 @@ def annotate(p):
         page.keyboard.press("Alt+ArrowDown")
         pause(2.5)
         page.mouse.move(*at(500, 880), steps=5)
-        page.keyboard.press("Control+q")         # Done: the edit waits above the input
+        page.keyboard.press("Control+q")         # Done: the edit straight into the message
         pause(4)
-        click(100, 737)                          # into the message
-        pause(1)
         page.keyboard.type("is this better?", delay=70)
         pause(0.5)
         page.keyboard.press("Enter")
